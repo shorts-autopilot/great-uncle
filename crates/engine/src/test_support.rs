@@ -1,7 +1,5 @@
 //! Synthetic fixture data shared by engine tests. Not compiled into the library.
 
-use std::collections::BTreeMap;
-
 use crate::fixture_type::{AttributeDef, Channel, ChannelFunction, FixtureType, Mode};
 use crate::show::{Fixture, Show};
 
@@ -58,8 +56,6 @@ pub fn demo_show() -> Show {
         mode: "4ch".into(),
         universe: 1,
         address: 1,
-        // The programmer starts empty; unprogrammed attributes render as 0.
-        levels: BTreeMap::new(),
     });
     show
 }

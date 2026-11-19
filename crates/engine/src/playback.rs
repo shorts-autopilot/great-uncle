@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::desk::Masters;
 use crate::levels::{is_intensity, Levels};
 use crate::show::Show;
 
@@ -63,13 +64,6 @@ pub struct Executor {
     pub sequence: u16,
     #[serde(default)]
     pub name: String,
-    /// Master fader, 0..=1. Scales intensity only.
-    #[serde(default = "full_fader")]
-    pub fader: f64,
-}
-
-fn full_fader() -> f64 {
-    1.0
 }
 
 impl Sequence {
@@ -315,8 +309,16 @@ impl Playback {
         self.output = Levels::new();
     }
 
+    /// Which cue every target is on: the projection a desk file records.
+    pub fn states(&self) -> Vec<(Target, f64, bool)> {
+        self.runs
+            .iter()
+            .map(|(target, run)| (*target, run.cue_number, run.is_paused()))
+            .collect()
+    }
+
     /// Recompute the output for `now`. Returns true when it changed.
-    pub fn refresh(&mut self, show: &Show, now: Instant) -> bool {
+    pub fn refresh(&mut self, _show: &Show, masters: &Masters, now: Instant) -> bool {
         for run in self.runs.values_mut() {
             run.done = run.paused.is_none() && run.progress(now) >= 1.0;
         }
@@ -325,10 +327,7 @@ impl Playback {
         for (target, run) in &self.runs {
             let fader = match target {
                 Target::Sequence(_) => 1.0,
-                Target::Executor(number) => show
-                    .executor(*number)
-                    .map(|executor| executor.fader)
-                    .unwrap_or(1.0),
+                Target::Executor(number) => masters.executor(*number),
             };
             output.merge_htp(&run.levels_at(now).scale_intensity(fader));
         }
@@ -378,6 +377,12 @@ pub fn format_cue_number(number: f64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::desk::Masters;
+
+    fn masters() -> Masters {
+        Masters::new()
+    }
+
     use super::*;
     use crate::test_support::demo_show;
 
@@ -640,7 +645,6 @@ mod tests {
             number: 1,
             sequence: 1,
             name: "Main".into(),
-            fader: 0.5,
         });
         let sequence = Sequence {
             number: 1,
@@ -654,14 +658,19 @@ mod tests {
         show.sequences.push(sequence);
 
         let now = Instant::now();
+        let mut masters = masters();
+        masters.set_executor(1, 0.5);
         let mut playback = Playback::new();
         playback.go(&show, Target::Executor(1), 1, 0, now).unwrap();
-        playback.refresh(&show, now);
+        playback.refresh(&show, &masters, now);
         assert_eq!(playback.output().get(1, "Dimmer"), Some(0.5));
         assert_eq!(playback.output().get(1, "ColorAdd_R"), Some(1.0));
 
-        show.executors[0].fader = 1.0;
-        assert!(playback.refresh(&show, now), "fader change alters output");
+        masters.set_executor(1, 1.0);
+        assert!(
+            playback.refresh(&show, &masters, now),
+            "fader change alters output"
+        );
         assert_eq!(playback.output().get(1, "Dimmer"), Some(1.0));
     }
 
@@ -672,10 +681,10 @@ mod tests {
         let now = Instant::now();
         let mut playback = Playback::new();
         playback.go(&show, Target::Sequence(1), 1, 0, now).unwrap();
-        playback.refresh(&show, now);
+        playback.refresh(&show, &masters(), now);
         assert_eq!(playback.output().get(1, "Dimmer"), Some(0.5));
         assert!(playback.release(Target::Sequence(1)));
-        assert!(playback.refresh(&show, now));
+        assert!(playback.refresh(&show, &masters(), now));
         assert!(playback.output().is_empty());
     }
 

@@ -38,7 +38,8 @@
 //! Timecode 1 Add 00:00:10:00 Sequence 1 Cue 2
 //! Timecode 1 Remove 00:00:10:00 | Timecode 1 At 00:00:10:00
 //! Timecode 1 Start | Pause | Stop
-//! Sheet | Status | Save "show.json" | Load "show.json" | Help
+//! Sheet | Status | Help
+//! Save [Show|Desk] "file" | Load [Show] "file"
 //! ```
 //!
 //! `universe.address` uses a dot: `1.001` is universe 1, address 1.
@@ -281,8 +282,16 @@ pub enum Command {
     Save {
         path: String,
     },
+    SaveShow {
+        path: String,
+    },
+    SaveDesk {
+        path: String,
+    },
     Load {
         path: String,
+        /// `Load Show` reads the document only and keeps this desk.
+        show_only: bool,
     },
     Help,
 }
@@ -687,14 +696,25 @@ impl Parser<'_> {
             return Ok(Command::Status);
         }
         if word.eq_ignore_ascii_case("save") {
+            if self.eat_word("show") {
+                let path = self.path_token()?;
+                self.expect_end()?;
+                return Ok(Command::SaveShow { path });
+            }
+            if self.eat_word("desk") {
+                let path = self.path_token()?;
+                self.expect_end()?;
+                return Ok(Command::SaveDesk { path });
+            }
             let path = self.path_token()?;
             self.expect_end()?;
             return Ok(Command::Save { path });
         }
         if word.eq_ignore_ascii_case("load") {
+            let show_only = self.eat_word("show");
             let path = self.path_token()?;
             self.expect_end()?;
-            return Ok(Command::Load { path });
+            return Ok(Command::Load { path, show_only });
         }
         if word.eq_ignore_ascii_case("help") || word == "?" {
             self.expect_end()?;
@@ -1892,6 +1912,36 @@ mod tests {
             command("Save target/show.json"),
             Command::Save {
                 path: "target/show.json".into()
+            }
+        );
+    }
+
+    #[test]
+    fn save_and_load_name_their_document() {
+        assert_eq!(
+            command(r#"Save Show "a.olshow""#),
+            Command::SaveShow {
+                path: "a.olshow".into()
+            }
+        );
+        assert_eq!(
+            command(r#"Save Desk "a.oldesk""#),
+            Command::SaveDesk {
+                path: "a.oldesk".into()
+            }
+        );
+        assert_eq!(
+            command(r#"Load Show "a.olshow""#),
+            Command::Load {
+                path: "a.olshow".into(),
+                show_only: true
+            }
+        );
+        assert_eq!(
+            command(r#"Load "a.olshow""#),
+            Command::Load {
+                path: "a.olshow".into(),
+                show_only: false
             }
         );
     }

@@ -5,20 +5,21 @@
 //! versioned and every document is validated on load and before save.
 //!
 //! Version 2 adds palettes, sequences and executors. Version 3 adds groups,
-//! worlds, filters, effects and the grand and rate masters. Version 4 adds
-//! timecode shows. Older files still load: new sections default to empty (or to
-//! a full master) and the show is upgraded on read.
+//! worlds, filters and effects. Version 4 adds timecode shows. Version 5 moves
+//! the programmer, the masters and the executor faders out of the show and into
+//! the desk file, because they are handles rather than programming. Older files
+//! still load: new sections default to empty, and the v5 upgrade hands the
+//! values it finds in an old file to the desk through a [`LoadReport`].
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsString;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::effect::{Effect, MAX_EFFECTS, MAX_RATE_HZ, MAX_SPREAD_DEGREES};
 use crate::fixture_type::{FixtureType, Mode};
+use crate::levels::Levels;
 use crate::palette::Palette;
 use crate::patch::{self, PatchRange};
 use crate::playback::{format_cue_number, Executor, Sequence, MAX_CUE_NUMBER, MAX_TIME};
@@ -26,9 +27,9 @@ use crate::pools::{Filter, Group, World, MAX_GROUP_FIXTURES, MAX_POOL_OBJECTS};
 use crate::timecode::{self, TimecodeShow, MAX_FPS, MAX_TIMECODES, MAX_TIMECODE_EVENTS, MIN_FPS};
 
 pub const SHOW_FORMAT: &str = "openlight-show";
-pub const SHOW_VERSION: u32 = 4;
+pub const SHOW_VERSION: u32 = 5;
 /// Older documents that still load, oldest first.
-pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3, 4];
+pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3, 4, 5];
 /// Fastest rate master accepted, as a factor (400%).
 pub const MAX_RATE_MASTER: f64 = 4.0;
 pub const MAX_UNIVERSE_SIZE: u16 = 512;
@@ -67,16 +68,6 @@ pub struct Show {
     pub effects: Vec<Effect>,
     #[serde(default)]
     pub timecodes: Vec<TimecodeShow>,
-    /// Scales every intensity at the output, 0..=1.
-    #[serde(default = "full_master")]
-    pub grand_master: f64,
-    /// Scales effect speed, 0..=4 (100% is a factor of 1).
-    #[serde(default = "full_master")]
-    pub rate_master: f64,
-}
-
-const fn full_master() -> f64 {
-    1.0
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -99,9 +90,6 @@ pub struct Fixture {
     pub mode: String,
     pub universe: u16,
     pub address: u16,
-    /// Normalised physical level per attribute (0..=1).
-    #[serde(default)]
-    pub levels: BTreeMap<String, f64>,
 }
 
 const fn default_universe_size() -> u16 {
@@ -135,8 +123,6 @@ impl Show {
             filters: Vec::new(),
             effects: Vec::new(),
             timecodes: Vec::new(),
-            grand_master: 1.0,
-            rate_master: 1.0,
         }
     }
 
@@ -392,21 +378,6 @@ impl Show {
                 ));
             }
             ranges.push((fixture.number, range));
-
-            for (attribute, level) in &fixture.levels {
-                if !level.is_finite() || !(0.0..=1.0).contains(level) {
-                    problems.push(format!(
-                        "fixture {}: level for `{attribute}` is {level}, expected 0..=1",
-                        fixture.number
-                    ));
-                }
-                if mode.channel_for(attribute).is_none() {
-                    problems.push(format!(
-                        "fixture {}: attribute `{attribute}` is not in mode `{}`",
-                        fixture.number, mode.name
-                    ));
-                }
-            }
         }
 
         for (first, second) in patch::conflicts(&ranges) {
@@ -423,20 +394,6 @@ impl Show {
         self.validate_filters(&mut problems);
         self.validate_effects(&mut problems);
         self.validate_timecodes(&mut problems);
-
-        for (label, value, max, note) in [
-            ("grand master", self.grand_master, 1.0, ""),
-            (
-                "rate master",
-                self.rate_master,
-                MAX_RATE_MASTER,
-                " (a factor)",
-            ),
-        ] {
-            if !value.is_finite() || !(0.0..=max).contains(&value) {
-                problems.push(format!("{label} {value} is outside 0..={max}{note}"));
-            }
-        }
 
         problems
     }
@@ -593,12 +550,6 @@ impl Show {
                     executor.number, executor.sequence
                 ));
             }
-            if !executor.fader.is_finite() || !(0.0..=1.0).contains(&executor.fader) {
-                problems.push(format!(
-                    "executor {}: fader {} is outside 0..=1",
-                    executor.number, executor.fader
-                ));
-            }
         }
     }
 
@@ -635,12 +586,6 @@ impl Show {
                         group.number
                     ));
                 }
-            }
-            if !group.master.is_finite() || !(0.0..=1.0).contains(&group.master) {
-                problems.push(format!(
-                    "group {}: master {} is outside 0..=1",
-                    group.number, group.master
-                ));
             }
         }
     }
@@ -836,36 +781,7 @@ impl Show {
             path: path.to_path_buf(),
             source,
         })?;
-
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent).map_err(|source| ShowError::Io {
-                    path: parent.to_path_buf(),
-                    source,
-                })?;
-            }
-        }
-
-        let mut temp_name: OsString = path
-            .file_name()
-            .map(|name| name.to_os_string())
-            .unwrap_or_else(|| OsString::from("show"));
-        temp_name.push(".tmp");
-        let temp = path.with_file_name(temp_name);
-
-        {
-            let mut file = fs::File::create(&temp).map_err(|source| ShowError::Io {
-                path: temp.clone(),
-                source,
-            })?;
-            file.write_all(json.as_bytes())
-                .and_then(|()| file.sync_all())
-                .map_err(|source| ShowError::Io {
-                    path: temp.clone(),
-                    source,
-                })?;
-        }
-        fs::rename(&temp, path).map_err(|source| ShowError::Io {
+        crate::store::write_atomic(path, json.as_bytes()).map_err(|source| ShowError::Io {
             path: path.to_path_buf(),
             source,
         })
@@ -873,11 +789,20 @@ impl Show {
 
     /// Read and validate a show. A failed load never leaves a half-built show.
     pub fn load(path: &Path) -> Result<Show, ShowError> {
+        Self::load_with_report(path).map(|(show, _)| show)
+    }
+
+    /// Read a show, also returning anything the reader upgraded.
+    ///
+    /// The report exists because some old fields belong to somebody else now: a
+    /// v4 programmer and its master positions move to the desk, and the loader
+    /// hands them over rather than keeping dead fields in the document.
+    pub fn load_with_report(path: &Path) -> Result<(Show, LoadReport), ShowError> {
         let text = fs::read_to_string(path).map_err(|source| ShowError::Io {
             path: path.to_path_buf(),
             source,
         })?;
-        let value: serde_json::Value =
+        let mut value: serde_json::Value =
             serde_json::from_str(&text).map_err(|source| ShowError::Parse {
                 path: path.to_path_buf(),
                 source,
@@ -906,13 +831,14 @@ impl Show {
             });
         }
 
+        let report = upgrade(&mut value, version, path)?;
         let mut show: Show = serde_json::from_value(value).map_err(|source| ShowError::Parse {
             path: path.to_path_buf(),
             source,
         })?;
         // Older versions lack the newer sections. Everything defaults (empty
-        // pools, full masters), so the document is upgraded in place on read
-        // and saved as the current version.
+        // pools, no timecode), so the document is upgraded in place on read and
+        // saved as the current version.
         show.version = SHOW_VERSION;
         let problems = show.validate();
         if !problems.is_empty() {
@@ -921,8 +847,121 @@ impl Show {
                 problems,
             });
         }
-        Ok(show)
+        Ok((show, report))
     }
+}
+
+/// Values an older show carried that now belong to the desk.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DeskSeed {
+    pub programmer: Levels,
+    pub grand: Option<f64>,
+    pub rate: Option<f64>,
+    pub groups: BTreeMap<u16, f64>,
+    pub executors: BTreeMap<u16, f64>,
+}
+
+impl DeskSeed {
+    pub fn is_empty(&self) -> bool {
+        self.programmer.is_empty()
+            && self.grand.is_none()
+            && self.rate.is_none()
+            && self.groups.is_empty()
+            && self.executors.is_empty()
+    }
+}
+
+/// What a load had to change, and what it found for the desk.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LoadReport {
+    pub warnings: Vec<String>,
+    pub desk_seed: DeskSeed,
+}
+
+/// Strip fields that moved out of the show, so a v1–v4 document still reads.
+fn upgrade(
+    value: &mut serde_json::Value,
+    version: u32,
+    path: &Path,
+) -> Result<LoadReport, ShowError> {
+    let mut report = LoadReport::default();
+    if version >= SHOW_VERSION {
+        return Ok(report);
+    }
+
+    if let Some(fixtures) = value
+        .get_mut("fixtures")
+        .and_then(|value| value.as_array_mut())
+    {
+        for fixture in fixtures {
+            let Some(object) = fixture.as_object_mut() else {
+                continue;
+            };
+            let number = object
+                .get("number")
+                .and_then(|number| number.as_u64())
+                .unwrap_or_default() as u16;
+            let Some(levels) = object.remove("levels") else {
+                continue;
+            };
+            // v4 stored the programmer as `attribute → level` on each fixture.
+            let levels: BTreeMap<String, f64> =
+                serde_json::from_value(levels).map_err(|source| ShowError::Parse {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
+            for (attribute, level) in levels {
+                report.desk_seed.programmer.set(number, &attribute, level);
+            }
+        }
+    }
+
+    if let Some(object) = value.as_object_mut() {
+        report.desk_seed.grand = object.remove("grand_master").and_then(|v| v.as_f64());
+        report.desk_seed.rate = object.remove("rate_master").and_then(|v| v.as_f64());
+
+        if let Some(groups) = object
+            .get_mut("groups")
+            .and_then(|value| value.as_array_mut())
+        {
+            for group in groups {
+                let Some(group) = group.as_object_mut() else {
+                    continue;
+                };
+                let number = group
+                    .get("number")
+                    .and_then(|number| number.as_u64())
+                    .unwrap_or_default() as u16;
+                if let Some(master) = group.remove("master").and_then(|value| value.as_f64()) {
+                    report.desk_seed.groups.insert(number, master);
+                }
+            }
+        }
+        if let Some(executors) = object
+            .get_mut("executors")
+            .and_then(|value| value.as_array_mut())
+        {
+            for executor in executors {
+                let Some(executor) = executor.as_object_mut() else {
+                    continue;
+                };
+                let number = executor
+                    .get("number")
+                    .and_then(|number| number.as_u64())
+                    .unwrap_or_default() as u16;
+                if let Some(fader) = executor.remove("fader").and_then(|value| value.as_f64()) {
+                    report.desk_seed.executors.insert(number, fader);
+                }
+            }
+        }
+    }
+
+    if !report.desk_seed.is_empty() {
+        report.warnings.push(format!(
+            "Upgraded from show v{version}: programmer and master positions moved to the desk"
+        ));
+    }
+    Ok(report)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -996,7 +1035,7 @@ mod tests {
             .read_to_string(&mut text)
             .unwrap();
         assert!(text.contains("\"format\": \"openlight-show\""));
-        assert!(text.contains("\"version\": 4"));
+        assert!(text.contains("\"version\": 5"));
         assert!(text.contains("OpenLight Demo Wash"), "types are embedded");
         let _ = fs::remove_file(&path);
     }
@@ -1042,7 +1081,6 @@ mod tests {
             mode: "4ch".into(),
             universe: 1,
             address: 3,
-            levels: BTreeMap::new(),
         });
         let problems = show.validate();
         assert!(
@@ -1087,14 +1125,6 @@ mod tests {
     }
 
     #[test]
-    fn out_of_range_level_is_reported() {
-        let mut show = demo_show();
-        show.fixtures[0].levels.insert("Dimmer".into(), 2.5);
-        let problems = show.validate();
-        assert!(problems.iter().any(|p| p.contains("expected 0..=1")));
-    }
-
-    #[test]
     fn version_one_shows_load_and_are_upgraded() {
         let path = temp_path("v1");
         fs::write(
@@ -1112,8 +1142,6 @@ mod tests {
         assert!(show.filters.is_empty());
         assert!(show.effects.is_empty());
         assert!(show.timecodes.is_empty());
-        assert_eq!(show.grand_master, 1.0);
-        assert_eq!(show.rate_master, 1.0);
         assert!(show.validate().is_empty());
         let _ = fs::remove_file(&path);
     }
@@ -1125,15 +1153,7 @@ mod tests {
         value["version"] = 2.into();
         {
             let object = value.as_object_mut().unwrap();
-            for key in [
-                "groups",
-                "worlds",
-                "filters",
-                "effects",
-                "timecodes",
-                "grand_master",
-                "rate_master",
-            ] {
+            for key in ["groups", "worlds", "filters", "effects", "timecodes"] {
                 object.remove(key);
             }
         }
@@ -1144,8 +1164,6 @@ mod tests {
         assert!(show.groups.is_empty());
         assert!(show.effects.is_empty());
         assert!(show.timecodes.is_empty());
-        assert_eq!(show.grand_master, 1.0);
-        assert_eq!(show.rate_master, 1.0);
         let _ = fs::remove_file(&path);
     }
 
@@ -1160,6 +1178,39 @@ mod tests {
         let show = Show::load(&path).unwrap();
         assert_eq!(show.version, SHOW_VERSION);
         assert!(show.timecodes.is_empty());
+        assert!(show.validate().is_empty());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn version_four_shows_hand_their_programmer_and_masters_to_the_desk() {
+        let path = temp_path("v4-upgrade");
+        let mut value = serde_json::to_value(demo_show()).unwrap();
+        value["version"] = 4.into();
+        value["grand_master"] = 0.75.into();
+        value["rate_master"] = 2.0.into();
+        value["fixtures"][0]["levels"] = serde_json::json!({"Dimmer": 0.5});
+        value["groups"] = serde_json::json!([{
+            "number": 1, "name": "Front", "fixtures": [1], "master": 0.25
+        }]);
+        value["executors"] = serde_json::json!([{
+            "number": 1, "sequence": 1, "name": "Main", "fader": 0.4
+        }]);
+        value["sequences"] = serde_json::json!([{"number": 1, "name": "Main", "cues": []}]);
+        fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+
+        let (show, report) = Show::load_with_report(&path).unwrap();
+        assert_eq!(show.version, SHOW_VERSION);
+        assert_eq!(report.desk_seed.programmer.get(1, "Dimmer"), Some(0.5));
+        assert_eq!(report.desk_seed.grand, Some(0.75));
+        assert_eq!(report.desk_seed.rate, Some(2.0));
+        assert_eq!(report.desk_seed.groups.get(&1), Some(&0.25));
+        assert_eq!(report.desk_seed.executors.get(&1), Some(&0.4));
+        assert!(
+            report.warnings.iter().any(|warning| warning.contains("v4")),
+            "{:?}",
+            report.warnings
+        );
         assert!(show.validate().is_empty());
         let _ = fs::remove_file(&path);
     }
@@ -1214,7 +1265,6 @@ mod tests {
 
     #[test]
     fn timecode_events_must_name_a_stored_cue() {
-        use crate::levels::Levels;
         use crate::playback::{Cue, Sequence};
         use crate::timecode::{TimecodeEvent, TimecodeShow};
 
@@ -1257,7 +1307,6 @@ mod tests {
             number: 0,
             name: String::new(),
             fixtures: vec![1, 1],
-            master: 2.0,
         });
         show.worlds.push(World {
             number: 0,
@@ -1278,14 +1327,11 @@ mod tests {
             size: 2.0,
             spread: 400.0,
         });
-        show.grand_master = 2.0;
-        show.rate_master = 5.0;
 
         let problems = show.validate();
         for expected in [
             "group number 0",
             "fixture 1 is listed twice",
-            "group 0: master 2",
             "world number 0",
             "world 0: no fixtures",
             "filter number 0",
@@ -1294,8 +1340,6 @@ mod tests {
             "rate 1000 Hz",
             "size 2 is outside",
             "spread 400",
-            "grand master 2",
-            "rate master 5",
         ] {
             assert!(
                 problems.iter().any(|problem| problem.contains(expected)),
@@ -1306,7 +1350,6 @@ mod tests {
 
     #[test]
     fn invalid_palettes_sequences_and_executors_are_reported() {
-        use crate::levels::Levels;
         use crate::palette::Palette;
         use crate::playback::{Cue, Executor, Sequence};
 
@@ -1351,7 +1394,6 @@ mod tests {
             number: 1,
             sequence: 9,
             name: String::new(),
-            fader: 2.0,
         });
 
         let problems = show.validate();
@@ -1361,7 +1403,6 @@ mod tests {
         assert!(problems.iter().any(|p| p.contains("ascending order")));
         assert!(problems.iter().any(|p| p.contains("defined twice")));
         assert!(problems.iter().any(|p| p.contains("sequence 9")));
-        assert!(problems.iter().any(|p| p.contains("fader 2")));
     }
 
     #[test]

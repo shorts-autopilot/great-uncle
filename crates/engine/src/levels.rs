@@ -67,6 +67,28 @@ impl Levels {
         self.fixtures.clear();
     }
 
+    /// Remove one value, dropping the fixture entry when it becomes empty.
+    pub fn remove(&mut self, fixture: u16, attribute: &str) {
+        let Some(attributes) = self.fixtures.get_mut(&fixture) else {
+            return;
+        };
+        if let Some(key) = attributes
+            .keys()
+            .find(|name| name.eq_ignore_ascii_case(attribute))
+            .cloned()
+        {
+            attributes.remove(&key);
+        }
+        if attributes.is_empty() {
+            self.fixtures.remove(&fixture);
+        }
+    }
+
+    /// Remove every value of one fixture.
+    pub fn remove_fixture(&mut self, fixture: u16) {
+        self.fixtures.remove(&fixture);
+    }
+
     /// True when every intensity attribute of `fixture` is zero or missing,
     /// which is what move-in-black needs to know before a cue starts.
     pub fn is_dark(&self, fixture: u16) -> bool {

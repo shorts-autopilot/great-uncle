@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::fixture_type::FixtureType;
+use crate::levels::Levels;
 use crate::show::{Fixture, Show};
 
 /// Pool used when nothing in a fixture type describes the attribute better.
@@ -120,6 +121,7 @@ fn canonical_pool(name: &str) -> String {
 /// attributes that are currently at 0: a colour palette stores all of RGB.
 pub fn capture(
     show: &Show,
+    programmer: &Levels,
     targets: &[u16],
     feature: &str,
 ) -> Result<(String, PaletteValues), String> {
@@ -147,12 +149,7 @@ pub fn capture(
                 continue;
             }
             pool_name.get_or_insert(pool);
-            let level = fixture
-                .levels
-                .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case(&channel.attribute))
-                .map(|(_, level)| *level)
-                .unwrap_or(0.0);
+            let level = programmer.get(*number, &channel.attribute).unwrap_or(0.0);
             values
                 .entry(type_key.clone())
                 .or_default()
@@ -235,10 +232,11 @@ mod tests {
 
     #[test]
     fn capture_reads_every_attribute_of_the_pool() {
-        let mut show = demo_show();
-        show.fixtures[0].levels.insert("ColorAdd_R".into(), 1.0);
-        show.fixtures[0].levels.insert("ColorAdd_G".into(), 0.25);
-        let (pool, values) = capture(&show, &[1], "color").unwrap();
+        let show = demo_show();
+        let mut programmer = Levels::new();
+        programmer.set(1, "ColorAdd_R", 1.0);
+        programmer.set(1, "ColorAdd_G", 0.25);
+        let (pool, values) = capture(&show, &programmer, &[1], "color").unwrap();
         assert_eq!(pool, "Color");
         let stored = values.get("OpenLight Demo Wash").unwrap();
         assert_eq!(stored.get("ColorAdd_R"), Some(&1.0));
@@ -254,7 +252,7 @@ mod tests {
     #[test]
     fn capture_explains_when_nothing_matches() {
         let show = demo_show();
-        let error = capture(&show, &[1], "Position").unwrap_err();
+        let error = capture(&show, &Levels::new(), &[1], "Position").unwrap_err();
         assert!(error.contains("nothing in the selection"), "{error}");
         assert!(error.contains("Dimmer"), "{error}");
     }

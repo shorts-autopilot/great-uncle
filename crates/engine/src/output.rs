@@ -294,7 +294,6 @@ mod tests {
     use super::*;
     use crate::test_support::demo_show;
     use dmx::virtual_port::VirtualTransport;
-    use std::collections::BTreeMap;
 
     fn bind_virtual() -> (
         VirtualTransport,
@@ -308,13 +307,14 @@ mod tests {
 
     #[test]
     fn renders_and_sends_programmed_levels() {
-        let mut show = demo_show();
-        show.fixtures[0].levels.insert("Dimmer".into(), 1.0);
-        show.fixtures[0].levels.insert("ColorAdd_G".into(), 0.5);
+        let show = demo_show();
+        let mut engine = Engine::new(show);
+        engine.desk.programmer.set(1, "Dimmer", 1.0);
+        engine.desk.programmer.set(1, "ColorAdd_G", 0.5);
 
         let (transport, state) = bind_virtual();
         let runtime = Runtime::start(
-            Engine::new(show),
+            engine,
             vec![TransportBinding {
                 universe: 1,
                 transport: Box::new(transport),
@@ -375,11 +375,12 @@ mod tests {
 
     #[test]
     fn stop_sends_a_blackout_frame() {
-        let mut show = demo_show();
-        show.fixtures[0].levels.insert("Dimmer".into(), 1.0);
+        let show = demo_show();
+        let mut engine = Engine::new(show);
+        engine.desk.programmer.set(1, "Dimmer", 1.0);
         let (transport, state) = bind_virtual();
         let runtime = Runtime::start(
-            Engine::new(show),
+            engine,
             vec![TransportBinding {
                 universe: 1,
                 transport: Box::new(transport),
@@ -442,10 +443,11 @@ mod tests {
             mode: "4ch".into(),
             universe: 2,
             address: 1,
-            levels: BTreeMap::from([("Dimmer".into(), 1.0)]),
         });
+        let mut engine = Engine::new(show);
+        engine.desk.programmer.set(2, "Dimmer", 1.0);
         let runtime = Runtime::start(
-            Engine::new(show),
+            engine,
             vec![TransportBinding {
                 universe: 1,
                 transport: Box::new(transport),

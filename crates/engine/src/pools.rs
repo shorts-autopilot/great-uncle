@@ -16,10 +16,6 @@ use serde::{Deserialize, Serialize};
 pub const MAX_POOL_OBJECTS: usize = 4096;
 pub const MAX_GROUP_FIXTURES: usize = 4096;
 
-fn full() -> f64 {
-    1.0
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Group {
@@ -29,9 +25,6 @@ pub struct Group {
     /// Fixture numbers. Numbers that are not patched are ignored when used.
     #[serde(default)]
     pub fixtures: Vec<u16>,
-    /// Group intensity master, 0..=1.
-    #[serde(default = "full")]
-    pub master: f64,
 }
 
 impl Group {
@@ -40,7 +33,6 @@ impl Group {
             number,
             name: String::new(),
             fixtures: Vec::new(),
-            master: 1.0,
         }
     }
 
@@ -136,7 +128,6 @@ mod tests {
             number: 1,
             name: "Front".into(),
             fixtures: vec![1, 2, 3],
-            master: 1.0,
         };
         assert!(group.contains(2));
         assert!(!group.contains(4));

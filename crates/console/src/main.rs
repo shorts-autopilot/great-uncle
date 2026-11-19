@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use dmx::virtual_port::{VirtualState, VirtualTransport};
 use dmx::DmxTransport;
-use engine::{Engine, Runtime, RuntimeConfig, Show, TransportBinding};
+use engine::{Engine, Runtime, RuntimeConfig, TransportBinding};
 
 mod ui;
 
@@ -195,9 +195,12 @@ fn parse_output(spec: &str) -> Result<(u16, String), String> {
 fn run(options: Options) -> Result<(), Box<dyn Error>> {
     let mut engine = match &options.show {
         Some(path) => {
-            let show = Show::load(path)?;
-            println!("Loaded `{}` from {}", show.name, path.display());
-            Engine::new(show)
+            let (engine, warnings) = Engine::open(path)?;
+            println!("Loaded `{}` from {}", engine.show.name, path.display());
+            for warning in warnings {
+                println!("Warning: {warning}");
+            }
+            engine
         }
         None => Engine::empty(),
     };

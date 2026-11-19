@@ -169,13 +169,16 @@ impl Effects {
     }
 
     /// Current offsets for every running fixture/attribute pair.
-    pub fn output(&self, show: &Show, now: Instant) -> EffectOutput {
+    ///
+    /// `rate_master` scales every effect's speed; it is a desk fader, not show
+    /// data, so it is passed in rather than read from the show.
+    pub fn output(&self, show: &Show, rate_master: f64, now: Instant) -> EffectOutput {
         let mut output = EffectOutput::default();
         for run in &self.runs {
             let Some(effect) = show.effect(run.effect) else {
                 continue;
             };
-            let rate = effect.rate_hz * show.rate_master;
+            let rate = effect.rate_hz * rate_master;
             let elapsed = now.saturating_duration_since(run.started).as_secs_f64();
             for (index, fixture) in run.fixtures.iter().enumerate() {
                 let phase = elapsed.mul_add(rate, index as f64 * effect.spread / 360.0);
@@ -263,13 +266,13 @@ mod tests {
         let mut effects = Effects::default();
         effects.start(1, vec![1], start);
 
-        let quarter = effects.output(&show, start + Duration::from_millis(250));
+        let quarter = effects.output(&show, 1.0, start + Duration::from_millis(250));
         assert!((quarter.get(1, "Dimmer").unwrap() - 0.5).abs() < 1e-9);
 
-        let three_quarter = effects.output(&show, start + Duration::from_millis(750));
+        let three_quarter = effects.output(&show, 1.0, start + Duration::from_millis(750));
         assert!((three_quarter.get(1, "Dimmer").unwrap() + 0.5).abs() < 1e-9);
 
-        let cycle = effects.output(&show, start + Duration::from_secs(1));
+        let cycle = effects.output(&show, 1.0, start + Duration::from_secs(1));
         assert!(cycle.get(1, "Dimmer").unwrap().abs() < 1e-9);
     }
 
@@ -284,10 +287,10 @@ mod tests {
         let mut effects = Effects::default();
         effects.start(1, vec![1, 2], start);
 
-        let output = effects.output(&show, start);
+        let output = effects.output(&show, 1.0, start);
         assert!(output.get(1, "Dimmer").unwrap().abs() < 1e-9);
         assert!(output.get(2, "Dimmer").unwrap().abs() < 1e-9);
-        let quarter = effects.output(&show, start + Duration::from_millis(250));
+        let quarter = effects.output(&show, 1.0, start + Duration::from_millis(250));
         assert!((quarter.get(1, "Dimmer").unwrap() - 0.5).abs() < 1e-9);
         assert!((quarter.get(2, "Dimmer").unwrap() + 0.5).abs() < 1e-9);
     }
@@ -295,13 +298,12 @@ mod tests {
     #[test]
     fn the_rate_master_scales_the_effect_speed() {
         let mut show = demo_show();
-        show.rate_master = 2.0;
         show.effects.push(effect());
         let start = Instant::now();
         let mut effects = Effects::default();
         effects.start(1, vec![1], start);
 
-        let output = effects.output(&show, start + Duration::from_millis(125));
+        let output = effects.output(&show, 2.0, start + Duration::from_millis(125));
         assert!(
             (output.get(1, "Dimmer").unwrap() - 0.5).abs() < 1e-9,
             "a quarter cycle takes 125 ms at 2 Hz"

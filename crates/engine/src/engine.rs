@@ -11,10 +11,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::command::{self, Command, CommandError, Level, LevelSource, PlaybackRef};
+use crate::desk::{Desk, RunState};
 use crate::effect::{Effect, Effects, Waveform, MAX_RATE_HZ, MAX_SPREAD_DEGREES};
 use crate::fixture_type::{FixtureType, DIMMER};
 use crate::gdtf;
-use crate::history::History;
+use crate::history::{History, Snapshot};
 use crate::levels::Levels;
 use crate::output::{lock, OutputStatus};
 use crate::palette::{self, Palette};
@@ -57,18 +58,15 @@ impl CommandOutcome {
 
 pub struct Engine {
     pub show: Show,
-    pub selection: Vec<u16>,
+    /// The handles: selection, programmer, masters, playback positions.
+    pub desk: Desk,
     /// Bumped on every change the output threads must pick up.
     pub revision: u64,
     pub status: Arc<Mutex<OutputStatus>>,
-    /// Running cues and fader masters. Not part of the show file.
+    /// Running cues. Session state; the desk records where they are.
     pub playback: Playback,
     /// Running effects. Not part of the show file.
     pub effects: Effects,
-    /// Active world: limits selection and programming, never output.
-    pub world: Option<u16>,
-    /// Active filter: limits the features commands may touch.
-    pub filter: Option<u16>,
     /// Timecode playhead. Not part of the show file.
     pub timecode: TimecodePlayer,
     /// Show snapshots for `Undo` and `Redo`.
@@ -90,13 +88,11 @@ impl Engine {
     pub fn new(show: Show) -> Self {
         Self {
             show,
-            selection: Vec::new(),
+            desk: Desk::new(),
             revision: 0,
             status: Arc::new(Mutex::new(OutputStatus::default())),
             playback: Playback::new(),
             effects: Effects::default(),
-            world: None,
-            filter: None,
             timecode: TimecodePlayer::default(),
             history: History::default(),
             label: String::new(),
@@ -120,7 +116,7 @@ impl Engine {
         for event in &fired {
             self.fire_timecode_event(event, now);
         }
-        let advanced = self.playback.refresh(&self.show, now);
+        let advanced = self.playback.refresh(&self.show, &self.desk.masters, now);
         // A running effect or timecode changes the output on every tick, even
         // when no cue is moving, so the sender keeps re-rendering.
         let changed = advanced
@@ -157,8 +153,16 @@ impl Engine {
     }
 
     pub fn render(&self) -> OutputFrame {
-        let effects = self.effects.output(&self.show, self.clock);
-        render::render(&self.show, self.playback.output(), &effects)
+        let effects = self
+            .effects
+            .output(&self.show, self.desk.masters.rate, self.clock);
+        render::render(
+            &self.show,
+            &self.desk.programmer,
+            self.playback.output(),
+            &effects,
+            &self.desk.masters,
+        )
     }
 
     pub fn help_text(&self) -> Vec<String> {
@@ -191,6 +195,8 @@ impl Engine {
                 self.history.clear();
                 Ok(outcome)
             }
+            Command::SaveShow { path } => self.save(&path, false, true),
+            Command::SaveDesk { path } => self.save(&path, true, false),
             Command::StorePalette {
                 feature,
                 number,
@@ -286,8 +292,8 @@ impl Engine {
             Command::Release { target } => self.playback_release(target),
             Command::Sheet => Ok(self.sheet()),
             Command::Status => Ok(self.status_report()),
-            Command::Save { path } => self.save(&path),
-            Command::Load { path } => self.load(&path),
+            Command::Save { path } => self.save(&path, true, true),
+            Command::Load { path, show_only } => self.load(&path, show_only),
             Command::Help => Ok(CommandOutcome::with_lines(self.help_text())),
         }
     }
@@ -307,7 +313,7 @@ impl Engine {
             fixtures.len(),
             if fixtures.len() == 1 { "" } else { "s" }
         );
-        self.selection = fixtures;
+        self.desk.selection = fixtures;
         Ok(CommandOutcome::message(message))
     }
 
@@ -328,7 +334,7 @@ impl Engine {
                     ));
                 }
                 let outcome = self.apply_palette(&targets, &feature, number)?;
-                self.selection = targets;
+                self.desk.selection = targets;
                 return Ok(outcome);
             }
         };
@@ -350,20 +356,24 @@ impl Engine {
         };
         self.check_attribute_allowed(&targets, &attribute)?;
 
+        let mut keys: Vec<(u16, String)> = Vec::with_capacity(targets.len());
         for number in &targets {
             let fixture = self
                 .show
                 .fixture(*number)
                 .ok_or_else(|| CommandError::new(format!("fixture {number} is not patched")))?;
             let (_, mode) = self.show.mode_for(fixture).map_err(CommandError::new)?;
-            if mode.channel_for(&attribute).is_none() {
-                return Err(CommandError::with_hint(
-                    format!(
-                        "fixture {number} has no `{attribute}` in mode `{}`",
-                        fixture.mode
-                    ),
-                    format!("attributes: {}", attribute_list(mode)),
-                ));
+            match mode.channel_for(&attribute) {
+                Some(channel) => keys.push((*number, channel.attribute.clone())),
+                None => {
+                    return Err(CommandError::with_hint(
+                        format!(
+                            "fixture {number} has no `{attribute}` in mode `{}`",
+                            fixture.mode
+                        ),
+                        format!("attributes: {}", attribute_list(mode)),
+                    ))
+                }
             }
         }
 
@@ -371,30 +381,15 @@ impl Engine {
         let percent = (value * 100.0).round() as i64;
         let canonical = attribute.clone();
 
-        let message = self.mutate(|show| {
-            for number in &targets {
-                let index = show
-                    .fixture_index(*number)
-                    .ok_or_else(|| CommandError::new(format!("fixture {number} is not patched")))?;
-                let key = {
-                    let fixture = &show.fixtures[index];
-                    let (_, mode) = show.mode_for(fixture).map_err(CommandError::new)?;
-                    mode.channel_for(&canonical)
-                        .map(|channel| channel.attribute.clone())
-                        .ok_or_else(|| {
-                            CommandError::new(format!(
-                                "fixture {number} has no `{canonical}` in mode `{}`",
-                                fixture.mode
-                            ))
-                        })?
-                };
-                show.fixtures[index].levels.insert(key, value);
+        let message = self.edit_programmer(|programmer| {
+            for (number, key) in &keys {
+                programmer.set(*number, key, value);
             }
-            Ok(format!("{label} {canonical} at {percent}%"))
-        })?;
+            format!("{label} {canonical} at {percent}%")
+        });
         // The fixtures you just addressed stay selected, so a following `Full`
         // or `Off` applies to the same set.
-        self.selection = targets;
+        self.desk.selection = targets;
         Ok(CommandOutcome::message(message))
     }
 
@@ -457,7 +452,7 @@ impl Engine {
 
     fn clear(&mut self, all: bool, values: bool) -> Result<CommandOutcome, CommandError> {
         if !values {
-            self.selection.clear();
+            self.desk.selection.clear();
             return Ok(CommandOutcome::message("Selection cleared"));
         }
         let targets: Vec<u16> = if all {
@@ -475,20 +470,22 @@ impl Engine {
             format_fixture_list(&targets)
         };
         let mut cleared = 0usize;
-        let message = self.mutate(|show| {
-            for number in &targets {
-                if let Some(index) = show.fixture_index(*number) {
-                    cleared += show.fixtures[index].levels.len();
-                    show.fixtures[index].levels.clear();
-                }
+        for (number, attributes) in self.desk.programmer.fixtures() {
+            if targets.contains(&number) {
+                cleared += attributes.len();
             }
-            Ok(format!(
+        }
+        let message = self.edit_programmer(|programmer| {
+            for number in &targets {
+                programmer.remove_fixture(*number);
+            }
+            format!(
                 "Cleared {cleared} programmer value{} on {label}",
                 if cleared == 1 { "" } else { "s" }
-            ))
-        })?;
+            )
+        });
         if all {
-            self.selection.clear();
+            self.desk.selection.clear();
         }
         Ok(CommandOutcome::message(message))
     }
@@ -503,11 +500,9 @@ impl Engine {
         }
         let message = format!("New show `{}`", show.name);
         self.show = show;
-        self.selection.clear();
+        self.desk.clear();
         self.playback.clear();
         self.effects.stop_all();
-        self.world = None;
-        self.filter = None;
         self.timecode.stop();
         self.revision += 1;
         Ok(CommandOutcome::message(message))
@@ -643,7 +638,6 @@ impl Engine {
             mode: mode.name.clone(),
             universe,
             address,
-            levels: Default::default(),
         };
         let mode_label = mode.name.clone();
 
@@ -681,7 +675,9 @@ impl Engine {
                 .retain(|fixture| !selected.contains(&fixture.number));
             Ok(format!("Unpatched {}", format_fixture_list(&selected)))
         })?;
-        self.selection.retain(|number| !fixtures.contains(number));
+        self.desk
+            .selection
+            .retain(|number| !fixtures.contains(number));
         Ok(CommandOutcome::message(message))
     }
 
@@ -728,34 +724,168 @@ impl Engine {
         Ok(CommandOutcome::with_lines(lines))
     }
 
-    fn save(&self, path: &str) -> Result<CommandOutcome, CommandError> {
-        self.show
-            .save(Path::new(path))
-            .map_err(|error| CommandError::new(error.to_string()))?;
-        Ok(CommandOutcome::message(format!("Saved show to {path}")))
+    /// Write the desk and/or the show. The desk goes first: if it fails the
+    /// show is untouched, so a document can never claim a newer state than its
+    /// desk.
+    fn save(&mut self, path: &str, desk: bool, show: bool) -> Result<CommandOutcome, CommandError> {
+        let show_path = Path::new(path);
+        let mut lines = Vec::new();
+        if desk {
+            self.sync_desk_runs();
+            let desk_path = Desk::path_for(show_path);
+            self.desk
+                .save(&desk_path, &self.show)
+                .map_err(|error| CommandError::new(error.to_string()))?;
+            lines.push(format!("Saved desk to {}", desk_path.display()));
+        }
+        if show {
+            self.show
+                .save(show_path)
+                .map_err(|error| CommandError::new(error.to_string()))?;
+            lines.push(format!("Saved show to {path}"));
+        }
+        Ok(CommandOutcome::with_lines(lines))
     }
 
-    fn load(&mut self, path: &str) -> Result<CommandOutcome, CommandError> {
-        let show =
-            Show::load(Path::new(path)).map_err(|error| CommandError::new(error.to_string()))?;
-        let message = format!(
+    fn load(&mut self, path: &str, show_only: bool) -> Result<CommandOutcome, CommandError> {
+        let show_path = Path::new(path);
+        let (show, report) = Show::load_with_report(show_path)
+            .map_err(|error| CommandError::new(error.to_string()))?;
+        let mut lines = vec![format!(
             "Loaded `{}` ({} fixtures, {} fixture types) from {path}",
             show.name,
             show.fixtures.len(),
             show.fixture_types.len()
-        );
+        )];
         self.show = show;
-        self.selection.clear();
         // A loaded show has its own cues and pools; runs from the previous show
         // must not keep writing the old values over the new rig.
         self.playback.clear();
         self.effects.stop_all();
-        self.world = None;
-        self.filter = None;
         self.timecode.stop();
         self.history.clear();
+        self.desk.clear();
+
+        let desk_path = Desk::path_for(show_path);
+        let loaded = if show_only {
+            lines.extend(self.desk.sanitise(&self.show));
+            None
+        } else {
+            Desk::load(&desk_path, &self.show)
+                .map_err(|error| CommandError::new(error.to_string()))?
+        };
+        match loaded {
+            Some((desk, warnings)) => {
+                self.desk = desk;
+                lines.extend(
+                    warnings
+                        .into_iter()
+                        .map(|warning| format!("Warning: {warning}")),
+                );
+            }
+            None => self.apply_seed(report.desk_seed.clone()),
+        }
+        lines.extend(
+            report
+                .warnings
+                .into_iter()
+                .map(|warning| format!("Warning: {warning}")),
+        );
+        self.restore_desk_runs();
         self.revision += 1;
-        Ok(CommandOutcome::message(message))
+        Ok(CommandOutcome::with_lines(lines))
+    }
+
+    /// Load a show and the desk that sits beside it.
+    ///
+    /// A show without a desk file opens clean, and a show that was upgraded
+    /// from v4 seeds the desk with the programmer it used to carry.
+    pub fn open(path: &Path) -> Result<(Engine, Vec<String>), String> {
+        let (show, report) = Show::load_with_report(path).map_err(|error| error.to_string())?;
+        let mut warnings = report.warnings.clone();
+        let mut engine = Engine::new(show);
+        let desk_path = Desk::path_for(path);
+        match Desk::load(&desk_path, &engine.show).map_err(|error| error.to_string())? {
+            Some((desk, desk_warnings)) => {
+                engine.desk = desk;
+                warnings.extend(desk_warnings);
+            }
+            None => engine.apply_seed(report.desk_seed),
+        }
+        engine.restore_desk_runs();
+        Ok((engine, warnings))
+    }
+
+    /// Move values an old show file carried into this desk.
+    fn apply_seed(&mut self, seed: crate::show::DeskSeed) {
+        if let Some(grand) = seed.grand {
+            self.desk.masters.grand = grand;
+        }
+        if let Some(rate) = seed.rate {
+            self.desk.masters.rate = rate;
+        }
+        for (number, level) in seed.groups {
+            self.desk.masters.set_group(number, level);
+        }
+        for (number, level) in seed.executors {
+            self.desk.masters.set_executor(number, level);
+        }
+        self.desk.programmer = seed.programmer;
+    }
+
+    /// Record which cue every playback is on, for the desk file.
+    fn sync_desk_runs(&mut self) {
+        self.desk.runs = self
+            .playback
+            .states()
+            .into_iter()
+            .map(|(target, cue, paused)| {
+                let (sequence, executor) = match target {
+                    Target::Sequence(number) => (Some(number), None),
+                    Target::Executor(number) => (None, Some(number)),
+                };
+                RunState {
+                    sequence,
+                    executor,
+                    cue,
+                    paused,
+                }
+            })
+            .collect();
+    }
+
+    /// Start the playbacks a desk file recorded, at the cue it recorded.
+    ///
+    /// A run always starts its fade from the current output, so a desk coming
+    /// back up fades in rather than jumping.
+    fn restore_desk_runs(&mut self) {
+        let runs = std::mem::take(&mut self.desk.runs);
+        for run in &runs {
+            let target = match (run.executor, run.sequence) {
+                (Some(executor), _) => Target::Executor(executor),
+                (None, Some(sequence)) => Target::Sequence(sequence),
+                (None, None) => continue,
+            };
+            let Ok(sequence_number) = self.sequence_number_for(target) else {
+                continue;
+            };
+            let Some(index) = self
+                .show
+                .sequence(sequence_number)
+                .and_then(|sequence| sequence.cue_index(run.cue))
+            else {
+                continue;
+            };
+            let _ = self
+                .playback
+                .go(&self.show, target, sequence_number, index, self.clock);
+            if run.paused {
+                self.playback.pause(target, self.clock);
+            }
+        }
+        self.playback
+            .refresh(&self.show, &self.desk.masters, self.clock);
+        self.desk.runs = runs;
     }
 
     fn sheet(&self) -> CommandOutcome {
@@ -769,8 +899,16 @@ impl Engine {
         let mut fixtures: Vec<&Fixture> = self.show.fixtures.iter().collect();
         fixtures.sort_by_key(|fixture| fixture.number);
         let playback = self.playback.output();
-        let effects = self.effects.output(&self.show, self.clock);
-        let stage = Stage::new(&self.show, playback, &effects);
+        let effects = self
+            .effects
+            .output(&self.show, self.desk.masters.rate, self.clock);
+        let stage = Stage::new(
+            &self.show,
+            &self.desk.programmer,
+            playback,
+            &effects,
+            &self.desk.masters,
+        );
 
         for fixture in fixtures {
             let (patch, levels) = match self.show.mode_for(fixture) {
@@ -852,11 +990,15 @@ impl Engine {
         ));
         lines.push(format!(
             "Selection: {}",
-            if self.selection.is_empty() {
+            if self.desk.selection.is_empty() {
                 "none".to_string()
             } else {
-                format_fixture_list(&self.selection)
+                format_fixture_list(&self.desk.selection)
             }
+        ));
+        lines.push(format!(
+            "Programmer: {}",
+            count(self.desk.programmer.len(), "value")
         ));
         lines.push(format!(
             "Palettes: {} | Sequences: {} | Executors: {}",
@@ -873,16 +1015,18 @@ impl Engine {
         ));
         lines.push(format!(
             "Masters: grand {}% | rate {}%",
-            (self.show.grand_master * 100.0).round() as i64,
-            (self.show.rate_master * 100.0).round() as i64
+            (self.desk.masters.grand * 100.0).round() as i64,
+            (self.desk.masters.rate * 100.0).round() as i64
         ));
         lines.push(format!(
             "World: {} | Filter: {}",
-            self.world
+            self.desk
+                .world
                 .and_then(|number| self.show.world(number))
                 .map(|world| world.display_name())
                 .unwrap_or_else(|| "off".to_string()),
-            self.filter
+            self.desk
+                .filter
                 .and_then(|number| self.show.filter(number))
                 .map(|filter| filter.display_name())
                 .unwrap_or_else(|| "off".to_string())
@@ -927,7 +1071,7 @@ impl Engine {
     /// Fixtures a store captures: the selection, or every fixture when nothing
     /// is selected.
     fn programmer_targets(&self) -> Result<Vec<u16>, CommandError> {
-        if self.selection.is_empty() {
+        if self.desk.selection.is_empty() {
             let all: Vec<u16> = self
                 .show
                 .fixtures
@@ -969,8 +1113,8 @@ impl Engine {
                 ));
             }
         }
-        let (pool, values) =
-            palette::capture(&self.show, &targets, feature).map_err(CommandError::new)?;
+        let (pool, values) = palette::capture(&self.show, &self.desk.programmer, &targets, feature)
+            .map_err(CommandError::new)?;
         let value_count: usize = values.values().map(|values| values.len()).sum();
         let type_count = values.len();
         let name_label = name
@@ -1077,22 +1221,17 @@ impl Engine {
         let applied = assignments.len();
         let value_count: usize = assignments.iter().map(|(_, values)| values.len()).sum();
         let label = palette.display_name();
-        let message = self.mutate(|show| {
+        let message = self.edit_programmer(|programmer| {
             for (number, values) in &assignments {
-                let Some(index) = show.fixture_index(*number) else {
-                    continue;
-                };
                 for (attribute, level) in values {
-                    show.fixtures[index]
-                        .levels
-                        .insert(attribute.clone(), *level);
+                    programmer.set(*number, attribute, *level);
                 }
             }
-            Ok(format!(
+            format!(
                 "Applied palette {label} to {applied} fixture{} ({value_count} values)",
                 if applied == 1 { "" } else { "s" }
-            ))
-        })?;
+            )
+        });
 
         let mut lines = vec![message];
         if !skipped.is_empty() {
@@ -1197,9 +1336,14 @@ impl Engine {
                 let Ok((fixture_type, _)) = self.show.mode_for(fixture) else {
                     continue;
                 };
-                for (attribute, level) in &fixture.levels {
-                    if self.attribute_allowed(fixture_type, attribute) {
-                        captured.set(*target, attribute, *level);
+                for (number, attributes) in self.desk.programmer.fixtures() {
+                    if number != *target {
+                        continue;
+                    }
+                    for (attribute, level) in attributes {
+                        if self.attribute_allowed(fixture_type, attribute) {
+                            captured.set(*target, attribute, *level);
+                        }
                     }
                 }
             }
@@ -1416,7 +1560,6 @@ impl Engine {
                     number,
                     sequence,
                     name: format!("Executor {number}"),
-                    fader: 1.0,
                 }),
             }
             show.executors.sort_by_key(|executor| executor.number);
@@ -1455,18 +1598,11 @@ impl Engine {
             ));
         }
         let percent = (value * 100.0).round() as i64;
-        let message = self.mutate(|show| {
-            if let Some(executor) = show
-                .executors
-                .iter_mut()
-                .find(|executor| executor.number == number)
-            {
-                executor.fader = value;
-            }
-            Ok(format!("Executor {number} fader at {percent}%"))
-        })?;
+        self.desk.masters.set_executor(number, value);
         self.refresh_playback();
-        Ok(CommandOutcome::message(message))
+        Ok(CommandOutcome::message(format!(
+            "Executor {number} fader at {percent}%"
+        )))
     }
 
     fn executor_list(&self, only: Option<u16>) -> CommandOutcome {
@@ -1507,7 +1643,10 @@ impl Engine {
                 "{:<4} {:<20} {:<8} {:<9} {}",
                 executor.number,
                 format!("Sequence {}", executor.sequence),
-                format!("{:.0}%", executor.fader * 100.0),
+                format!(
+                    "{:.0}%",
+                    self.desk.masters.executor(executor.number) * 100.0
+                ),
                 state,
                 cue
             ));
@@ -1562,7 +1701,8 @@ impl Engine {
     }
 
     fn refresh_playback(&mut self) {
-        self.playback.refresh(&self.show, self.clock);
+        self.playback
+            .refresh(&self.show, &self.desk.masters, self.clock);
         self.revision += 1;
     }
 
@@ -1842,7 +1982,7 @@ impl Engine {
                     20
                 ),
                 format_fixture_list(&group.fixtures),
-                (group.master * 100.0).round() as i64
+                (self.desk.masters.group(group.number) * 100.0).round() as i64
             ));
         }
         CommandOutcome::with_lines(lines)
@@ -1893,20 +2033,20 @@ impl Engine {
                 "`World` lists the stored worlds",
             ));
         }
-        let was_active = self.world == Some(number);
+        let was_active = self.desk.world == Some(number);
         let message = self.mutate(|show| {
             show.worlds.retain(|world| world.number != number);
             Ok(format!("Deleted world {number}"))
         })?;
         if was_active {
-            self.world = None;
+            self.desk.world = None;
         }
         Ok(CommandOutcome::message(message))
     }
 
     fn activate_world(&mut self, number: Option<u16>) -> Result<CommandOutcome, CommandError> {
         let Some(number) = number else {
-            self.world = None;
+            self.desk.world = None;
             return Ok(CommandOutcome::message(
                 "World off; every fixture is reachable",
             ));
@@ -1917,7 +2057,7 @@ impl Engine {
                 "`World` lists the stored worlds",
             ));
         };
-        self.world = Some(number);
+        self.desk.world = Some(number);
         Ok(CommandOutcome::message(format!(
             "Activated {} ({} fixture{})",
             world.display_name(),
@@ -1949,7 +2089,7 @@ impl Engine {
                     20
                 ),
                 format_fixture_list(&world.fixtures),
-                if self.world == Some(world.number) {
+                if self.desk.world == Some(world.number) {
                     "yes"
                 } else {
                     ""
@@ -2050,20 +2190,20 @@ impl Engine {
                 "`Filter` lists the stored filters",
             ));
         }
-        let was_active = self.filter == Some(number);
+        let was_active = self.desk.filter == Some(number);
         let message = self.mutate(|show| {
             show.filters.retain(|filter| filter.number != number);
             Ok(format!("Deleted filter {number}"))
         })?;
         if was_active {
-            self.filter = None;
+            self.desk.filter = None;
         }
         Ok(CommandOutcome::message(message))
     }
 
     fn activate_filter(&mut self, number: Option<u16>) -> Result<CommandOutcome, CommandError> {
         let Some(number) = number else {
-            self.filter = None;
+            self.desk.filter = None;
             return Ok(CommandOutcome::message(
                 "Filter off; every feature can be programmed",
             ));
@@ -2074,7 +2214,7 @@ impl Engine {
                 "`Filter` lists the stored filters",
             ));
         };
-        self.filter = Some(number);
+        self.desk.filter = Some(number);
         Ok(CommandOutcome::message(format!(
             "Activated {} ({})",
             filter.display_name(),
@@ -2105,7 +2245,7 @@ impl Engine {
                     20
                 ),
                 truncate(&filter.features.join(", "), 32),
-                if self.filter == Some(filter.number) {
+                if self.desk.filter == Some(filter.number) {
                     "yes"
                 } else {
                     ""
@@ -2117,14 +2257,12 @@ impl Engine {
 
     fn set_grand_master(&mut self, level: Level) -> Result<CommandOutcome, CommandError> {
         let value = level_value(&level)?;
-        let message = self.mutate(|show| {
-            show.grand_master = value;
-            Ok(format!(
-                "Grand master at {}%",
-                (value * 100.0).round() as i64
-            ))
-        })?;
-        Ok(CommandOutcome::message(message))
+        self.desk.masters.grand = value;
+        self.revision += 1;
+        Ok(CommandOutcome::message(format!(
+            "Grand master at {}%",
+            (value * 100.0).round() as i64
+        )))
     }
 
     fn set_rate_master(&mut self, level: Level) -> Result<CommandOutcome, CommandError> {
@@ -2140,14 +2278,12 @@ impl Engine {
                 percent / 100.0
             }
         };
-        let message = self.mutate(|show| {
-            show.rate_master = value;
-            Ok(format!(
-                "Rate master at {}%",
-                (value * 100.0).round() as i64
-            ))
-        })?;
-        Ok(CommandOutcome::message(message))
+        self.desk.masters.rate = value;
+        self.revision += 1;
+        Ok(CommandOutcome::message(format!(
+            "Rate master at {}%",
+            (value * 100.0).round() as i64
+        )))
     }
 
     fn set_group_master(
@@ -2162,30 +2298,23 @@ impl Engine {
             ));
         }
         let value = level_value(&level)?;
-        let message = self.mutate(|show| {
-            let index = show
-                .groups
-                .iter()
-                .position(|group| group.number == number)
-                .ok_or_else(|| CommandError::new(format!("group {number} does not exist")))?;
-            show.groups[index].master = value;
-            Ok(format!(
-                "Group {number} master at {}%",
-                (value * 100.0).round() as i64
-            ))
-        })?;
-        Ok(CommandOutcome::message(message))
+        self.desk.masters.set_group(number, value);
+        self.revision += 1;
+        Ok(CommandOutcome::message(format!(
+            "Group {number} master at {}%",
+            (value * 100.0).round() as i64
+        )))
     }
 
     fn master_list(&self) -> CommandOutcome {
         let mut lines = vec![
             format!(
                 "Grand master: {}%",
-                (self.show.grand_master * 100.0).round() as i64
+                (self.desk.masters.grand * 100.0).round() as i64
             ),
             format!(
                 "Rate master: {}%",
-                (self.show.rate_master * 100.0).round() as i64
+                (self.desk.masters.rate * 100.0).round() as i64
             ),
         ];
         if self.show.groups.is_empty() {
@@ -2195,7 +2324,7 @@ impl Engine {
                 lines.push(format!(
                     "{} master: {}%",
                     group.display_name(),
-                    (group.master * 100.0).round() as i64
+                    (self.desk.masters.group(group.number) * 100.0).round() as i64
                 ));
             }
         }
@@ -2331,7 +2460,7 @@ impl Engine {
             format_fixture_list(&targets),
             effect.attribute,
             effect.waveform.name(),
-            effect.rate_hz * self.show.rate_master,
+            effect.rate_hz * self.desk.masters.rate,
             (effect.size * 100.0).round() as i64
         )))
     }
@@ -2406,7 +2535,7 @@ impl Engine {
     }
 
     fn targets(&self, fixtures: Option<Vec<u16>>) -> Result<Vec<u16>, CommandError> {
-        let list = fixtures.unwrap_or_else(|| self.selection.clone());
+        let list = fixtures.unwrap_or_else(|| self.desk.selection.clone());
         if list.is_empty() {
             return Err(CommandError::with_hint(
                 "nothing selected",
@@ -2426,7 +2555,7 @@ impl Engine {
 
     /// The active world, if any.
     fn active_world(&self) -> Option<&World> {
-        self.world.and_then(|number| self.show.world(number))
+        self.desk.world.and_then(|number| self.show.world(number))
     }
 
     /// Whether the active world, if any, allows a fixture.
@@ -2461,7 +2590,7 @@ impl Engine {
     }
 
     fn active_filter(&self) -> Option<&Filter> {
-        self.filter.and_then(|number| self.show.filter(number))
+        self.desk.filter.and_then(|number| self.show.filter(number))
     }
 
     /// Whether the active filter, if any, allows programming an attribute.
@@ -2891,11 +3020,17 @@ impl Engine {
     }
 
     fn history_step(&mut self, undo: bool) -> Result<CommandOutcome, CommandError> {
-        let label = if undo {
-            self.history.undo(&mut self.show)
-        } else {
-            self.history.redo(&mut self.show)
+        let mut current = Snapshot {
+            show: std::mem::take(&mut self.show),
+            programmer: std::mem::take(&mut self.desk.programmer),
         };
+        let label = if undo {
+            self.history.undo(&mut current)
+        } else {
+            self.history.redo(&mut current)
+        };
+        self.show = current.show;
+        self.desk.programmer = current.programmer;
         let Some(label) = label else {
             return Ok(CommandOutcome::message(if undo {
                 "Nothing to undo."
@@ -2917,21 +3052,24 @@ impl Engine {
     /// at something which no longer exists is dropped here rather than left to
     /// fail at render time.
     fn after_history_restore(&mut self) {
-        self.selection
+        self.desk
+            .selection
             .retain(|number| self.show.fixture(*number).is_some());
         if self
+            .desk
             .world
             .and_then(|number| self.show.world(number))
             .is_none()
         {
-            self.world = None;
+            self.desk.world = None;
         }
         if self
+            .desk
             .filter
             .and_then(|number| self.show.filter(number))
             .is_none()
         {
-            self.filter = None;
+            self.desk.filter = None;
         }
         self.playback.prune(&self.show);
         let live: BTreeSet<u16> = self
@@ -2949,8 +3087,28 @@ impl Engine {
         for number in stale {
             self.effects.stop(number);
         }
-        self.playback.refresh(&self.show, self.clock);
+        self.playback
+            .refresh(&self.show, &self.desk.masters, self.clock);
         self.revision += 1;
+    }
+
+    /// Apply a programmer edit and record it for undo.
+    ///
+    /// Programmer values are desk state: they change no show data, so this
+    /// neither validates nor saves the document, but the edit is still one
+    /// undo step because "put that back" usually means the values too.
+    fn edit_programmer<F>(&mut self, change: F) -> String
+    where
+        F: FnOnce(&mut Levels) -> String,
+    {
+        let snapshot = Snapshot {
+            show: self.show.clone(),
+            programmer: self.desk.programmer.clone(),
+        };
+        let message = change(&mut self.desk.programmer);
+        self.history.record(snapshot, self.label.clone());
+        self.revision += 1;
+        message
     }
 
     /// Apply a change only if the resulting show still validates.
@@ -2975,7 +3133,14 @@ impl Engine {
             )));
         }
         if backup != self.show {
-            self.history.record(backup, self.label.clone());
+            let programmer = self.desk.programmer.clone();
+            self.history.record(
+                Snapshot {
+                    show: backup,
+                    programmer,
+                },
+                self.label.clone(),
+            );
         }
         self.revision += 1;
         Ok(message)
@@ -3014,7 +3179,10 @@ pub const HELP: &[&str] = &[
     "Effect 1 On [Fixture 1 Thru 4] / Effect 1 Off / Effect Off / Effect",
     "Sheet                                  print the fixture sheet",
     "Status                                 output, show and playback state",
-    "Save \"show.json\" / Load \"show.json\"",
+    "Save \"show.json\"                     write the show and its desk beside it",
+    "Save Show \"show.json\" / Save Desk \"desk.oldesk\"   write one of the two",
+    "Load \"show.json\"                     read the show and its desk",
+    "Load Show \"show.json\"                read the show only, keep this desk",
     "Help                                   this list",
     "Separate several commands with `;`.",
 ];
@@ -3100,7 +3268,6 @@ fn truncate(text: &str, width: usize) -> String {
 mod tests {
     use super::*;
     use crate::test_support::{demo_fixture_type, demo_show};
-    use std::collections::BTreeMap;
     use std::time::Duration;
 
     fn engine() -> Engine {
@@ -3116,13 +3283,7 @@ mod tests {
     }
 
     fn dimmer(engine: &Engine, fixture: u16) -> f64 {
-        *engine
-            .show
-            .fixture(fixture)
-            .unwrap()
-            .levels
-            .get("Dimmer")
-            .unwrap()
+        engine.desk.programmer.get(fixture, "Dimmer").unwrap()
     }
 
     #[test]
@@ -3176,7 +3337,7 @@ mod tests {
         engine.execute("Fixture 1").unwrap();
         assert!(engine.execute("At 101").is_err());
         assert!(
-            engine.show.fixture(1).unwrap().levels.is_empty(),
+            engine.desk.programmer.is_empty(),
             "a rejected command changed nothing"
         );
         assert_eq!(engine.render().slot(1, 1), Some(0));
@@ -3214,7 +3375,7 @@ mod tests {
         assert_eq!(fixture.address, 101);
         assert_eq!(fixture.name, "Demo Wash");
         assert!(
-            fixture.levels.is_empty(),
+            engine.desk.programmer.is_empty(),
             "a fresh fixture has an empty programmer, so playback can drive it"
         );
     }
@@ -3263,7 +3424,7 @@ mod tests {
         engine.execute("Fixture 1").unwrap();
         engine.execute("Unpatch Fixture 1").unwrap();
         assert!(engine.show.fixtures.is_empty());
-        assert!(engine.selection.is_empty());
+        assert!(engine.desk.selection.is_empty());
         let error = engine.execute("Full").unwrap_err();
         assert_eq!(error.message, "nothing selected");
     }
@@ -3284,7 +3445,6 @@ mod tests {
             mode: "4ch".into(),
             universe: 1,
             address: 1,
-            levels: BTreeMap::from([("ColorAdd_R".into(), 0.0)]),
         });
         let mut engine = Engine::new(show);
         let error = engine.execute("Fixture 1 At 50").unwrap_err();
@@ -3400,9 +3560,8 @@ mod tests {
             .execute(r#"Patch Fixture 2 At 1.010 Type "OpenLight Demo Wash""#)
             .unwrap();
         engine.execute("Fixture 2 At Palette Color 1").unwrap();
-        let fixture = engine.show.fixture(2).unwrap();
-        assert_eq!(fixture.levels.get("ColorAdd_R"), Some(&1.0));
-        assert_eq!(fixture.levels.get("ColorAdd_B"), Some(&0.0));
+        assert_eq!(engine.desk.programmer.get(2, "ColorAdd_R"), Some(1.0));
+        assert_eq!(engine.desk.programmer.get(2, "ColorAdd_B"), Some(0.0));
         assert_eq!(engine.render().slot(1, 11), Some(255));
     }
 
@@ -3646,7 +3805,7 @@ mod tests {
     }
 
     #[test]
-    fn loading_a_show_stops_the_previous_playback() {
+    fn loading_a_show_restores_its_desk_and_a_bare_show_starts_clean() {
         let mut engine = engine();
         let start = engine.clock();
         engine.tick(start);
@@ -3657,18 +3816,90 @@ mod tests {
         assert!(engine.playback.is_running());
 
         let path = std::env::temp_dir().join(format!(
-            "openlight-phase2-{}-load.olshow.json",
+            "openlight-phase2-{}-load.olshow",
             std::process::id()
         ));
         engine
             .execute(&format!("Save \"{}\"", path.display()))
             .unwrap();
+        // The desk recorded where the playback was, so reopening puts it back.
         engine
             .execute(&format!("Load \"{}\"", path.display()))
             .unwrap();
+        assert!(engine.playback.is_running(), "the desk restored the run");
+        assert_eq!(engine.render().slot(1, 1), Some(255));
+
+        // A show copied without its desk starts clean rather than resuming a
+        // run from another desk.
+        let bare = path.with_file_name("openlight-bare.olshow");
+        std::fs::copy(&path, &bare).unwrap();
+        let _ = std::fs::remove_file(Desk::path_for(&bare));
+        engine
+            .execute(&format!("Load \"{}\"", bare.display()))
+            .unwrap();
         assert!(!engine.playback.is_running());
         assert_eq!(engine.render().slot(1, 1), Some(0));
+
         let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(Desk::path_for(&path));
+        let _ = std::fs::remove_file(&bare);
+    }
+
+    #[test]
+    fn the_programmer_is_not_saved_in_the_show_file() {
+        let mut engine = engine();
+        let path = std::env::temp_dir().join(format!(
+            "openlight-programmer-{}.olshow",
+            std::process::id()
+        ));
+        engine.execute("Fixture 1 At 50").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Clear Values").unwrap();
+        engine.execute("Fixture 1 At 90").unwrap();
+        engine
+            .execute(&format!("Save \"{}\"", path.display()))
+            .unwrap();
+
+        engine.execute("New").unwrap();
+        engine
+            .execute(&format!("Load \"{}\"", path.display()))
+            .unwrap();
+        // The saved programmer came back with the desk...
+        assert_eq!(dimmer(&engine, 1), 0.9);
+        // ...but the show file itself never carried it.
+        let text = std::fs::read_to_string(&path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        for fixture in value["fixtures"].as_array().unwrap() {
+            assert!(
+                fixture.get("levels").is_none(),
+                "the document carries no programmer"
+            );
+        }
+        assert!(
+            Desk::path_for(&path).exists(),
+            "the desk was written beside it"
+        );
+        let without_desk = std::env::temp_dir().join(format!(
+            "openlight-programmer-bare-{}.olshow",
+            std::process::id()
+        ));
+        std::fs::copy(&path, &without_desk).unwrap();
+        let _ = std::fs::remove_file(Desk::path_for(&without_desk));
+        engine.execute("Clear Values").unwrap();
+        engine
+            .execute(&format!("Load \"{}\"", without_desk.display()))
+            .unwrap();
+        assert!(engine.desk.programmer.is_empty());
+        assert_eq!(
+            engine.show.sequence(1).unwrap().cues[0]
+                .levels
+                .get(1, "Dimmer"),
+            Some(0.5)
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(Desk::path_for(&path));
+        let _ = std::fs::remove_file(&without_desk);
     }
 
     #[test]
@@ -3682,7 +3913,7 @@ mod tests {
         assert!(engine.show.fixtures.is_empty());
         assert!(engine.show.sequences.is_empty());
         assert!(!engine.playback.is_running());
-        assert!(engine.selection.is_empty());
+        assert!(engine.desk.selection.is_empty());
     }
 
     #[test]
@@ -3746,7 +3977,11 @@ mod tests {
         engine.execute("Group 1 At 40").unwrap();
         assert_eq!(dimmer(&engine, 1), 0.4);
         assert_eq!(dimmer(&engine, 2), 0.4);
-        assert_eq!(engine.selection, vec![1, 2], "the group stays selected");
+        assert_eq!(
+            engine.desk.selection,
+            vec![1, 2],
+            "the group stays selected"
+        );
 
         engine.execute("Group 1 Off").unwrap();
         assert_eq!(engine.render().slot(1, 1), Some(0));
@@ -3936,16 +4171,16 @@ mod tests {
             .unwrap();
 
         assert_eq!(engine.show.groups.len(), 1);
-        assert_eq!(engine.show.groups[0].master, 0.3);
+        assert_eq!(engine.desk.masters.group(1), 0.3);
         assert_eq!(engine.show.worlds.len(), 1);
         assert_eq!(engine.show.filters.len(), 1);
         assert_eq!(engine.show.effects.len(), 1);
         assert_eq!(engine.show.effects[0].rate_hz, 2.0);
-        assert_eq!(engine.show.grand_master, 0.4);
-        assert_eq!(engine.show.rate_master, 2.0);
+        assert_eq!(engine.desk.masters.grand, 0.4);
+        assert_eq!(engine.desk.masters.rate, 2.0);
         assert!(!engine.effects.is_running(), "runs are not saved");
-        assert_eq!(engine.world, None);
-        assert_eq!(engine.filter, None);
+        assert_eq!(engine.desk.world, None);
+        assert_eq!(engine.desk.filter, None);
         let _ = std::fs::remove_file(&path);
     }
 
@@ -4013,7 +4248,7 @@ mod tests {
 
         let undone = engine.execute("Undo").unwrap();
         assert!(undone.lines[0].contains("Fixture 1 At 40"));
-        assert!(engine.show.fixture(1).unwrap().levels.is_empty());
+        assert!(engine.desk.programmer.is_empty());
         assert!(engine.execute("Undo").unwrap().lines[0].contains("Nothing to undo"));
 
         let redone = engine.execute("Redo").unwrap();
@@ -4040,12 +4275,12 @@ mod tests {
         let mut engine = engine();
         engine.execute("Fixture 1").unwrap();
         assert!(engine.execute("Undo").unwrap().lines[0].contains("Nothing to undo"));
-        assert_eq!(engine.selection, vec![1]);
+        assert_eq!(engine.desk.selection, vec![1]);
 
         engine.execute("Fixture 1 At 30").unwrap();
         assert!(engine.execute("Fixture 1 At 101").is_err());
         engine.execute("Undo").unwrap();
-        assert!(engine.show.fixture(1).unwrap().levels.is_empty());
+        assert!(engine.desk.programmer.is_empty());
         assert!(
             engine.execute("Undo").unwrap().lines[0].contains("Nothing to undo"),
             "the rejected command left no step"

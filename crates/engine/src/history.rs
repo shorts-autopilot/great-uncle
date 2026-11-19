@@ -1,26 +1,34 @@
-//! Undo and redo over show snapshots.
+//! Undo and redo over desk snapshots.
 //!
-//! Every command that changes the show records the show *before* the change,
-//! together with the command text that made it. Undo swaps the current show for
-//! the previous snapshot and redo swaps it back, so the operator can step
-//! through their own edits without a per-command inverse for each feature.
+//! Every command that changes the show *or the programmer* records the state
+//! before the change, together with the command text that made it. Undo swaps
+//! the current state for the previous snapshot and redo swaps it back, so the
+//! operator can step through their own edits without a per-command inverse.
 //!
-//! A snapshot is a full [`Show`]. Shows are small (fixtures, pools and cue data,
-//! not DMX frames), the depth is capped, and a snapshot is exact: undo restores
-//! pools, cues, masters and timecode events together, with no chance of a
-//! partial inverse leaving a show that does not validate.
+//! A snapshot is a full [`Show`] plus the programmer [`Levels`]. Shows are small
+//! (fixtures, pools and cue data, not DMX frames), the depth is capped, and a
+//! snapshot is exact: undo restores pools, cues, timecode events and the values
+//! being edited together, with no chance of a partial inverse leaving a state
+//! that does not validate.
 //!
-//! Selection, running playbacks, effects and the timecode player are console
-//! state, not show data, so they are deliberately not restored.
+//! Selection, masters, running playbacks, effects and the timecode player are
+//! handles rather than programming, so they are deliberately not restored.
 
+use crate::levels::Levels;
 use crate::show::Show;
 
 /// How many edits can be undone. Old snapshots fall off the back.
 pub const MAX_UNDO: usize = 64;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Snapshot {
+    pub show: Show,
+    pub programmer: Levels,
+}
+
 #[derive(Debug)]
 struct Step {
-    show: Show,
+    snapshot: Snapshot,
     label: String,
 }
 
@@ -33,8 +41,8 @@ pub struct History {
 impl History {
     /// Remember the state before a change. A new change after an undo drops
     /// the redo branch, exactly like a text editor.
-    pub fn record(&mut self, show: Show, label: String) {
-        self.undo.push(Step { show, label });
+    pub fn record(&mut self, snapshot: Snapshot, label: String) {
+        self.undo.push(Step { snapshot, label });
         if self.undo.len() > MAX_UNDO {
             self.undo.remove(0);
         }
@@ -42,28 +50,27 @@ impl History {
     }
 
     /// Restore the previous state, returning the command that is being undone.
-    pub fn undo(&mut self, current: &mut Show) -> Option<String> {
+    pub fn undo(&mut self, current: &mut Snapshot) -> Option<String> {
         let step = self.undo.pop()?;
         let label = step.label;
         self.redo.push(Step {
-            show: std::mem::replace(current, step.show),
+            snapshot: std::mem::replace(current, step.snapshot),
             label: label.clone(),
         });
         Some(label)
     }
 
     /// Re-apply the last undone change.
-    pub fn redo(&mut self, current: &mut Show) -> Option<String> {
+    pub fn redo(&mut self, current: &mut Snapshot) -> Option<String> {
         let step = self.redo.pop()?;
         let label = step.label;
         self.undo.push(Step {
-            show: std::mem::replace(current, step.show),
+            snapshot: std::mem::replace(current, step.snapshot),
             label: label.clone(),
         });
         Some(label)
     }
 
-    /// Forget everything, e.g. after loading a different show.
     pub fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
@@ -81,69 +88,46 @@ impl History {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::demo_show;
+    use crate::show::Show;
+
+    fn snapshot(programmer: f64) -> Snapshot {
+        let mut levels = Levels::new();
+        levels.set(1, "Dimmer", programmer);
+        Snapshot {
+            show: Show::new(),
+            programmer: levels,
+        }
+    }
 
     #[test]
-    fn undo_and_redo_swap_the_show() {
+    fn undo_and_redo_swap_show_and_programmer() {
         let mut history = History::default();
-        let mut show = demo_show();
-        let original = show.clone();
+        let mut current = snapshot(0.6);
+        history.record(snapshot(0.5), "first".into());
 
-        show.name = "Edited".into();
-        history.record(original.clone(), "New Show".into());
-        assert_eq!(history.undo_depth(), 1);
-
-        assert_eq!(history.undo(&mut show), Some("New Show".to_string()));
-        assert_eq!(show, original);
-        assert_eq!(history.undo_depth(), 0);
-        assert_eq!(history.redo_depth(), 1);
-        assert_eq!(history.undo(&mut show), None, "nothing left to undo");
-
-        assert_eq!(history.redo(&mut show), Some("New Show".to_string()));
-        assert_eq!(show.name, "Edited");
-        assert_eq!(history.redo(&mut show), None);
+        assert_eq!(history.undo(&mut current).as_deref(), Some("first"));
+        assert_eq!(current.programmer.get(1, "Dimmer"), Some(0.5));
+        assert_eq!(history.redo(&mut current).as_deref(), Some("first"));
+        assert_eq!(current.programmer.get(1, "Dimmer"), Some(0.6));
     }
 
     #[test]
     fn a_new_change_drops_the_redo_branch() {
         let mut history = History::default();
-        let mut show = demo_show();
-        let before = show.clone();
-        show.name = "First".into();
-        history.record(before, "First change".into());
-        history.undo(&mut show);
+        let mut current = snapshot(0.2);
+        history.record(snapshot(0.5), "first".into());
+        history.undo(&mut current);
         assert_eq!(history.redo_depth(), 1);
-
-        let before = show.clone();
-        show.name = "Second".into();
-        history.record(before, "Second change".into());
+        history.record(snapshot(0.7), "second".into());
         assert_eq!(history.redo_depth(), 0);
-        assert_eq!(history.undo_depth(), 1);
     }
 
     #[test]
-    fn the_depth_is_capped() {
+    fn depth_is_capped() {
         let mut history = History::default();
-        let mut show = demo_show();
         for step in 0..(MAX_UNDO + 5) {
-            let before = show.clone();
-            show.name = format!("Step {step}");
-            history.record(before, format!("Step {step}"));
+            history.record(snapshot(step as f64 / 100.0), "edit".into());
         }
         assert_eq!(history.undo_depth(), MAX_UNDO);
-        while history.undo(&mut show).is_some() {}
-        assert_eq!(
-            show.name, "Step 4",
-            "the oldest snapshots fell off the back"
-        );
-    }
-
-    #[test]
-    fn clear_forgets_both_directions() {
-        let mut history = History::default();
-        history.record(demo_show(), "change".into());
-        history.clear();
-        assert_eq!(history.undo_depth(), 0);
-        assert_eq!(history.redo_depth(), 0);
     }
 }

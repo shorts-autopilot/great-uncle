@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 
 use dmx::DMX_SLOTS;
 
+use crate::desk::Masters;
 use crate::effect::EffectOutput;
 use crate::levels::{is_intensity, Levels};
 use crate::show::{Fixture, Show};
@@ -62,14 +63,14 @@ impl OutputFrame {
 
 /// Combined master for one fixture: the grand master times the lowest group
 /// master of every group that contains it.
-pub fn intensity_master(show: &Show, fixture: u16) -> f64 {
+pub fn intensity_master(show: &Show, masters: &Masters, fixture: u16) -> f64 {
     let group = show
         .groups
         .iter()
         .filter(|group| group.contains(fixture))
-        .map(|group| group.master)
+        .map(|group| masters.group(group.number))
         .fold(1.0, f64::min);
-    show.grand_master * group
+    masters.grand * group
 }
 
 /// One fixture's output at the current moment: programmer over playback, then
@@ -77,26 +78,34 @@ pub fn intensity_master(show: &Show, fixture: u16) -> f64 {
 /// describe the same output.
 pub struct Stage<'a> {
     show: &'a Show,
+    programmer: &'a Levels,
     playback: &'a Levels,
     effects: &'a EffectOutput,
+    masters: &'a Masters,
 }
 
 impl<'a> Stage<'a> {
-    pub fn new(show: &'a Show, playback: &'a Levels, effects: &'a EffectOutput) -> Self {
+    pub fn new(
+        show: &'a Show,
+        programmer: &'a Levels,
+        playback: &'a Levels,
+        effects: &'a EffectOutput,
+        masters: &'a Masters,
+    ) -> Self {
         Self {
             show,
+            programmer,
             playback,
             effects,
+            masters,
         }
     }
 
     pub fn level(&self, fixture: &Fixture, attribute: &str) -> f64 {
-        let programmer = fixture
-            .levels
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case(attribute))
-            .map(|(_, level)| *level);
-        let base = match (programmer, self.playback.get(fixture.number, attribute)) {
+        let base = match (
+            self.programmer.get(fixture.number, attribute),
+            self.playback.get(fixture.number, attribute),
+        ) {
             (Some(value), _) => value,
             (None, Some(value)) => value,
             (None, None) => 0.0,
@@ -106,7 +115,7 @@ impl<'a> Stage<'a> {
             None => base,
         };
         if is_intensity(attribute) {
-            level * intensity_master(self.show, fixture.number)
+            level * intensity_master(self.show, self.masters, fixture.number)
         } else {
             level
         }
@@ -118,13 +127,19 @@ impl<'a> Stage<'a> {
 ///
 /// Fixtures without a resolvable type or mode are skipped: validation rejects
 /// them, and a stale show must never take the output thread down.
-pub fn render(show: &Show, playback: &Levels, effects: &EffectOutput) -> OutputFrame {
+pub fn render(
+    show: &Show,
+    programmer: &Levels,
+    playback: &Levels,
+    effects: &EffectOutput,
+    masters: &Masters,
+) -> OutputFrame {
     let mut frame = OutputFrame::default();
     for universe in &show.universes {
         frame.ensure(universe.number);
     }
 
-    let stage = Stage::new(show, playback, effects);
+    let stage = Stage::new(show, programmer, playback, effects, masters);
     for fixture in &show.fixtures {
         let Ok((_, mode)) = show.mode_for(fixture) else {
             continue;
@@ -153,15 +168,33 @@ mod tests {
     use crate::pools::Group;
     use crate::show::Fixture;
     use crate::test_support::demo_show;
-    use std::collections::BTreeMap;
 
-    fn program(show: &Show) -> OutputFrame {
-        render(show, &Levels::new(), &EffectOutput::default())
+    fn masters() -> Masters {
+        Masters::new()
+    }
+
+    fn program(show: &Show, programmer: &Levels, masters: &Masters) -> OutputFrame {
+        render(
+            show,
+            programmer,
+            &Levels::new(),
+            &EffectOutput::default(),
+            masters,
+        )
+    }
+
+    fn programmer(show: &Show, values: &[(u16, &str, f64)]) -> Levels {
+        let mut levels = Levels::new();
+        for (fixture, attribute, level) in values {
+            levels.set(*fixture, attribute, *level);
+        }
+        assert!(show.fixture(1).is_some());
+        levels
     }
 
     #[test]
     fn renders_all_slots_of_each_universe() {
-        let frame = program(&demo_show());
+        let frame = program(&demo_show(), &Levels::new(), &masters());
         assert_eq!(frame.len(), 1);
         assert_eq!(frame.get(1).unwrap().len(), DMX_SLOTS);
         assert!(frame.get(1).unwrap().iter().all(|slot| *slot == 0));
@@ -170,15 +203,17 @@ mod tests {
     #[test]
     fn maps_attributes_to_patched_addresses() {
         let mut show = demo_show();
-        {
-            let fixture = &mut show.fixtures[0];
-            fixture.address = 5;
-            fixture.levels.insert("Dimmer".into(), 1.0);
-            fixture.levels.insert("ColorAdd_R".into(), 0.5);
-            fixture.levels.insert("ColorAdd_G".into(), 0.0);
-            fixture.levels.insert("ColorAdd_B".into(), 0.25);
-        }
-        let frame = program(&show);
+        show.fixtures[0].address = 5;
+        let programmer = programmer(
+            &show,
+            &[
+                (1, "Dimmer", 1.0),
+                (1, "ColorAdd_R", 0.5),
+                (1, "ColorAdd_G", 0.0),
+                (1, "ColorAdd_B", 0.25),
+            ],
+        );
+        let frame = program(&show, &programmer, &masters());
         assert_eq!(frame.slot(1, 5), Some(255), "dimmer at address 5");
         assert_eq!(frame.slot(1, 6), Some(128), "red at address 6");
         assert_eq!(frame.slot(1, 7), Some(0));
@@ -189,9 +224,9 @@ mod tests {
 
     #[test]
     fn unpatched_slots_stay_zero() {
-        let mut show = demo_show();
-        show.fixtures[0].levels.insert("Dimmer".into(), 1.0);
-        let frame = program(&show);
+        let show = demo_show();
+        let programmer = programmer(&show, &[(1, "Dimmer", 1.0)]);
+        let frame = program(&show, &programmer, &masters());
         assert_eq!(frame.slot(1, 1), Some(255));
         assert_eq!(frame.slot(1, 2), Some(0));
         assert_eq!(frame.slot(1, 512), Some(0));
@@ -201,7 +236,7 @@ mod tests {
     fn fixtures_with_missing_types_are_skipped_safely() {
         let mut show = demo_show();
         show.fixtures[0].type_key = "Missing".into();
-        let frame = program(&show);
+        let frame = program(&show, &Levels::new(), &masters());
         assert_eq!(frame.slot(1, 1), Some(0));
     }
 
@@ -211,18 +246,30 @@ mod tests {
         let mut playback = Levels::new();
         playback.set(1, "Dimmer", 0.5);
         playback.set(1, "ColorAdd_B", 1.0);
-        let frame = render(&show, &playback, &EffectOutput::default());
+        let frame = render(
+            &show,
+            &Levels::new(),
+            &playback,
+            &EffectOutput::default(),
+            &masters(),
+        );
         assert_eq!(frame.slot(1, 1), Some(128));
         assert_eq!(frame.slot(1, 4), Some(255));
     }
 
     #[test]
     fn programmer_values_win_over_playback() {
-        let mut show = demo_show();
-        show.fixtures[0].levels.insert("Dimmer".into(), 1.0);
+        let show = demo_show();
+        let programmer = programmer(&show, &[(1, "Dimmer", 1.0)]);
         let mut playback = Levels::new();
         playback.set(1, "Dimmer", 0.25);
-        let frame = render(&show, &playback, &EffectOutput::default());
+        let frame = render(
+            &show,
+            &programmer,
+            &playback,
+            &EffectOutput::default(),
+            &masters(),
+        );
         assert_eq!(
             frame.slot(1, 1),
             Some(255),
@@ -232,11 +279,11 @@ mod tests {
 
     #[test]
     fn the_grand_master_scales_intensity_only() {
-        let mut show = demo_show();
-        show.fixtures[0].levels.insert("Dimmer".into(), 1.0);
-        show.fixtures[0].levels.insert("ColorAdd_R".into(), 1.0);
-        show.grand_master = 0.5;
-        let frame = program(&show);
+        let show = demo_show();
+        let programmer = programmer(&show, &[(1, "Dimmer", 1.0), (1, "ColorAdd_R", 1.0)]);
+        let mut masters = masters();
+        masters.grand = 0.5;
+        let frame = program(&show, &programmer, &masters);
         assert_eq!(frame.slot(1, 1), Some(128), "dimmer is halved");
         assert_eq!(frame.slot(1, 2), Some(255), "colour is untouched");
     }
@@ -244,7 +291,6 @@ mod tests {
     #[test]
     fn a_group_master_scales_its_members_only() {
         let mut show = demo_show();
-        show.fixtures[0].levels.insert("Dimmer".into(), 1.0);
         show.fixtures.push(Fixture {
             number: 2,
             name: "Second".into(),
@@ -252,15 +298,16 @@ mod tests {
             mode: "4ch".into(),
             universe: 1,
             address: 5,
-            levels: BTreeMap::from([("Dimmer".into(), 1.0)]),
         });
         show.groups.push(Group {
             number: 1,
             name: "Front".into(),
             fixtures: vec![1],
-            master: 0.5,
         });
-        let frame = program(&show);
+        let mut masters = masters();
+        masters.set_group(1, 0.5);
+        let programmer = programmer(&show, &[(1, "Dimmer", 1.0), (2, "Dimmer", 1.0)]);
+        let frame = program(&show, &programmer, &masters);
         assert_eq!(frame.slot(1, 1), Some(128), "fixture 1 is in group 1");
         assert_eq!(frame.slot(1, 5), Some(255), "fixture 2 is not");
     }
@@ -268,41 +315,43 @@ mod tests {
     #[test]
     fn overlapping_groups_use_the_lowest_master() {
         let mut show = demo_show();
-        show.fixtures[0].levels.insert("Dimmer".into(), 1.0);
-        for (number, master) in [(1, 0.5), (2, 0.25)] {
+        for number in [1, 2] {
             show.groups.push(Group {
                 number,
                 name: String::new(),
                 fixtures: vec![1],
-                master,
             });
         }
-        assert_eq!(intensity_master(&show, 1), 0.25);
+        let mut masters = masters();
+        masters.set_group(1, 0.5);
+        masters.set_group(2, 0.25);
+        assert_eq!(intensity_master(&show, &masters, 1), 0.25);
     }
 
     #[test]
     fn effects_modulate_the_level_and_clamp() {
-        let mut show = demo_show();
-        show.fixtures[0].levels.insert("Dimmer".into(), 0.6);
+        let show = demo_show();
+        let programmer = programmer(&show, &[(1, "Dimmer", 0.6)]);
         let mut effects = EffectOutput::default();
         effects.add(1, "Dimmer", 0.2);
-        let frame = render(&show, &Levels::new(), &effects);
+        let frame = render(&show, &programmer, &Levels::new(), &effects, &masters());
         assert_eq!(frame.slot(1, 1), Some(204));
 
         let mut clipped = EffectOutput::default();
         clipped.add(1, "Dimmer", 5.0);
-        let frame = render(&show, &Levels::new(), &clipped);
+        let frame = render(&show, &programmer, &Levels::new(), &clipped, &masters());
         assert_eq!(frame.slot(1, 1), Some(255), "clamped to full");
     }
 
     #[test]
     fn masters_do_not_scale_effect_colour() {
-        let mut show = demo_show();
-        show.fixtures[0].levels.insert("ColorAdd_R".into(), 1.0);
-        show.grand_master = 0.5;
+        let show = demo_show();
+        let programmer = programmer(&show, &[(1, "ColorAdd_R", 1.0)]);
+        let mut masters = masters();
+        masters.grand = 0.5;
         let mut effects = EffectOutput::default();
         effects.add(1, "ColorAdd_R", -0.5);
-        let frame = render(&show, &Levels::new(), &effects);
+        let frame = render(&show, &programmer, &Levels::new(), &effects, &masters);
         assert_eq!(frame.slot(1, 2), Some(128), "half red, no master applied");
     }
 
@@ -321,11 +370,17 @@ mod tests {
             mode: "4ch".into(),
             universe: 2,
             address: 1,
-            levels: BTreeMap::from([("Dimmer".into(), 1.0)]),
         });
-        let frame = program(&show);
+        let programmer = programmer(&show, &[(1, "Dimmer", 1.0), (2, "Dimmer", 1.0)]);
+        let mut masters = masters();
+        masters.grand = 0.0;
+        let frame = program(&show, &programmer, &masters);
         assert_eq!(frame.len(), 2);
         assert_eq!(frame.slot(1, 1), Some(0));
+        assert_eq!(frame.slot(2, 1), Some(0), "both are under the grand master");
+
+        let frame = program(&show, &programmer, &Masters::new());
+        assert_eq!(frame.slot(1, 1), Some(255));
         assert_eq!(frame.slot(2, 1), Some(255));
     }
 }
