@@ -4,8 +4,10 @@
 //! another machine never depends on a local fixture library. The format is
 //! versioned and every document is validated on load and before save.
 //!
-//! Version 2 adds palettes, sequences and executors. Version 1 files still
-//! load: the new sections default to empty and the show is upgraded on read.
+//! Version 2 adds palettes, sequences and executors. Version 3 adds groups,
+//! worlds, filters, effects and the grand and rate masters. Older files still
+//! load: new sections default to empty (or to a full master) and the show is
+//! upgraded on read.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -15,15 +17,19 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::effect::{Effect, MAX_EFFECTS, MAX_RATE_HZ, MAX_SPREAD_DEGREES};
 use crate::fixture_type::{FixtureType, Mode};
 use crate::palette::Palette;
 use crate::patch::{self, PatchRange};
 use crate::playback::{format_cue_number, Executor, Sequence, MAX_CUE_NUMBER, MAX_TIME};
+use crate::pools::{Filter, Group, World, MAX_GROUP_FIXTURES, MAX_POOL_OBJECTS};
 
 pub const SHOW_FORMAT: &str = "openlight-show";
-pub const SHOW_VERSION: u32 = 2;
+pub const SHOW_VERSION: u32 = 3;
 /// Older documents that still load, oldest first.
-pub const READABLE_VERSIONS: &[u32] = &[1, 2];
+pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3];
+/// Fastest rate master accepted, as a factor (400%).
+pub const MAX_RATE_MASTER: f64 = 4.0;
 pub const MAX_UNIVERSE_SIZE: u16 = 512;
 pub const MAX_UNIVERSE_NUMBER: u16 = 63_999;
 pub const MAX_FIXTURES: usize = 4096;
@@ -50,6 +56,24 @@ pub struct Show {
     pub sequences: Vec<Sequence>,
     #[serde(default)]
     pub executors: Vec<Executor>,
+    #[serde(default)]
+    pub groups: Vec<Group>,
+    #[serde(default)]
+    pub worlds: Vec<World>,
+    #[serde(default)]
+    pub filters: Vec<Filter>,
+    #[serde(default)]
+    pub effects: Vec<Effect>,
+    /// Scales every intensity at the output, 0..=1.
+    #[serde(default = "full_master")]
+    pub grand_master: f64,
+    /// Scales effect speed, 0..=4 (100% is a factor of 1).
+    #[serde(default = "full_master")]
+    pub rate_master: f64,
+}
+
+const fn full_master() -> f64 {
+    1.0
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -103,6 +127,12 @@ impl Show {
             palettes: Vec::new(),
             sequences: Vec::new(),
             executors: Vec::new(),
+            groups: Vec::new(),
+            worlds: Vec::new(),
+            filters: Vec::new(),
+            effects: Vec::new(),
+            grand_master: 1.0,
+            rate_master: 1.0,
         }
     }
 
@@ -145,6 +175,22 @@ impl Show {
         self.executors
             .iter()
             .find(|executor| executor.number == number)
+    }
+
+    pub fn group(&self, number: u16) -> Option<&Group> {
+        self.groups.iter().find(|group| group.number == number)
+    }
+
+    pub fn world(&self, number: u16) -> Option<&World> {
+        self.worlds.iter().find(|world| world.number == number)
+    }
+
+    pub fn filter(&self, number: u16) -> Option<&Filter> {
+        self.filters.iter().find(|filter| filter.number == number)
+    }
+
+    pub fn effect(&self, number: u16) -> Option<&Effect> {
+        self.effects.iter().find(|effect| effect.number == number)
     }
 
     pub fn find_type(&self, key: &str) -> Option<&FixtureType> {
@@ -362,6 +408,26 @@ impl Show {
         self.validate_palettes(&mut problems);
         self.validate_sequences(&mut problems);
         self.validate_executors(&mut problems);
+        self.validate_groups(&mut problems);
+        self.validate_worlds(&mut problems);
+        self.validate_filters(&mut problems);
+        self.validate_effects(&mut problems);
+
+        for (name, value, max) in [
+            ("grand master", self.grand_master, 1.0),
+            ("rate master", self.rate_master, MAX_RATE_MASTER),
+        ] {
+            if !value.is_finite() || !(0.0..=max).contains(&value) {
+                problems.push(format!(
+                    "{name} {value} is outside 0..={max}{}",
+                    if name == "rate master" {
+                        " (a factor)"
+                    } else {
+                        ""
+                    }
+                ));
+            }
+        }
 
         problems
     }
@@ -527,6 +593,152 @@ impl Show {
         }
     }
 
+    fn validate_groups(&self, problems: &mut Vec<String>) {
+        if self.groups.len() > MAX_POOL_OBJECTS {
+            problems.push(format!(
+                "{} groups, the limit is {MAX_POOL_OBJECTS}",
+                self.groups.len()
+            ));
+        }
+        let mut numbers = BTreeSet::new();
+        for group in &self.groups {
+            if group.number == 0 {
+                problems.push("group number 0 is not allowed".into());
+            }
+            if !numbers.insert(group.number) {
+                problems.push(format!("group {}: number used twice", group.number));
+            }
+            if group.fixtures.len() > MAX_GROUP_FIXTURES {
+                problems.push(format!(
+                    "group {}: {} fixtures, the limit is {MAX_GROUP_FIXTURES}",
+                    group.number,
+                    group.fixtures.len()
+                ));
+            }
+            let mut members = BTreeSet::new();
+            for fixture in &group.fixtures {
+                if *fixture == 0 {
+                    problems.push(format!("group {}: fixture 0 is not allowed", group.number));
+                }
+                if !members.insert(*fixture) {
+                    problems.push(format!(
+                        "group {}: fixture {fixture} is listed twice",
+                        group.number
+                    ));
+                }
+            }
+            if !group.master.is_finite() || !(0.0..=1.0).contains(&group.master) {
+                problems.push(format!(
+                    "group {}: master {} is outside 0..=1",
+                    group.number, group.master
+                ));
+            }
+        }
+    }
+
+    fn validate_worlds(&self, problems: &mut Vec<String>) {
+        if self.worlds.len() > MAX_POOL_OBJECTS {
+            problems.push(format!(
+                "{} worlds, the limit is {MAX_POOL_OBJECTS}",
+                self.worlds.len()
+            ));
+        }
+        let mut numbers = BTreeSet::new();
+        for world in &self.worlds {
+            if world.number == 0 {
+                problems.push("world number 0 is not allowed".into());
+            }
+            if !numbers.insert(world.number) {
+                problems.push(format!("world {}: number used twice", world.number));
+            }
+            if world.fixtures.is_empty() {
+                problems.push(format!("world {}: no fixtures", world.number));
+            }
+            if world.fixtures.len() > MAX_GROUP_FIXTURES {
+                problems.push(format!(
+                    "world {}: {} fixtures, the limit is {MAX_GROUP_FIXTURES}",
+                    world.number,
+                    world.fixtures.len()
+                ));
+            }
+            if world.fixtures.contains(&0) {
+                problems.push(format!("world {}: fixture 0 is not allowed", world.number));
+            }
+        }
+    }
+
+    fn validate_filters(&self, problems: &mut Vec<String>) {
+        if self.filters.len() > MAX_POOL_OBJECTS {
+            problems.push(format!(
+                "{} filters, the limit is {MAX_POOL_OBJECTS}",
+                self.filters.len()
+            ));
+        }
+        let mut numbers = BTreeSet::new();
+        for filter in &self.filters {
+            if filter.number == 0 {
+                problems.push("filter number 0 is not allowed".into());
+            }
+            if !numbers.insert(filter.number) {
+                problems.push(format!("filter {}: number used twice", filter.number));
+            }
+            if filter.features.is_empty() {
+                problems.push(format!("filter {}: no features", filter.number));
+            }
+            let mut features = BTreeSet::new();
+            for feature in &filter.features {
+                if feature.trim().is_empty() {
+                    problems.push(format!("filter {}: empty feature name", filter.number));
+                }
+                if !features.insert(feature.trim().to_ascii_lowercase()) {
+                    problems.push(format!(
+                        "filter {}: feature `{feature}` is listed twice",
+                        filter.number
+                    ));
+                }
+            }
+        }
+    }
+
+    fn validate_effects(&self, problems: &mut Vec<String>) {
+        if self.effects.len() > MAX_EFFECTS {
+            problems.push(format!(
+                "{} effects, the limit is {MAX_EFFECTS}",
+                self.effects.len()
+            ));
+        }
+        let mut numbers = BTreeSet::new();
+        for effect in &self.effects {
+            if effect.number == 0 {
+                problems.push("effect number 0 is not allowed".into());
+            }
+            if !numbers.insert(effect.number) {
+                problems.push(format!("effect {}: number used twice", effect.number));
+            }
+            if effect.attribute.trim().is_empty() {
+                problems.push(format!("effect {}: no attribute", effect.number));
+            }
+            if !effect.rate_hz.is_finite() || !(0.0..=MAX_RATE_HZ).contains(&effect.rate_hz) {
+                problems.push(format!(
+                    "effect {}: rate {} Hz is outside 0..={MAX_RATE_HZ}",
+                    effect.number, effect.rate_hz
+                ));
+            }
+            if !effect.size.is_finite() || !(0.0..=1.0).contains(&effect.size) {
+                problems.push(format!(
+                    "effect {}: size {} is outside 0..=1",
+                    effect.number, effect.size
+                ));
+            }
+            if !effect.spread.is_finite() || !(0.0..=MAX_SPREAD_DEGREES).contains(&effect.spread) {
+                problems.push(format!(
+                    "effect {}: spread {} is outside 0..={MAX_SPREAD_DEGREES} degrees",
+                    effect.number, effect.spread
+                ));
+            }
+        }
+    }
+
     /// Write the show atomically: full document first, then rename over the target.
     pub fn save(&self, path: &Path) -> Result<(), ShowError> {
         let problems = self.validate();
@@ -614,8 +826,9 @@ impl Show {
             path: path.to_path_buf(),
             source,
         })?;
-        // Version 1 has no palettes, sequences or executors. They default to
-        // empty, so the document is upgraded in place on read and saved as v2.
+        // Older versions lack the newer sections. Everything defaults (empty
+        // pools, full masters), so the document is upgraded in place on read
+        // and saved as the current version.
         show.version = SHOW_VERSION;
         let problems = show.validate();
         if !problems.is_empty() {
@@ -699,7 +912,7 @@ mod tests {
             .read_to_string(&mut text)
             .unwrap();
         assert!(text.contains("\"format\": \"openlight-show\""));
-        assert!(text.contains("\"version\": 2"));
+        assert!(text.contains("\"version\": 3"));
         assert!(text.contains("OpenLight Demo Wash"), "types are embedded");
         let _ = fs::remove_file(&path);
     }
@@ -810,8 +1023,97 @@ mod tests {
         assert!(show.palettes.is_empty());
         assert!(show.sequences.is_empty());
         assert!(show.executors.is_empty());
+        assert!(show.groups.is_empty());
+        assert!(show.worlds.is_empty());
+        assert!(show.filters.is_empty());
+        assert!(show.effects.is_empty());
+        assert_eq!(show.grand_master, 1.0);
+        assert_eq!(show.rate_master, 1.0);
         assert!(show.validate().is_empty());
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn version_two_shows_load_and_are_upgraded() {
+        let path = temp_path("v2");
+        let mut value = serde_json::to_value(demo_show()).unwrap();
+        value["version"] = 2.into();
+        {
+            let object = value.as_object_mut().unwrap();
+            for key in [
+                "groups",
+                "worlds",
+                "filters",
+                "effects",
+                "grand_master",
+                "rate_master",
+            ] {
+                object.remove(key);
+            }
+        }
+        fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+
+        let show = Show::load(&path).unwrap();
+        assert_eq!(show.version, SHOW_VERSION);
+        assert!(show.groups.is_empty());
+        assert!(show.effects.is_empty());
+        assert_eq!(show.grand_master, 1.0);
+        assert_eq!(show.rate_master, 1.0);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn invalid_phase_three_objects_are_reported() {
+        let mut show = demo_show();
+        show.groups.push(Group {
+            number: 0,
+            name: String::new(),
+            fixtures: vec![1, 1],
+            master: 2.0,
+        });
+        show.worlds.push(World {
+            number: 0,
+            name: String::new(),
+            fixtures: Vec::new(),
+        });
+        show.filters.push(Filter {
+            number: 0,
+            name: String::new(),
+            features: Vec::new(),
+        });
+        show.effects.push(crate::effect::Effect {
+            number: 1,
+            name: String::new(),
+            attribute: String::new(),
+            waveform: crate::effect::Waveform::Sine,
+            rate_hz: 1000.0,
+            size: 2.0,
+            spread: 400.0,
+        });
+        show.grand_master = 2.0;
+        show.rate_master = 5.0;
+
+        let problems = show.validate();
+        for expected in [
+            "group number 0",
+            "fixture 1 is listed twice",
+            "group 0: master 2",
+            "world number 0",
+            "world 0: no fixtures",
+            "filter number 0",
+            "filter 0: no features",
+            "effect 1: no attribute",
+            "rate 1000 Hz",
+            "size 2 is outside",
+            "spread 400",
+            "grand master 2",
+            "rate master 5",
+        ] {
+            assert!(
+                problems.iter().any(|problem| problem.contains(expected)),
+                "missing `{expected}` in {problems:#?}"
+            );
+        }
     }
 
     #[test]

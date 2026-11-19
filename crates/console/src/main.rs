@@ -17,7 +17,7 @@ use dmx::DmxTransport;
 use engine::{Engine, Runtime, RuntimeConfig, Show, TransportBinding};
 
 const USAGE: &str = "\
-openlight — DMX lighting console (Phase 2)
+openlight — DMX lighting console (Phase 3)
 
 Usage: openlight [options]
 
@@ -41,6 +41,8 @@ Examples:
             --output 1=virtual --script examples/phase1-demo.txt
   openlight --output 1=virtual --script examples/phase2-demo.txt \\
             --frames 90 --trace
+  openlight --output 1=virtual --script examples/phase3-demo.txt \\
+            --frames 120 --trace
   openlight --output 1=generic:/dev/ttyUSB0 --script examples/phase2-demo.txt --frames 90
 ";
 

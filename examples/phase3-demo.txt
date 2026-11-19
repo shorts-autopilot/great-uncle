@@ -1,0 +1,53 @@
+# Phase 3 demo: groups, worlds, filters, masters and effects.
+# Run it with:
+#   cargo run -p openlight-console -- --output 1=virtual \
+#     --script examples/phase3-demo.txt --frames 120 --trace
+
+Import Gdtf "examples/gdtf/openlight-demo-wash.gdtf"
+
+Patch Fixture 1 At 1.001 Type "OpenLight Demo Wash"
+Patch Fixture 2 At 1.005 Type "OpenLight Demo Wash"
+Patch Fixture 3 At 1.009 Type "OpenLight Demo Wash"
+Patch Fixture 4 At 1.013 Type "OpenLight Demo Wash"
+
+# A group addresses the whole rig in one word.
+Fixture 1 Thru 4 At 40
+Store Group 1 "All"
+
+# A world limits control to the front two fixtures: the rig behind it can still
+# be driven by playback, but it cannot be selected by accident.
+Fixture 1 Thru 2
+Store World 1 "Front"
+
+# A filter allows only intensity, so colour cannot be programmed by mistake.
+Store Filter 1 "Intensity" Dimmer
+
+World 1
+Filter 1
+Fixture 1 Thru 2 At 60
+World All
+Filter All
+
+# Masters scale intensity at the output; the programmer keeps its values.
+Master Grand At 80
+Master Group 1 At 50
+Master Rate At 200
+
+# A two-cycle sine dimmer on all four fixtures, then back to a steady look.
+Store Effect 1 "Pulse" Attribute Dimmer Waveform Sine Rate 2 Size 40
+Effect 1 On Fixture 1 Thru 4
+Wait 0.25
+Effect 1 Off
+
+Group
+World
+Filter
+Master
+Effect
+
+# A deterministic final look: 75% through the grand master on every fixture.
+Master Grand At 75
+Master Group 1 Full
+Group 1 At Full
+Status
+Save "target/phase3-demo.olshow.json"

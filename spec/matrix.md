@@ -929,11 +929,11 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-GROUP-0001` | Groups | 1 | 2 | not-started |
-| `CX-GROUP-0002` | Create New Groups | 1 | 2 | not-started |
-| `CX-GROUP-0003` | Edit Groups | 1 | 2 | not-started |
-| `CX-GROUP-0004` | Delete Groups | 1 | 2 | not-started |
-| `CX-GROUP-0005` | Group Masters | 4 | 2 | not-started |
+| `CX-GROUP-0001` | Groups | 1 | 2 | implemented |
+| `CX-GROUP-0002` | Create New Groups | 1 | 2 | implemented |
+| `CX-GROUP-0003` | Edit Groups | 1 | 2 | in-progress |
+| `CX-GROUP-0004` | Delete Groups | 1 | 2 | implemented |
+| `CX-GROUP-0005` | Group Masters | 4 | 2 | implemented |
 
 ## Presets
 
@@ -954,9 +954,9 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-WORLDFILTER-0001` | Worlds and Filters | 3 | 2 | not-started |
-| `CX-WORLDFILTER-0002` | Create a World | 6 | 2 | not-started |
-| `CX-WORLDFILTER-0003` | Create a Filter | 3 | 2 | not-started |
+| `CX-WORLDFILTER-0001` | Worlds and Filters | 3 | 2 | implemented |
+| `CX-WORLDFILTER-0002` | Create a World | 6 | 2 | implemented |
+| `CX-WORLDFILTER-0003` | Create a Filter | 3 | 2 | implemented |
 | `CX-WORLDFILTER-0004` | At Filter Window | 1 | 2 | not-started |
 
 ## MAtricks and Shuffle
@@ -1017,12 +1017,12 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-MASTERS-0001` | Masters | 1 | 2 | not-started |
+| `CX-MASTERS-0001` | Masters | 1 | 2 | implemented |
 | `CX-MASTERS-0002` | Selected Masters | 1 | 2 | not-started |
-| `CX-MASTERS-0003` | Grand Masters | 1 | 2 | not-started |
+| `CX-MASTERS-0003` | Grand Masters | 1 | 2 | implemented |
 | `CX-MASTERS-0004` | Time Control | 2 | 2 | not-started |
-| `CX-MASTERS-0005` | Speed Masters | 0 | 2 | not-started |
-| `CX-MASTERS-0006` | Playback Masters | 0 | 2 | not-started |
+| `CX-MASTERS-0005` | Speed Masters | 0 | 2 | implemented |
+| `CX-MASTERS-0006` | Playback Masters | 0 | 2 | in-progress |
 | `CX-MASTERS-0007` | Timing Masters | 1 | 2 | not-started |
 
 ## Recipes
@@ -1039,9 +1039,9 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-PHASER-0001` | Phasers | 12 | 3 | not-started |
-| `CX-PHASER-0002` | Phaser Editor | 10 | 3 | not-started |
-| `CX-PHASER-0003` | Create a Sinus Dimmer Phaser | 3 | 3 | not-started |
+| `CX-PHASER-0001` | Phasers | 12 | 3 | implemented |
+| `CX-PHASER-0002` | Phaser Editor | 10 | 3 | in-progress |
+| `CX-PHASER-0003` | Create a Sinus Dimmer Phaser | 3 | 3 | implemented |
 | `CX-PHASER-0004` | Create a Circle Phaser | 1 | 3 | not-started |
 | `CX-PHASER-0005` | Create a Circle Phaser Around a Position Preset | 1 | 3 | not-started |
 | `CX-PHASER-0006` | Create Color Rainbow Phaser | 2 | 3 | not-started |

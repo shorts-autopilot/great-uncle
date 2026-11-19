@@ -7,9 +7,10 @@ This script owns that field, so the review is explicit, reviewable and can be
 re-applied after the crawler regenerates the matrix.
 
 Every Phase 1 row must be classified, and the script fails if a row appears or
-disappears, so the matrix and the implementation cannot drift silently. Phase 2
-rows are classified only for the chapters this phase implements (presets, cues
-and sequences, executors); the remaining Phase 2 rows stay `not-started`.
+disappears, so the matrix and the implementation cannot drift silently. Later
+phases are classified only for the chapters each phase implements (Phase 2:
+presets, cues and sequences, executors; Phase 3: groups, worlds and filters,
+masters, phasers); the remaining rows stay `not-started`.
 
 Statuses mean:
   implemented   the feature works and is covered by tests;
@@ -147,7 +148,42 @@ PHASE2 = {
     ),
 }
 
-STATUS = {**PHASE1, **PHASE2}
+# Phase 3 — groups, worlds, filters, masters and effects (docs/PHASE3.md).
+PHASE3 = {
+    **expand(
+        "GROUP",
+        [
+            ("implemented", "1 2 4 5"),
+            ("in-progress", "3"),  # re-store edits; no add/remove member command
+        ],
+    ),
+    **expand(
+        "WORLDFILTER",
+        [
+            ("implemented", "1 2 3"),
+            ("not-started", "4"),  # the Filter window is a UI feature
+        ],
+    ),
+    **expand(
+        "MASTERS",
+        [
+            ("implemented", "1 3 5"),
+            ("in-progress", "6"),  # executor faders are playback masters
+            ("not-started", "2 4 7"),
+        ],
+    ),
+    **expand(
+        "PHASER",
+        [
+            ("implemented", "1 3"),
+            ("in-progress", "2"),  # command-line definition, no phaser editor
+            ("not-started", "4 5 6"),
+        ],
+    ),
+    **expand("GENERATOR", [("not-started", "1")]),
+}
+
+STATUS = {**PHASE1, **PHASE2, **PHASE3}
 
 
 def main(argv: list[str]) -> int:

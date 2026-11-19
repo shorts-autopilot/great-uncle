@@ -21,6 +21,18 @@
 //! Assign Executor 1 Sequence 1
 //! Executor 1 At 75 | Full | Off           executor master fader
 //! Go | Back | Pause | Release [Executor n | Sequence n]
+//! Group 1 | Group 1 At 50 | Group 1 Full | Group 1 Off
+//! Store Group 1 ["name"] | Delete Group 1 | Group
+//! World 1 | World All                          activate / deactivate a world
+//! Store World 1 ["name"] | Delete World 1 | World
+//! Filter 1 | Filter All                       activate / deactivate a filter
+//! Store Filter 1 ["name"] Dimmer Color        names must be quoted here
+//! Delete Filter 1 | Filter
+//! Master Grand At 75 | Master Rate At 200 | Master Group 1 At 50 | Master
+//! Effect 1 On [Fixture 1 Thru 4] | Effect 1 Off | Effect Off | Effect
+//! Store Effect 1 ["name"] [Attribute Dimmer] [Waveform Sine]
+//!              [Rate 1] [Size 50] [Spread 0]
+//! Delete Effect 1 | Effect
 //! Sheet | Status | Save "show.json" | Load "show.json" | Help
 //! ```
 //!
@@ -135,6 +147,80 @@ pub enum Command {
     },
     ListExecutors {
         only: Option<u16>,
+    },
+    SelectGroup(u16),
+    SetLevelGroup {
+        group: u16,
+        attribute: Option<String>,
+        source: LevelSource,
+    },
+    OffGroup {
+        group: u16,
+    },
+    StoreGroup {
+        number: u16,
+        name: Option<String>,
+    },
+    DeleteGroup {
+        number: u16,
+    },
+    ListGroups,
+    StoreWorld {
+        number: u16,
+        name: Option<String>,
+    },
+    DeleteWorld {
+        number: u16,
+    },
+    /// `None` deactivates the active world.
+    ActivateWorld {
+        number: Option<u16>,
+    },
+    ListWorlds,
+    StoreFilter {
+        number: u16,
+        name: Option<String>,
+        features: Vec<String>,
+    },
+    DeleteFilter {
+        number: u16,
+    },
+    ActivateFilter {
+        number: Option<u16>,
+    },
+    ListFilters,
+    SetGrandMaster {
+        level: Level,
+    },
+    SetRateMaster {
+        level: Level,
+    },
+    SetGroupMaster {
+        group: u16,
+        level: Level,
+    },
+    ListMasters,
+    StoreEffect {
+        number: u16,
+        name: Option<String>,
+        attribute: Option<String>,
+        waveform: Option<String>,
+        rate: Option<f64>,
+        size: Option<f64>,
+        spread: Option<f64>,
+    },
+    DeleteEffect {
+        number: u16,
+    },
+    ListEffects {
+        only: Option<u16>,
+    },
+    EffectOn {
+        effect: u16,
+        fixtures: Option<Vec<u16>>,
+    },
+    EffectOff {
+        effect: Option<u16>,
     },
     Go {
         target: Option<PlaybackRef>,
@@ -314,8 +400,34 @@ pub fn parse(tokens: &[Token]) -> Result<Command, CommandError> {
 
 /// Keywords that may never be read as an object name.
 const RESERVED: &[&str] = &[
-    "fade", "delay", "sequence", "in", "at", "full", "off", "palette", "executor", "fixture",
-    "type", "mode", "thru", "values", "all", "show",
+    "fade",
+    "delay",
+    "sequence",
+    "in",
+    "at",
+    "full",
+    "off",
+    "palette",
+    "executor",
+    "fixture",
+    "type",
+    "mode",
+    "thru",
+    "values",
+    "all",
+    "show",
+    "group",
+    "world",
+    "filter",
+    "master",
+    "grand",
+    "rate",
+    "effect",
+    "attribute",
+    "waveform",
+    "size",
+    "spread",
+    "on",
 ];
 
 struct Parser<'a> {
@@ -480,6 +592,21 @@ impl Parser<'_> {
         }
         if word.eq_ignore_ascii_case("executor") || word.eq_ignore_ascii_case("executors") {
             return self.executor();
+        }
+        if word.eq_ignore_ascii_case("group") || word.eq_ignore_ascii_case("groups") {
+            return self.group_command();
+        }
+        if word.eq_ignore_ascii_case("world") || word.eq_ignore_ascii_case("worlds") {
+            return self.world_command();
+        }
+        if word.eq_ignore_ascii_case("filter") || word.eq_ignore_ascii_case("filters") {
+            return self.filter_command();
+        }
+        if word.eq_ignore_ascii_case("master") || word.eq_ignore_ascii_case("masters") {
+            return self.master_command();
+        }
+        if word.eq_ignore_ascii_case("effect") || word.eq_ignore_ascii_case("effects") {
+            return self.effect_command();
         }
         if word.eq_ignore_ascii_case("sheet") || word.eq_ignore_ascii_case("fixtures") {
             self.expect_end()?;
@@ -769,7 +896,224 @@ impl Parser<'_> {
         Ok((universe, address))
     }
 
+    fn group_command(&mut self) -> Result<Command, CommandError> {
+        if self.at_end() {
+            return Ok(Command::ListGroups);
+        }
+        let number = self.whole_number("group number")?;
+        if self.at_end() {
+            return Ok(Command::SelectGroup(number));
+        }
+        if self.eat_word("at") {
+            let (attribute, source) = self.level_source()?;
+            self.expect_end()?;
+            return Ok(Command::SetLevelGroup {
+                group: number,
+                attribute,
+                source,
+            });
+        }
+        if self.eat_word("full") {
+            self.expect_end()?;
+            return Ok(Command::SetLevelGroup {
+                group: number,
+                attribute: None,
+                source: LevelSource::Level(Level::Full),
+            });
+        }
+        if self.eat_word("off") {
+            self.expect_end()?;
+            return Ok(Command::OffGroup { group: number });
+        }
+        Err(CommandError::with_hint(
+            format!(
+                "unexpected {}",
+                self.peek().cloned().unwrap_or(Token::Word(String::new()))
+            ),
+            "after a group use `At <level>`, `Full` or `Off`",
+        ))
+    }
+
+    fn world_command(&mut self) -> Result<Command, CommandError> {
+        if self.at_end() {
+            return Ok(Command::ListWorlds);
+        }
+        if self.eat_word("all") || self.eat_word("off") {
+            self.expect_end()?;
+            return Ok(Command::ActivateWorld { number: None });
+        }
+        let number = self.whole_number("world number")?;
+        self.expect_end()?;
+        Ok(Command::ActivateWorld {
+            number: Some(number),
+        })
+    }
+
+    fn filter_command(&mut self) -> Result<Command, CommandError> {
+        if self.at_end() {
+            return Ok(Command::ListFilters);
+        }
+        if self.eat_word("all") || self.eat_word("off") {
+            self.expect_end()?;
+            return Ok(Command::ActivateFilter { number: None });
+        }
+        let number = self.whole_number("filter number")?;
+        self.expect_end()?;
+        Ok(Command::ActivateFilter {
+            number: Some(number),
+        })
+    }
+
+    fn master_command(&mut self) -> Result<Command, CommandError> {
+        if self.at_end() {
+            return Ok(Command::ListMasters);
+        }
+        if self.eat_word("grand") {
+            let level = self.master_level()?;
+            return Ok(Command::SetGrandMaster { level });
+        }
+        if self.eat_word("rate") {
+            let level = self.master_level()?;
+            return Ok(Command::SetRateMaster { level });
+        }
+        if self.eat_word("group") {
+            let group = self.whole_number("group number")?;
+            let level = self.master_level()?;
+            return Ok(Command::SetGroupMaster { group, level });
+        }
+        Err(CommandError::with_hint(
+            format!(
+                "unexpected {}",
+                self.peek().cloned().unwrap_or(Token::Word(String::new()))
+            ),
+            "use `Master Grand`, `Master Rate` or `Master Group <n>`",
+        ))
+    }
+
+    fn master_level(&mut self) -> Result<Level, CommandError> {
+        if self.eat_word("at") {
+            let level = self.level()?;
+            self.expect_end()?;
+            return Ok(level);
+        }
+        if self.eat_word("full") {
+            self.expect_end()?;
+            return Ok(Level::Full);
+        }
+        if self.eat_word("off") {
+            self.expect_end()?;
+            return Ok(Level::Percent(0.0));
+        }
+        Err(CommandError::with_hint(
+            "expected a master level",
+            "use `At <level>`, `Full` or `Off`",
+        ))
+    }
+
+    fn effect_command(&mut self) -> Result<Command, CommandError> {
+        if self.at_end() {
+            return Ok(Command::ListEffects { only: None });
+        }
+        if self.eat_word("off") {
+            self.expect_end()?;
+            return Ok(Command::EffectOff { effect: None });
+        }
+        let number = self.whole_number("effect number")?;
+        if self.at_end() {
+            return Ok(Command::ListEffects { only: Some(number) });
+        }
+        if self.eat_word("on") {
+            let fixtures = self.optional_fixture_list()?;
+            self.expect_end()?;
+            return Ok(Command::EffectOn {
+                effect: number,
+                fixtures,
+            });
+        }
+        if self.eat_word("off") {
+            self.expect_end()?;
+            return Ok(Command::EffectOff {
+                effect: Some(number),
+            });
+        }
+        Err(CommandError::with_hint(
+            format!(
+                "unexpected {}",
+                self.peek().cloned().unwrap_or(Token::Word(String::new()))
+            ),
+            "use `Effect <n> On`, `Effect <n> Off` or `Effect <n>`",
+        ))
+    }
+
     fn store(&mut self) -> Result<Command, CommandError> {
+        if self.eat_word("group") {
+            let number = self.whole_number("group number")?;
+            let name = self.optional_name()?;
+            self.expect_end()?;
+            return Ok(Command::StoreGroup { number, name });
+        }
+        if self.eat_word("world") {
+            let number = self.whole_number("world number")?;
+            let name = self.optional_name()?;
+            self.expect_end()?;
+            return Ok(Command::StoreWorld { number, name });
+        }
+        if self.eat_word("filter") {
+            let number = self.whole_number("filter number")?;
+            // A filter name must be quoted so bare pool names are unambiguous.
+            let name = self.quoted_name();
+            let mut features = Vec::new();
+            while let Some(Token::Word(word)) = self.peek().cloned() {
+                self.position += 1;
+                features.push(word);
+            }
+            self.expect_end()?;
+            if features.is_empty() {
+                return Err(CommandError::with_hint(
+                    format!("filter {number} needs at least one feature"),
+                    "name the pools it allows, e.g. `Store Filter 1 Dimmer Color`",
+                ));
+            }
+            return Ok(Command::StoreFilter {
+                number,
+                name,
+                features,
+            });
+        }
+        if self.eat_word("effect") {
+            let number = self.whole_number("effect number")?;
+            let name = self.optional_name()?;
+            let mut attribute = None;
+            let mut waveform = None;
+            let mut rate = None;
+            let mut size = None;
+            let mut spread = None;
+            loop {
+                if self.eat_word("attribute") {
+                    attribute = Some(self.name_token("attribute")?);
+                } else if self.eat_word("waveform") {
+                    waveform = Some(self.name_token("waveform")?);
+                } else if self.eat_word("rate") {
+                    rate = Some(self.number_value("rate")?);
+                } else if self.eat_word("size") {
+                    size = Some(self.number_value("size")?);
+                } else if self.eat_word("spread") {
+                    spread = Some(self.number_value("spread")?);
+                } else {
+                    break;
+                }
+            }
+            self.expect_end()?;
+            return Ok(Command::StoreEffect {
+                number,
+                name,
+                attribute,
+                waveform,
+                rate,
+                size,
+                spread,
+            });
+        }
         if self.eat_word("palette") {
             let feature = self.name_token("palette feature")?;
             let number = self.whole_number("palette number")?;
@@ -825,6 +1169,26 @@ impl Parser<'_> {
     }
 
     fn delete(&mut self) -> Result<Command, CommandError> {
+        if self.eat_word("group") {
+            let number = self.whole_number("group number")?;
+            self.expect_end()?;
+            return Ok(Command::DeleteGroup { number });
+        }
+        if self.eat_word("world") {
+            let number = self.whole_number("world number")?;
+            self.expect_end()?;
+            return Ok(Command::DeleteWorld { number });
+        }
+        if self.eat_word("filter") {
+            let number = self.whole_number("filter number")?;
+            self.expect_end()?;
+            return Ok(Command::DeleteFilter { number });
+        }
+        if self.eat_word("effect") {
+            let number = self.whole_number("effect number")?;
+            self.expect_end()?;
+            return Ok(Command::DeleteEffect { number });
+        }
         if self.eat_word("palette") {
             let feature = self.name_token("palette feature")?;
             let number = self.whole_number("palette number")?;
@@ -937,6 +1301,35 @@ impl Parser<'_> {
                 Ok(Some(word))
             }
             _ => Ok(None),
+        }
+    }
+
+    /// A quoted object name. Filters use this so bare words remain features.
+    fn quoted_name(&mut self) -> Option<String> {
+        match self.peek().cloned() {
+            Some(Token::Quoted(name)) => {
+                self.position += 1;
+                Some(name)
+            }
+            _ => None,
+        }
+    }
+
+    fn number_value(&mut self, what: &str) -> Result<f64, CommandError> {
+        match self.bump() {
+            Some(Token::Number(raw)) | Some(Token::Word(raw)) => {
+                let value: f64 = raw
+                    .parse()
+                    .map_err(|_| CommandError::new(format!("`{raw}` is not a {what}")))?;
+                if !value.is_finite() || value < 0.0 {
+                    return Err(CommandError::new(format!(
+                        "{what} {raw} is not a positive number"
+                    )));
+                }
+                Ok(value)
+            }
+            Some(other) => Err(CommandError::new(format!("expected a {what}, got {other}"))),
+            None => Err(CommandError::new(format!("expected a {what}"))),
         }
     }
 
@@ -1301,6 +1694,180 @@ mod tests {
             Command::Save {
                 path: "target/show.json".into()
             }
+        );
+    }
+
+    #[test]
+    fn parses_group_commands() {
+        assert_eq!(command("Group"), Command::ListGroups);
+        assert_eq!(command("Group 2"), Command::SelectGroup(2));
+        assert_eq!(
+            command("Group 2 At 40"),
+            Command::SetLevelGroup {
+                group: 2,
+                attribute: None,
+                source: LevelSource::Level(Level::Percent(40.0))
+            }
+        );
+        assert_eq!(
+            command("Group 2 At Palette Color 1"),
+            Command::SetLevelGroup {
+                group: 2,
+                attribute: None,
+                source: LevelSource::Palette {
+                    feature: "Color".into(),
+                    number: 1
+                }
+            }
+        );
+        assert_eq!(command("Group 2 Off"), Command::OffGroup { group: 2 });
+        assert_eq!(
+            command(r#"Store Group 3 "Front""#),
+            Command::StoreGroup {
+                number: 3,
+                name: Some("Front".into())
+            }
+        );
+        assert_eq!(
+            command("Delete Group 3"),
+            Command::DeleteGroup { number: 3 }
+        );
+    }
+
+    #[test]
+    fn parses_worlds_and_filters() {
+        assert_eq!(command("World"), Command::ListWorlds);
+        assert_eq!(
+            command("World 2"),
+            Command::ActivateWorld { number: Some(2) }
+        );
+        assert_eq!(
+            command("World All"),
+            Command::ActivateWorld { number: None }
+        );
+        assert_eq!(
+            command("Store World 2 Front"),
+            Command::StoreWorld {
+                number: 2,
+                name: Some("Front".into())
+            }
+        );
+        assert_eq!(
+            command("Delete World 2"),
+            Command::DeleteWorld { number: 2 }
+        );
+
+        assert_eq!(command("Filter"), Command::ListFilters);
+        assert_eq!(
+            command("Filter 3"),
+            Command::ActivateFilter { number: Some(3) }
+        );
+        assert_eq!(
+            command("Store Filter 3 \"Intensity\" Dimmer Color"),
+            Command::StoreFilter {
+                number: 3,
+                name: Some("Intensity".into()),
+                features: vec!["Dimmer".into(), "Color".into()]
+            }
+        );
+        assert_eq!(
+            command("Store Filter 3 Dimmer"),
+            Command::StoreFilter {
+                number: 3,
+                name: None,
+                features: vec!["Dimmer".into()]
+            }
+        );
+        assert_eq!(
+            command("Delete Filter 3"),
+            Command::DeleteFilter { number: 3 }
+        );
+        assert!(error("Store Filter 3")
+            .message
+            .contains("at least one feature"));
+    }
+
+    #[test]
+    fn parses_master_commands() {
+        assert_eq!(command("Master"), Command::ListMasters);
+        assert_eq!(
+            command("Master Grand At 75"),
+            Command::SetGrandMaster {
+                level: Level::Percent(75.0)
+            }
+        );
+        assert_eq!(
+            command("Master Grand Off"),
+            Command::SetGrandMaster {
+                level: Level::Percent(0.0)
+            }
+        );
+        assert_eq!(
+            command("Master Rate At 200"),
+            Command::SetRateMaster {
+                level: Level::Percent(200.0)
+            }
+        );
+        assert_eq!(
+            command("Master Group 4 Full"),
+            Command::SetGroupMaster {
+                group: 4,
+                level: Level::Full
+            }
+        );
+    }
+
+    #[test]
+    fn parses_effect_commands() {
+        assert_eq!(command("Effect"), Command::ListEffects { only: None });
+        assert_eq!(command("Effect 2"), Command::ListEffects { only: Some(2) });
+        assert_eq!(
+            command("Effect 2 On"),
+            Command::EffectOn {
+                effect: 2,
+                fixtures: None
+            }
+        );
+        assert_eq!(
+            command("Effect 2 On Fixture 1 Thru 3"),
+            Command::EffectOn {
+                effect: 2,
+                fixtures: Some(vec![1, 2, 3])
+            }
+        );
+        assert_eq!(
+            command("Effect 2 Off"),
+            Command::EffectOff { effect: Some(2) }
+        );
+        assert_eq!(command("Effect Off"), Command::EffectOff { effect: None });
+
+        assert_eq!(
+            command("Store Effect 2 Pulse Attribute ColorAdd_R Waveform Square Rate 2 Size 25 Spread 90"),
+            Command::StoreEffect {
+                number: 2,
+                name: Some("Pulse".into()),
+                attribute: Some("ColorAdd_R".into()),
+                waveform: Some("Square".into()),
+                rate: Some(2.0),
+                size: Some(25.0),
+                spread: Some(90.0)
+            }
+        );
+        assert_eq!(
+            command(r#"Store Effect 2 "Default""#),
+            Command::StoreEffect {
+                number: 2,
+                name: Some("Default".into()),
+                attribute: None,
+                waveform: None,
+                rate: None,
+                size: None,
+                spread: None
+            }
+        );
+        assert_eq!(
+            command("Delete Effect 2"),
+            Command::DeleteEffect { number: 2 }
         );
     }
 }

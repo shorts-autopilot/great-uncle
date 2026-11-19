@@ -14,10 +14,13 @@
 //! * [`levels`] — normalised level maps shared by every layer.
 //! * [`palette`] — typed preset pools.
 //! * [`playback`] — cues, sequences, executors and running fades.
-//! * [`render`] — programmer and playback to DMX universes.
+//! * [`pools`] — groups, worlds and filters.
+//! * [`effect`] — stored waveforms and the running effect layer.
+//! * [`render`] — programmer, playback, effects and masters to DMX universes.
 //! * [`output`] — 60 Hz engine tick + 30 Hz frame output thread.
 
 pub mod command;
+pub mod effect;
 pub mod engine;
 pub mod fixture_type;
 pub mod gdtf;
@@ -26,6 +29,7 @@ pub mod output;
 pub mod palette;
 pub mod patch;
 pub mod playback;
+pub mod pools;
 pub mod registry;
 pub mod render;
 pub mod show;
@@ -34,10 +38,12 @@ pub mod show;
 pub(crate) mod test_support;
 
 pub use command::CommandError;
+pub use effect::{Effect, Waveform};
 pub use engine::{CommandOutcome, Engine};
 pub use fixture_type::{Channel, ChannelFunction, FixtureType, Mode, DIMMER};
 pub use levels::Levels;
 pub use output::{OutputStatus, Runtime, RuntimeConfig, TransportBinding};
 pub use palette::Palette;
 pub use playback::{Cue, Executor, Playback, Sequence, Target};
+pub use pools::{Filter, Group, World};
 pub use show::{Fixture, Show, Universe};

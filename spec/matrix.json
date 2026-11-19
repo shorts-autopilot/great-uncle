@@ -53710,7 +53710,7 @@
    "module": "pools",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "group",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/group.html",
@@ -53743,7 +53743,7 @@
    "module": "pools",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "group_create",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/group_create.html",
@@ -53783,7 +53783,7 @@
    "module": "pools",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "group_edit",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/group_edit.html",
@@ -53848,7 +53848,7 @@
    "module": "pools",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "group_delete",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/group_delete.html",
@@ -53885,7 +53885,7 @@
    "module": "pools",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "group_master",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/group_master.html",
@@ -54737,7 +54737,7 @@
    "module": "filter",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "worldfilter",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/worldfilter.html",
@@ -54796,7 +54796,7 @@
    "module": "filter",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "worldfilter_world_create",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/worldfilter_world_create.html",
@@ -54929,7 +54929,7 @@
    "module": "filter",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "worldfilter_filter_create",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/worldfilter_filter_create.html",
@@ -57718,7 +57718,7 @@
    "module": "playback/masters",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "masters",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/masters.html",
@@ -57801,7 +57801,7 @@
    "module": "playback/masters",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "masters_grand",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/masters_grand.html",
@@ -57891,7 +57891,7 @@
    "module": "playback/masters",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "masters_speed",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/masters_speed.html",
@@ -57912,7 +57912,7 @@
    "module": "playback/masters",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "masters_playback",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/masters_playback.html",
@@ -58086,7 +58086,7 @@
    "module": "phaser",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "phaser",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/phaser.html",
@@ -58263,7 +58263,7 @@
    "module": "phaser",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "phaser_editor",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/phaser_editor.html",
@@ -58436,7 +58436,7 @@
    "module": "phaser",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "phaser_create_dimmer",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/phaser_create_dimmer.html",

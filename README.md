@@ -17,16 +17,19 @@ profiles that you supply.
 | 0 | Manual crawl → feature specification | done — see [`spec/REPORT.md`](spec/REPORT.md) |
 | 1 | Engine, show file, command line, DMX output | done — see [`docs/PHASE1.md`](docs/PHASE1.md) |
 | 2 | Palettes, cues, sequences, executor faders | done — see [`docs/PHASE2.md`](docs/PHASE2.md) |
-| 3+ | Effects, groups and filters, timecode, UI | not started |
+| 3 | Groups, worlds, filters, masters, effects | done — see [`docs/PHASE3.md`](docs/PHASE3.md) |
+| 4+ | Timecode, move-in-black, undo, UI | not started |
 
 It is a headless console: a CLI with a REPL, a script runner and four output
-transports. You can program, store palettes and cues, and run a cue list from an
-executor fader. There is no GUI yet.
+transports. You can program, store palettes and cues, run a cue list from an
+executor fader, address the rig through groups, fence it off with worlds and
+filters, scale it with grand, rate and group masters, and animate it with
+effects. There is no GUI yet.
 
 ## Quick start
 
 ```bash
-cargo test --workspace            # 124 tests, no hardware needed
+cargo test --workspace            # 154 tests, no hardware needed
 cargo run -p openlight-console    # interactive console
 ```
 
@@ -58,6 +61,24 @@ Universe 1: 120 frames, last frame 513 bytes, start code 0x00, 6 non-zero slots
 `BF` is a 100% dimmer through the 75% master fader, `FF` is red and `4D` is the
 30% blue stored in the palette.
 
+Address four fixtures through a group, fence two off with a world, program
+through an intensity filter, scale the rig with masters and pulse it with an
+effect:
+
+```bash
+cargo run -p openlight-console -- \
+  --output 1=virtual \
+  --script examples/phase3-demo.txt \
+  --frames 120 --trace
+```
+
+```
+Universe 1: 120 frames, last frame 513 bytes, start code 0x00, 4 non-zero slots
+  00 BF 00 00 00 BF 00 00 00 BF 00 00 00 BF 00 …
+```
+
+`BF` is 75% through the grand master on each of the four dimmers.
+
 The trace line ends with the first slots of the frame that went out:
 
 ```
@@ -83,7 +104,8 @@ cargo run -p openlight-console -- --output 1=enttec:/dev/ttyUSB0
 ```
 crates/dmx/       DMX512 transports: virtual, generic serial, ENTTEC, uDMX
 crates/engine/    show file, fixture types, GDTF import, commands, levels, palettes,
-                  playback, render, output runtime
+                  playback, pools (groups/worlds/filters), effects, render,
+                  output runtime
 crates/console/   the `openlight` binary: CLI, REPL, script runner
 examples/         demo show scripts and their synthetic GDTF profile
 tools/            manual crawler (Phase 0), status stamping, demo profile generator
@@ -97,6 +119,8 @@ docs/             per-phase design notes
   transports, test evidence, known limitations.
 - [`docs/PHASE2.md`](docs/PHASE2.md) — programmer vs playback, tracking, palettes,
   cues, sequences, executor faders, show format v2, limitations.
+- [`docs/PHASE3.md`](docs/PHASE3.md) — groups, worlds and filters, grand/rate/group
+  masters, effects, show format v3, limitations.
 - [`spec/matrix.md`](spec/matrix.md) — the Phase 0 feature matrix this work is
   measured against, with per-row status.
 - [`spec/SCHEMA.md`](spec/SCHEMA.md) — how the crawled specification is stored.

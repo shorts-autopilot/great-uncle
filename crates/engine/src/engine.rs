@@ -11,7 +11,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::command::{self, Command, CommandError, Level, LevelSource, PlaybackRef};
-use crate::fixture_type::DIMMER;
+use crate::effect::{Effects, Waveform, MAX_RATE_HZ, MAX_SPREAD_DEGREES};
+use crate::fixture_type::{FixtureType, DIMMER};
 use crate::gdtf;
 use crate::levels::Levels;
 use crate::output::{lock, OutputStatus};
@@ -20,8 +21,20 @@ use crate::patch::PatchRange;
 use crate::playback::{
     format_cue_number, Cue, Executor, Playback, Sequence, Target, MAX_CUE_NUMBER, MAX_TIME,
 };
-use crate::render::{self, OutputFrame};
-use crate::show::{Fixture, Show};
+use crate::pools::{Filter, Group, World};
+use crate::render::{self, OutputFrame, Stage};
+use crate::show::{Fixture, Show, MAX_RATE_MASTER};
+
+/// Everything `Store Effect` carries before defaults are applied.
+struct EffectSpec {
+    number: u16,
+    name: Option<String>,
+    attribute: Option<String>,
+    waveform: Option<String>,
+    rate: Option<f64>,
+    size: Option<f64>,
+    spread: Option<f64>,
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CommandOutcome {
@@ -48,6 +61,12 @@ pub struct Engine {
     pub status: Arc<Mutex<OutputStatus>>,
     /// Running cues and fader masters. Not part of the show file.
     pub playback: Playback,
+    /// Running effects. Not part of the show file.
+    pub effects: Effects,
+    /// Active world: limits selection and programming, never output.
+    pub world: Option<u16>,
+    /// Active filter: limits the features commands may touch.
+    pub filter: Option<u16>,
     /// The instant the latest [`Engine::tick`] saw. Commands that start a fade
     /// use it, so a test can drive time explicitly.
     clock: Instant,
@@ -67,6 +86,9 @@ impl Engine {
             revision: 0,
             status: Arc::new(Mutex::new(OutputStatus::default())),
             playback: Playback::new(),
+            effects: Effects::default(),
+            world: None,
+            filter: None,
             clock: Instant::now(),
         }
     }
@@ -81,7 +103,9 @@ impl Engine {
     pub fn tick(&mut self, now: Instant) -> bool {
         let now = if now > self.clock { now } else { self.clock };
         self.clock = now;
-        let changed = self.playback.refresh(&self.show, now);
+        // A running effect changes the output on every tick, even when no cue
+        // is moving, so the output thread has to re-render continuously.
+        let changed = self.playback.refresh(&self.show, now) || self.effects.is_running();
         if changed {
             self.revision += 1;
         }
@@ -111,7 +135,8 @@ impl Engine {
     }
 
     pub fn render(&self) -> OutputFrame {
-        render::render(&self.show, self.playback.output())
+        let effects = self.effects.output(&self.show, self.clock);
+        render::render(&self.show, self.playback.output(), &effects)
     }
 
     pub fn help_text(&self) -> Vec<String> {
@@ -163,6 +188,53 @@ impl Engine {
                 self.set_executor_level(executor, level)
             }
             Command::ListExecutors { only } => Ok(self.executor_list(only)),
+            Command::SelectGroup(number) => self.select_group(number),
+            Command::SetLevelGroup {
+                group,
+                attribute,
+                source,
+            } => self.set_level_group(group, attribute, source),
+            Command::OffGroup { group } => self.off_group(group),
+            Command::StoreGroup { number, name } => self.store_group(number, name),
+            Command::DeleteGroup { number } => self.delete_group(number),
+            Command::ListGroups => Ok(self.group_list()),
+            Command::StoreWorld { number, name } => self.store_world(number, name),
+            Command::DeleteWorld { number } => self.delete_world(number),
+            Command::ActivateWorld { number } => self.activate_world(number),
+            Command::ListWorlds => Ok(self.world_list()),
+            Command::StoreFilter {
+                number,
+                name,
+                features,
+            } => self.store_filter(number, name, features),
+            Command::DeleteFilter { number } => self.delete_filter(number),
+            Command::ActivateFilter { number } => self.activate_filter(number),
+            Command::ListFilters => Ok(self.filter_list()),
+            Command::SetGrandMaster { level } => self.set_grand_master(level),
+            Command::SetRateMaster { level } => self.set_rate_master(level),
+            Command::SetGroupMaster { group, level } => self.set_group_master(group, level),
+            Command::ListMasters => Ok(self.master_list()),
+            Command::StoreEffect {
+                number,
+                name,
+                attribute,
+                waveform,
+                rate,
+                size,
+                spread,
+            } => self.store_effect(EffectSpec {
+                number,
+                name,
+                attribute,
+                waveform,
+                rate,
+                size,
+                spread,
+            }),
+            Command::DeleteEffect { number } => self.delete_effect(number),
+            Command::ListEffects { only } => Ok(self.effect_list(only)),
+            Command::EffectOn { effect, fixtures } => self.effect_on(effect, fixtures),
+            Command::EffectOff { effect } => self.effect_off(effect),
             Command::Go { target } => self.playback_go(target),
             Command::Back { target } => self.playback_back(target),
             Command::Pause { target } => self.playback_pause(target),
@@ -183,6 +255,7 @@ impl Engine {
                 "patch it first, e.g. `Patch Fixture 1 At 1.001 Type \"…\"`",
             ));
         }
+        self.check_world(&fixtures)?;
         let message = format!(
             "Selected {} ({} fixture{})",
             format_fixture_list(&fixtures),
@@ -230,6 +303,7 @@ impl Engine {
             Some(name) => self.resolve_attribute(&targets, &name)?,
             None => self.dimmer_attribute(&targets)?,
         };
+        self.check_attribute_allowed(&targets, &attribute)?;
 
         for number in &targets {
             let fixture = self
@@ -386,6 +460,9 @@ impl Engine {
         self.show = show;
         self.selection.clear();
         self.playback.clear();
+        self.effects.stop_all();
+        self.world = None;
+        self.filter = None;
         self.revision += 1;
         Ok(CommandOutcome::message(message))
     }
@@ -623,9 +700,12 @@ impl Engine {
         );
         self.show = show;
         self.selection.clear();
-        // A loaded show has its own cues; a run from the previous show must not
-        // keep writing the old values over the new rig.
+        // A loaded show has its own cues and pools; runs from the previous show
+        // must not keep writing the old values over the new rig.
         self.playback.clear();
+        self.effects.stop_all();
+        self.world = None;
+        self.filter = None;
         self.revision += 1;
         Ok(CommandOutcome::message(message))
     }
@@ -641,6 +721,8 @@ impl Engine {
         let mut fixtures: Vec<&Fixture> = self.show.fixtures.iter().collect();
         fixtures.sort_by_key(|fixture| fixture.number);
         let playback = self.playback.output();
+        let effects = self.effects.output(&self.show, self.clock);
+        let stage = Stage::new(&self.show, playback, &effects);
 
         for fixture in fixtures {
             let (patch, levels) = match self.show.mode_for(fixture) {
@@ -651,18 +733,9 @@ impl Engine {
                         if !seen.insert(channel.attribute.to_ascii_lowercase()) {
                             continue;
                         }
-                        // The sheet shows what the rig is doing, including playback.
-                        let programmer = fixture
-                            .levels
-                            .iter()
-                            .find(|(name, _)| name.eq_ignore_ascii_case(&channel.attribute))
-                            .map(|(_, level)| *level);
-                        let level =
-                            match (programmer, playback.get(fixture.number, &channel.attribute)) {
-                                (Some(value), _) => value,
-                                (None, Some(value)) => value,
-                                (None, None) => 0.0,
-                            };
+                        // The sheet shows what the rig is doing: programmer,
+                        // playback, effects and masters.
+                        let level = stage.level(fixture, &channel.attribute);
                         parts.push(format!(
                             "{} {}%",
                             fixture_type.pretty_attribute(&channel.attribute),
@@ -743,6 +816,39 @@ impl Engine {
             self.show.sequences.len(),
             self.show.executors.len()
         ));
+        lines.push(format!(
+            "Groups: {} | Worlds: {} | Filters: {} | Effects: {}",
+            self.show.groups.len(),
+            self.show.worlds.len(),
+            self.show.filters.len(),
+            self.show.effects.len()
+        ));
+        lines.push(format!(
+            "Masters: grand {}% | rate {}%",
+            (self.show.grand_master * 100.0).round() as i64,
+            (self.show.rate_master * 100.0).round() as i64
+        ));
+        lines.push(format!(
+            "World: {} | Filter: {}",
+            self.world
+                .and_then(|number| self.show.world(number))
+                .map(|world| world.display_name())
+                .unwrap_or_else(|| "off".to_string()),
+            self.filter
+                .and_then(|number| self.show.filter(number))
+                .map(|filter| filter.display_name())
+                .unwrap_or_else(|| "off".to_string())
+        ));
+        if self.effects.is_running() {
+            for (number, fixtures) in self.effects.runs() {
+                lines.push(format!(
+                    "Effect {number}: running on {}",
+                    format_fixture_list(fixtures)
+                ));
+            }
+        } else {
+            lines.push("Effects: idle".to_string());
+        }
         if self.playback.is_running() {
             for (target, run) in self.playback.runs() {
                 let state = if run.is_paused() {
@@ -773,11 +879,16 @@ impl Engine {
                 .fixtures
                 .iter()
                 .map(|fixture| fixture.number)
+                .filter(|number| self.world_allows(*number))
                 .collect();
             if all.is_empty() {
                 return Err(CommandError::with_hint(
                     "nothing to store",
-                    "patch a fixture first: `Patch Fixture 1 At 1.001 Type \"…\"`",
+                    if self.show.fixtures.is_empty() {
+                        "patch a fixture first: `Patch Fixture 1 At 1.001 Type \"…\"`"
+                    } else {
+                        "the active world leaves no patched fixtures; deactivate it with `World All`"
+                    },
                 ));
             }
             Ok(all)
@@ -796,6 +907,14 @@ impl Engine {
             return Err(CommandError::new("palette number 0 is not allowed"));
         }
         let targets = self.programmer_targets()?;
+        if let Some(filter) = self.active_filter() {
+            if !filter.allows(feature) {
+                return Err(CommandError::with_hint(
+                    format!("`{feature}` is outside {}", filter.display_name()),
+                    format!("the filter allows: {}", filter.features.join(", ")),
+                ));
+            }
+        }
         let (pool, values) =
             palette::capture(&self.show, &targets, feature).map_err(CommandError::new)?;
         let value_count: usize = values.values().map(|values| values.len()).sum();
@@ -864,6 +983,18 @@ impl Engine {
                 },
             ));
         };
+
+        if let Some(filter) = self.active_filter() {
+            if !filter.allows(&palette.feature) {
+                return Err(CommandError::with_hint(
+                    format!(
+                        "palette {feature} {number} is outside {}",
+                        filter.display_name()
+                    ),
+                    format!("the filter allows: {}", filter.features.join(", ")),
+                ));
+            }
+        }
 
         let mut assignments = Vec::new();
         let mut skipped = Vec::new();
@@ -1008,8 +1139,13 @@ impl Engine {
         let mut captured = Levels::new();
         for target in &targets {
             if let Some(fixture) = self.show.fixture(*target) {
+                let Ok((fixture_type, _)) = self.show.mode_for(fixture) else {
+                    continue;
+                };
                 for (attribute, level) in &fixture.levels {
-                    captured.set(*target, attribute, *level);
+                    if self.attribute_allowed(fixture_type, attribute) {
+                        captured.set(*target, attribute, *level);
+                    }
                 }
             }
         }
@@ -1524,6 +1660,681 @@ impl Engine {
         }
     }
 
+    fn group_targets(&self, number: u16) -> Result<Vec<u16>, CommandError> {
+        let Some(group) = self.show.group(number) else {
+            return Err(CommandError::with_hint(
+                format!("group {number} does not exist"),
+                "store one first: select fixtures and run `Store Group 1`",
+            ));
+        };
+        let fixtures: Vec<u16> = group
+            .fixtures
+            .iter()
+            .copied()
+            .filter(|fixture| self.show.fixture_index(*fixture).is_some())
+            .collect();
+        if fixtures.is_empty() {
+            return Err(CommandError::with_hint(
+                format!("group {number} has no patched fixtures"),
+                "re-store it after patching the rig: select fixtures and `Store Group {number}`",
+            ));
+        }
+        self.check_world(&fixtures)?;
+        Ok(fixtures)
+    }
+
+    fn select_group(&mut self, number: u16) -> Result<CommandOutcome, CommandError> {
+        let fixtures = self.group_targets(number)?;
+        self.select(fixtures)
+    }
+
+    fn set_level_group(
+        &mut self,
+        group: u16,
+        attribute: Option<String>,
+        source: LevelSource,
+    ) -> Result<CommandOutcome, CommandError> {
+        let fixtures = self.group_targets(group)?;
+        self.set_level(Some(fixtures), attribute, source)
+    }
+
+    fn off_group(&mut self, group: u16) -> Result<CommandOutcome, CommandError> {
+        self.set_level_group(group, None, LevelSource::Level(Level::Percent(0.0)))
+    }
+
+    fn store_group(
+        &mut self,
+        number: u16,
+        name: Option<String>,
+    ) -> Result<CommandOutcome, CommandError> {
+        if number == 0 {
+            return Err(CommandError::new("group number 0 is not allowed"));
+        }
+        let fixtures = self.programmer_targets()?;
+        let mut created = false;
+        let message = self.mutate(|show| {
+            match show.groups.iter().position(|group| group.number == number) {
+                Some(index) => {
+                    show.groups[index].fixtures = fixtures.clone();
+                    if let Some(name) = &name {
+                        show.groups[index].name = name.clone();
+                    }
+                }
+                None => {
+                    created = true;
+                    let mut group = Group::new(number);
+                    group.fixtures = fixtures.clone();
+                    if let Some(name) = &name {
+                        group.name = name.clone();
+                    }
+                    show.groups.push(group);
+                }
+            }
+            show.groups.sort_by_key(|group| group.number);
+            Ok(format!(
+                "{} group {number} ({})",
+                if created { "Stored" } else { "Updated" },
+                format_fixture_list(&fixtures)
+            ))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn delete_group(&mut self, number: u16) -> Result<CommandOutcome, CommandError> {
+        if self.show.group(number).is_none() {
+            return Err(CommandError::with_hint(
+                format!("group {number} does not exist"),
+                "`Group` lists the stored groups",
+            ));
+        }
+        let message = self.mutate(|show| {
+            show.groups.retain(|group| group.number != number);
+            Ok(format!("Deleted group {number}"))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn group_list(&self) -> CommandOutcome {
+        if self.show.groups.is_empty() {
+            return CommandOutcome::message(
+                "No groups stored. Select fixtures and run `Store Group 1 \"Front\"`.",
+            );
+        }
+        let mut lines = vec![format!(
+            "{:<4} {:<20} {:<24} {}",
+            "No.", "Name", "Fixtures", "Master"
+        )];
+        for group in &self.show.groups {
+            lines.push(format!(
+                "{:<4} {:<20} {:<24} {}%",
+                group.number,
+                truncate(
+                    if group.name.trim().is_empty() {
+                        "-"
+                    } else {
+                        &group.name
+                    },
+                    20
+                ),
+                format_fixture_list(&group.fixtures),
+                (group.master * 100.0).round() as i64
+            ));
+        }
+        CommandOutcome::with_lines(lines)
+    }
+
+    fn store_world(
+        &mut self,
+        number: u16,
+        name: Option<String>,
+    ) -> Result<CommandOutcome, CommandError> {
+        if number == 0 {
+            return Err(CommandError::new("world number 0 is not allowed"));
+        }
+        let fixtures = self.programmer_targets()?;
+        let mut created = false;
+        let message = self.mutate(|show| {
+            match show.worlds.iter().position(|world| world.number == number) {
+                Some(index) => {
+                    show.worlds[index].fixtures = fixtures.clone();
+                    if let Some(name) = &name {
+                        show.worlds[index].name = name.clone();
+                    }
+                }
+                None => {
+                    created = true;
+                    let mut world = World::new(number);
+                    world.fixtures = fixtures.clone();
+                    if let Some(name) = &name {
+                        world.name = name.clone();
+                    }
+                    show.worlds.push(world);
+                }
+            }
+            show.worlds.sort_by_key(|world| world.number);
+            Ok(format!(
+                "{} world {number} ({})",
+                if created { "Stored" } else { "Updated" },
+                format_fixture_list(&fixtures)
+            ))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn delete_world(&mut self, number: u16) -> Result<CommandOutcome, CommandError> {
+        if self.show.world(number).is_none() {
+            return Err(CommandError::with_hint(
+                format!("world {number} does not exist"),
+                "`World` lists the stored worlds",
+            ));
+        }
+        let was_active = self.world == Some(number);
+        let message = self.mutate(|show| {
+            show.worlds.retain(|world| world.number != number);
+            Ok(format!("Deleted world {number}"))
+        })?;
+        if was_active {
+            self.world = None;
+        }
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn activate_world(&mut self, number: Option<u16>) -> Result<CommandOutcome, CommandError> {
+        let Some(number) = number else {
+            self.world = None;
+            return Ok(CommandOutcome::message(
+                "World off; every fixture is reachable",
+            ));
+        };
+        let Some(world) = self.show.world(number) else {
+            return Err(CommandError::with_hint(
+                format!("world {number} does not exist"),
+                "`World` lists the stored worlds",
+            ));
+        };
+        self.world = Some(number);
+        Ok(CommandOutcome::message(format!(
+            "Activated {} ({} fixture{})",
+            world.display_name(),
+            world.fixtures.len(),
+            if world.fixtures.len() == 1 { "" } else { "s" }
+        )))
+    }
+
+    fn world_list(&self) -> CommandOutcome {
+        if self.show.worlds.is_empty() {
+            return CommandOutcome::message(
+                "No worlds stored. Select fixtures and run `Store World 1 \"Front\"`.",
+            );
+        }
+        let mut lines = vec![format!(
+            "{:<4} {:<20} {:<24} {}",
+            "No.", "Name", "Fixtures", "Active"
+        )];
+        for world in &self.show.worlds {
+            lines.push(format!(
+                "{:<4} {:<20} {:<24} {}",
+                world.number,
+                truncate(
+                    if world.name.trim().is_empty() {
+                        "-"
+                    } else {
+                        &world.name
+                    },
+                    20
+                ),
+                format_fixture_list(&world.fixtures),
+                if self.world == Some(world.number) {
+                    "yes"
+                } else {
+                    ""
+                }
+            ));
+        }
+        CommandOutcome::with_lines(lines)
+    }
+
+    fn known_pools(&self) -> BTreeSet<String> {
+        let mut pools = BTreeSet::new();
+        for fixture_type in &self.show.fixture_types {
+            for mode in &fixture_type.modes {
+                for channel in &mode.channels {
+                    pools.insert(palette::pool_for(fixture_type, &channel.attribute));
+                }
+            }
+        }
+        pools
+    }
+
+    fn store_filter(
+        &mut self,
+        number: u16,
+        name: Option<String>,
+        features: Vec<String>,
+    ) -> Result<CommandOutcome, CommandError> {
+        if number == 0 {
+            return Err(CommandError::new("filter number 0 is not allowed"));
+        }
+        let pools = self.known_pools();
+        if pools.is_empty() {
+            return Err(CommandError::with_hint(
+                "no fixture types loaded, so there are no features to filter",
+                "import one first: `Import Gdtf \"file.gdtf\"`",
+            ));
+        }
+        for feature in &features {
+            if !pools
+                .iter()
+                .any(|pool| pool.eq_ignore_ascii_case(feature.trim()))
+            {
+                return Err(CommandError::with_hint(
+                    format!("unknown feature pool `{feature}`"),
+                    format!(
+                        "available pools: {}",
+                        pools.iter().cloned().collect::<Vec<_>>().join(", ")
+                    ),
+                ));
+            }
+        }
+        let mut created = false;
+        let label = features
+            .iter()
+            .map(|feature| feature.trim().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let message = self.mutate(|show| {
+            match show
+                .filters
+                .iter()
+                .position(|filter| filter.number == number)
+            {
+                Some(index) => {
+                    show.filters[index].features = features.clone();
+                    if let Some(name) = &name {
+                        show.filters[index].name = name.clone();
+                    }
+                }
+                None => {
+                    created = true;
+                    let mut filter = Filter::new(number);
+                    filter.features = features.clone();
+                    if let Some(name) = &name {
+                        filter.name = name.clone();
+                    }
+                    show.filters.push(filter);
+                }
+            }
+            show.filters.sort_by_key(|filter| filter.number);
+            Ok(format!(
+                "{} filter {number} ({label})",
+                if created { "Stored" } else { "Updated" }
+            ))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn delete_filter(&mut self, number: u16) -> Result<CommandOutcome, CommandError> {
+        if self.show.filter(number).is_none() {
+            return Err(CommandError::with_hint(
+                format!("filter {number} does not exist"),
+                "`Filter` lists the stored filters",
+            ));
+        }
+        let was_active = self.filter == Some(number);
+        let message = self.mutate(|show| {
+            show.filters.retain(|filter| filter.number != number);
+            Ok(format!("Deleted filter {number}"))
+        })?;
+        if was_active {
+            self.filter = None;
+        }
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn activate_filter(&mut self, number: Option<u16>) -> Result<CommandOutcome, CommandError> {
+        let Some(number) = number else {
+            self.filter = None;
+            return Ok(CommandOutcome::message(
+                "Filter off; every feature can be programmed",
+            ));
+        };
+        let Some(filter) = self.show.filter(number) else {
+            return Err(CommandError::with_hint(
+                format!("filter {number} does not exist"),
+                "`Filter` lists the stored filters",
+            ));
+        };
+        self.filter = Some(number);
+        Ok(CommandOutcome::message(format!(
+            "Activated {} ({})",
+            filter.display_name(),
+            filter.features.join(", ")
+        )))
+    }
+
+    fn filter_list(&self) -> CommandOutcome {
+        if self.show.filters.is_empty() {
+            return CommandOutcome::message(
+                "No filters stored. Run `Store Filter 1 \"Intensity\" Dimmer`.",
+            );
+        }
+        let mut lines = vec![format!(
+            "{:<4} {:<20} {:<32} {}",
+            "No.", "Name", "Features", "Active"
+        )];
+        for filter in &self.show.filters {
+            lines.push(format!(
+                "{:<4} {:<20} {:<32} {}",
+                filter.number,
+                truncate(
+                    if filter.name.trim().is_empty() {
+                        "-"
+                    } else {
+                        &filter.name
+                    },
+                    20
+                ),
+                truncate(&filter.features.join(", "), 32),
+                if self.filter == Some(filter.number) {
+                    "yes"
+                } else {
+                    ""
+                }
+            ));
+        }
+        CommandOutcome::with_lines(lines)
+    }
+
+    fn set_grand_master(&mut self, level: Level) -> Result<CommandOutcome, CommandError> {
+        let value = level_value(&level)?;
+        let message = self.mutate(|show| {
+            show.grand_master = value;
+            Ok(format!(
+                "Grand master at {}%",
+                (value * 100.0).round() as i64
+            ))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn set_rate_master(&mut self, level: Level) -> Result<CommandOutcome, CommandError> {
+        let value = match level {
+            Level::Full => 1.0,
+            Level::Percent(percent) => {
+                if !(0.0..=(MAX_RATE_MASTER * 100.0)).contains(&percent) {
+                    return Err(CommandError::new(format!(
+                        "rate {percent}% is outside 0..={}%",
+                        MAX_RATE_MASTER * 100.0
+                    )));
+                }
+                percent / 100.0
+            }
+        };
+        let message = self.mutate(|show| {
+            show.rate_master = value;
+            Ok(format!(
+                "Rate master at {}%",
+                (value * 100.0).round() as i64
+            ))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn set_group_master(
+        &mut self,
+        number: u16,
+        level: Level,
+    ) -> Result<CommandOutcome, CommandError> {
+        if self.show.group(number).is_none() {
+            return Err(CommandError::with_hint(
+                format!("group {number} does not exist"),
+                "`Group` lists the stored groups",
+            ));
+        }
+        let value = level_value(&level)?;
+        let message = self.mutate(|show| {
+            let index = show
+                .groups
+                .iter()
+                .position(|group| group.number == number)
+                .ok_or_else(|| CommandError::new(format!("group {number} does not exist")))?;
+            show.groups[index].master = value;
+            Ok(format!(
+                "Group {number} master at {}%",
+                (value * 100.0).round() as i64
+            ))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn master_list(&self) -> CommandOutcome {
+        let mut lines = vec![
+            format!(
+                "Grand master: {}%",
+                (self.show.grand_master * 100.0).round() as i64
+            ),
+            format!(
+                "Rate master: {}%",
+                (self.show.rate_master * 100.0).round() as i64
+            ),
+        ];
+        if self.show.groups.is_empty() {
+            lines.push("Group masters: none (no groups stored)".into());
+        } else {
+            for group in &self.show.groups {
+                lines.push(format!(
+                    "{} master: {}%",
+                    group.display_name(),
+                    (group.master * 100.0).round() as i64
+                ));
+            }
+        }
+        CommandOutcome::with_lines(lines)
+    }
+
+    fn store_effect(&mut self, spec: EffectSpec) -> Result<CommandOutcome, CommandError> {
+        let EffectSpec {
+            number,
+            name,
+            attribute,
+            waveform,
+            rate,
+            size,
+            spread,
+        } = spec;
+        if number == 0 {
+            return Err(CommandError::new("effect number 0 is not allowed"));
+        }
+        let waveform = match waveform {
+            Some(name) => Waveform::parse(&name).ok_or_else(|| {
+                CommandError::with_hint(
+                    format!("unknown waveform `{name}`"),
+                    format!("use {}", Waveform::names()),
+                )
+            })?,
+            None => Waveform::default(),
+        };
+        let attribute = attribute.unwrap_or_else(|| DIMMER.to_string());
+        if attribute.trim().is_empty() {
+            return Err(CommandError::new("an effect needs an attribute"));
+        }
+        let rate_hz = rate.unwrap_or(1.0);
+        if !(0.0..=MAX_RATE_HZ).contains(&rate_hz) {
+            return Err(CommandError::new(format!(
+                "rate {rate_hz} Hz is outside 0..={MAX_RATE_HZ}"
+            )));
+        }
+        let size = size.unwrap_or(50.0) / 100.0;
+        if !(0.0..=1.0).contains(&size) {
+            return Err(CommandError::new(
+                "size is a percentage from 0 to 100".to_string(),
+            ));
+        }
+        let spread = spread.unwrap_or(0.0);
+        if !(0.0..=MAX_SPREAD_DEGREES).contains(&spread) {
+            return Err(CommandError::new(format!(
+                "spread {spread} is outside 0..={MAX_SPREAD_DEGREES} degrees"
+            )));
+        }
+
+        let mut created = false;
+        let message = self.mutate(|show| {
+            let effect = crate::effect::Effect {
+                number,
+                name: name.clone().unwrap_or_default(),
+                attribute: attribute.clone(),
+                waveform,
+                rate_hz,
+                size,
+                spread,
+            };
+            match show
+                .effects
+                .iter()
+                .position(|effect| effect.number == number)
+            {
+                Some(index) => show.effects[index] = effect,
+                None => {
+                    created = true;
+                    show.effects.push(effect);
+                }
+            }
+            show.effects.sort_by_key(|effect| effect.number);
+            Ok(format!(
+                "{} effect {number} ({attribute}, {}, {rate_hz} Hz, {}%, spread {spread}°)",
+                if created { "Stored" } else { "Updated" },
+                waveform.name(),
+                (size * 100.0).round() as i64
+            ))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn delete_effect(&mut self, number: u16) -> Result<CommandOutcome, CommandError> {
+        if self.show.effect(number).is_none() {
+            return Err(CommandError::with_hint(
+                format!("effect {number} does not exist"),
+                "`Effect` lists the stored effects",
+            ));
+        }
+        let message = self.mutate(|show| {
+            show.effects.retain(|effect| effect.number != number);
+            Ok(format!("Deleted effect {number}"))
+        })?;
+        self.effects.stop(number);
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn effect_on(
+        &mut self,
+        number: u16,
+        fixtures: Option<Vec<u16>>,
+    ) -> Result<CommandOutcome, CommandError> {
+        let Some(effect) = self.show.effect(number).cloned() else {
+            return Err(CommandError::with_hint(
+                format!("effect {number} does not exist"),
+                "store one first: `Store Effect 1`",
+            ));
+        };
+        let targets = self.targets(fixtures)?;
+        self.check_attribute_allowed(&targets, &effect.attribute)?;
+        for fixture_number in &targets {
+            let Some(fixture) = self.show.fixture(*fixture_number) else {
+                continue;
+            };
+            let (_, mode) = self.show.mode_for(fixture).map_err(CommandError::new)?;
+            if mode.channel_for(&effect.attribute).is_none() {
+                return Err(CommandError::with_hint(
+                    format!(
+                        "fixture {fixture_number} has no `{}` in mode `{}`",
+                        effect.attribute, fixture.mode
+                    ),
+                    format!("attributes: {}", attribute_list(mode)),
+                ));
+            }
+        }
+        self.effects.start(number, targets.clone(), self.clock);
+        self.revision += 1;
+        Ok(CommandOutcome::message(format!(
+            "{} on {} ({}, {}, {} Hz, {}%)",
+            effect.display_name(),
+            format_fixture_list(&targets),
+            effect.attribute,
+            effect.waveform.name(),
+            effect.rate_hz * self.show.rate_master,
+            (effect.size * 100.0).round() as i64
+        )))
+    }
+
+    fn effect_off(&mut self, effect: Option<u16>) -> Result<CommandOutcome, CommandError> {
+        match effect {
+            Some(number) => {
+                if self.effects.stop(number) {
+                    self.revision += 1;
+                    Ok(CommandOutcome::message(format!("Stopped effect {number}")))
+                } else {
+                    Ok(CommandOutcome::message(format!(
+                        "Effect {number} is not running"
+                    )))
+                }
+            }
+            None => {
+                if self.effects.stop_all() {
+                    self.revision += 1;
+                    Ok(CommandOutcome::message("Stopped all effects"))
+                } else {
+                    Ok(CommandOutcome::message("No effects are running"))
+                }
+            }
+        }
+    }
+
+    fn effect_list(&self, only: Option<u16>) -> CommandOutcome {
+        let effects: Vec<&crate::effect::Effect> = match only {
+            Some(number) => self.show.effect(number).into_iter().collect(),
+            None => self.show.effects.iter().collect(),
+        };
+        if effects.is_empty() {
+            return CommandOutcome::message(match only {
+                Some(number) => format!("Effect {number} does not exist."),
+                None => "No effects stored. Run `Store Effect 1 \"Pulse\"`.".to_string(),
+            });
+        }
+        let mut lines = vec![format!(
+            "{:<4} {:<20} {:<18} {:<9} {:<8} {:<6} {}",
+            "No.", "Name", "Attribute", "Waveform", "Rate", "Size", "Spread"
+        )];
+        for effect in effects {
+            lines.push(format!(
+                "{:<4} {:<20} {:<18} {:<9} {:<8} {:<6} {}°",
+                effect.number,
+                truncate(
+                    if effect.name.trim().is_empty() {
+                        "-"
+                    } else {
+                        &effect.name
+                    },
+                    20
+                ),
+                truncate(&effect.attribute, 18),
+                effect.waveform.name(),
+                format!("{} Hz", effect.rate_hz),
+                format!("{}%", (effect.size * 100.0).round() as i64),
+                effect.spread.round() as i64
+            ));
+        }
+        for (number, fixtures) in self.effects.runs() {
+            if only.is_some_and(|wanted| wanted != number) {
+                continue;
+            }
+            lines.push(format!(
+                "Running: effect {number} on {}",
+                format_fixture_list(fixtures)
+            ));
+        }
+        CommandOutcome::with_lines(lines)
+    }
+
     fn targets(&self, fixtures: Option<Vec<u16>>) -> Result<Vec<u16>, CommandError> {
         let list = fixtures.unwrap_or_else(|| self.selection.clone());
         if list.is_empty() {
@@ -1539,7 +2350,74 @@ impl Engine {
                 format_fixture_list(&missing)
             )));
         }
+        self.check_world(&list)?;
         Ok(list)
+    }
+
+    /// Whether the active world, if any, allows a fixture.
+    fn world_allows(&self, fixture: u16) -> bool {
+        match self.world.and_then(|number| self.show.world(number)) {
+            Some(world) => world.allows(fixture),
+            None => true,
+        }
+    }
+
+    /// Refuse a target set that reaches outside the active world.
+    fn check_world(&self, fixtures: &[u16]) -> Result<(), CommandError> {
+        let Some(world) = self.world.and_then(|number| self.show.world(number)) else {
+            return Ok(());
+        };
+        let blocked: Vec<u16> = fixtures
+            .iter()
+            .copied()
+            .filter(|number| !world.allows(*number))
+            .collect();
+        if blocked.is_empty() {
+            return Ok(());
+        }
+        Err(CommandError::with_hint(
+            format!(
+                "fixture {} is outside {}",
+                format_fixture_list(&blocked),
+                world.display_name()
+            ),
+            "select fixtures inside the world, or deactivate it with `World All`",
+        ))
+    }
+
+    fn active_filter(&self) -> Option<&Filter> {
+        self.filter.and_then(|number| self.show.filter(number))
+    }
+
+    /// Whether the active filter, if any, allows programming an attribute.
+    fn attribute_allowed(&self, fixture_type: &FixtureType, attribute: &str) -> bool {
+        match self.active_filter() {
+            Some(filter) => filter.allows(&palette::pool_for(fixture_type, attribute)),
+            None => true,
+        }
+    }
+
+    fn check_attribute_allowed(
+        &self,
+        targets: &[u16],
+        attribute: &str,
+    ) -> Result<(), CommandError> {
+        let Some(filter) = self.active_filter() else {
+            return Ok(());
+        };
+        for number in targets {
+            let Some(fixture) = self.show.fixture(*number) else {
+                continue;
+            };
+            let (fixture_type, _) = self.show.mode_for(fixture).map_err(CommandError::new)?;
+            if !self.attribute_allowed(fixture_type, attribute) {
+                return Err(CommandError::with_hint(
+                    format!("`{attribute}` is outside {}", filter.display_name()),
+                    format!("the filter allows: {}", filter.features.join(", ")),
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn missing_fixtures(&self, fixtures: &[u16]) -> Vec<u16> {
@@ -1597,6 +2475,13 @@ pub const HELP: &[&str] = &[
     "Assign Executor 1 Sequence 1            bind a cue list to a fader",
     "Executor 1 At 75 | Full | Off           executor master fader",
     "Go | Back | Pause | Release [Executor 1 | Sequence 1]",
+    "Group 1 / Group 1 At 50 / Group 1 Full / Group 1 Off",
+    "Store Group 1 \"Front\" / Delete Group 1 / Group",
+    "World 1 / World All / Store World 1 \"Front\" / World",
+    "Filter 1 / Filter All / Store Filter 1 \"Intensity\" Dimmer Color",
+    "Master Grand At 75 / Master Rate At 200 / Master Group 1 At 50 / Master",
+    "Store Effect 1 \"Pulse\" [Attribute Dimmer] [Waveform Sine] [Rate 1] [Size 50]",
+    "Effect 1 On [Fixture 1 Thru 4] / Effect 1 Off / Effect Off / Effect",
     "Sheet                                  print the fixture sheet",
     "Status                                 output, show and playback state",
     "Save \"show.json\" / Load \"show.json\"",
@@ -1605,7 +2490,22 @@ pub const HELP: &[&str] = &[
 ];
 
 /// Compact fixture list: `1 Thru 3 + 7`.
-pub fn format_fixture_list(fixtures: &[u16]) -> String {
+pub fn level_value(level: &Level) -> Result<f64, CommandError> {
+    match level {
+        Level::Percent(percent) => {
+            if !(0.0..=100.0).contains(percent) {
+                Err(CommandError::new(format!(
+                    "level {percent} is outside 0..100"
+                )))
+            } else {
+                Ok(percent / 100.0)
+            }
+        }
+        Level::Full => Ok(1.0),
+    }
+}
+
+fn format_fixture_list(fixtures: &[u16]) -> String {
     let mut numbers = fixtures.to_vec();
     numbers.sort_unstable();
     numbers.dedup();
@@ -1670,6 +2570,14 @@ mod tests {
 
     fn engine() -> Engine {
         Engine::new(demo_show())
+    }
+
+    fn two_fixture_engine() -> Engine {
+        let mut engine = engine();
+        engine
+            .execute("Patch Fixture 2 At 1.005")
+            .expect("demo type covers 4 channels at 1.001");
+        engine
     }
 
     fn dimmer(engine: &Engine, fixture: u16) -> f64 {
@@ -2290,6 +3198,264 @@ mod tests {
 
         let status = engine.execute("Status").unwrap().lines.join("\n");
         assert!(status.contains("Palettes: 1"), "{status}");
+    }
+
+    #[test]
+    fn a_group_is_selected_and_addressed_in_one_word() {
+        let mut engine = two_fixture_engine();
+        engine.execute("Fixture 1 Thru 2").unwrap();
+        let stored = engine.execute("Store Group 1 \"All\"").unwrap();
+        assert!(stored.lines[0].contains("1 + 2"), "{:?}", stored.lines);
+
+        engine.execute("Clear").unwrap();
+        engine.execute("Group 1 At 40").unwrap();
+        assert_eq!(dimmer(&engine, 1), 0.4);
+        assert_eq!(dimmer(&engine, 2), 0.4);
+        assert_eq!(engine.selection, vec![1, 2], "the group stays selected");
+
+        engine.execute("Group 1 Off").unwrap();
+        assert_eq!(engine.render().slot(1, 1), Some(0));
+        let list = engine.execute("Group").unwrap().lines.join("\n");
+        assert!(list.contains("All"), "{list}");
+    }
+
+    #[test]
+    fn group_and_grand_masters_scale_intensity_at_the_output() {
+        let mut engine = two_fixture_engine();
+        engine.execute("Fixture 1 Thru 2 At Full").unwrap();
+        engine.execute("Store Group 1").unwrap();
+
+        engine.execute("Master Group 1 At 50").unwrap();
+        assert_eq!(engine.render().slot(1, 1), Some(128));
+        assert_eq!(engine.render().slot(1, 5), Some(128));
+
+        engine.execute("Master Grand At 50").unwrap();
+        assert_eq!(engine.render().slot(1, 1), Some(64));
+
+        engine.execute("Master Grand Off").unwrap();
+        assert_eq!(engine.render().slot(1, 1), Some(0));
+        assert_eq!(
+            dimmer(&engine, 1),
+            1.0,
+            "masters never touch the programmer"
+        );
+
+        let masters = engine.execute("Master").unwrap().lines.join("\n");
+        assert!(masters.contains("Grand master: 0%"), "{masters}");
+        assert!(masters.contains("Group 1"), "{masters}");
+    }
+
+    #[test]
+    fn a_world_limits_control_but_not_running_output() {
+        let mut engine = two_fixture_engine();
+        engine.execute("Fixture 1 Thru 2 At Full").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Clear All").unwrap();
+
+        engine.execute("Fixture 1").unwrap();
+        engine.execute("Store World 1 \"Front\"").unwrap();
+        engine.execute("World 1").unwrap();
+
+        let error = engine.execute("Fixture 2 At 50").unwrap_err();
+        assert!(error.message.contains("outside"), "{error}");
+        assert!(error.hint.unwrap().contains("World All"));
+
+        engine.execute("Go Sequence 1").unwrap();
+        assert_eq!(
+            engine.render().slot(1, 5),
+            Some(255),
+            "a cue still drives fixtures outside the world"
+        );
+
+        engine.execute("World All").unwrap();
+        engine.execute("Fixture 2").unwrap();
+    }
+
+    #[test]
+    fn a_filter_limits_programming_and_what_a_cue_captures() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At ColorAdd_R 100").unwrap();
+        engine.execute("Store Palette Color 1").unwrap();
+        engine.execute("Fixture 1 At 50").unwrap();
+
+        engine
+            .execute("Store Filter 1 \"Intensity\" Dimmer")
+            .unwrap();
+        engine.execute("Filter 1").unwrap();
+        engine.execute("Fixture 1 At 60").unwrap();
+
+        let error = engine.execute("Fixture 1 At ColorAdd_R 50").unwrap_err();
+        assert!(error.message.contains("outside"), "{error}");
+        let error = engine.execute("At Palette Color 1").unwrap_err();
+        assert!(error.message.contains("outside"), "{error}");
+
+        engine.execute("Store Cue 1").unwrap();
+        let cue = &engine.show.sequence(1).unwrap().cues[0];
+        assert_eq!(cue.levels.get(1, "Dimmer"), Some(0.6));
+        assert_eq!(
+            cue.levels.get(1, "ColorAdd_R"),
+            None,
+            "the filter kept colour out of the cue"
+        );
+    }
+
+    #[test]
+    fn effects_animate_the_output_between_ticks() {
+        let mut engine = engine();
+        let start = engine.clock();
+        engine.tick(start);
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Effect 1").unwrap();
+        engine.execute("Effect 1 On").unwrap();
+
+        engine.tick(start + Duration::from_millis(250));
+        assert_eq!(engine.render().slot(1, 1), Some(255), "full plus offset");
+        engine.tick(start + Duration::from_millis(750));
+        assert_eq!(engine.render().slot(1, 1), Some(128), "full minus offset");
+
+        engine.execute("Effect 1 Off").unwrap();
+        assert_eq!(engine.render().slot(1, 1), Some(255), "the base is intact");
+    }
+
+    #[test]
+    fn the_rate_master_speeds_effects_up() {
+        let mut engine = engine();
+        let start = engine.clock();
+        engine.tick(start);
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Effect 1").unwrap();
+        engine.execute("Effect 1 On").unwrap();
+        engine.execute("Master Rate At 200").unwrap();
+
+        engine.tick(start + Duration::from_millis(125));
+        assert_eq!(engine.render().slot(1, 1), Some(255));
+        engine.tick(start + Duration::from_millis(375));
+        assert_eq!(engine.render().slot(1, 1), Some(128));
+    }
+
+    #[test]
+    fn effects_respect_worlds_and_filters() {
+        let mut engine = two_fixture_engine();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Filter 1 Dimmer").unwrap();
+        engine
+            .execute("Store Effect 1 Attribute ColorAdd_R")
+            .unwrap();
+        engine.execute("Filter 1").unwrap();
+        let error = engine.execute("Effect 1 On").unwrap_err();
+        assert!(error.message.contains("outside"), "{error}");
+        engine.execute("Filter All").unwrap();
+
+        engine.execute("Store World 1").unwrap();
+        engine.execute("World 1").unwrap();
+        engine.execute("Store Effect 2").unwrap();
+        let error = engine.execute("Effect 2 On Fixture 2").unwrap_err();
+        assert!(error.message.contains("outside"), "{error}");
+        engine.execute("Effect 2 On").unwrap();
+    }
+
+    #[test]
+    fn deleting_an_effect_stops_it_and_removes_it_from_the_show() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Effect 1").unwrap();
+        engine.execute("Effect 1 On").unwrap();
+        assert!(engine
+            .execute("Effect")
+            .unwrap()
+            .lines
+            .join("\n")
+            .contains("Running"));
+
+        engine.execute("Delete Effect 1").unwrap();
+        assert!(!engine.effects.is_running());
+        assert!(engine.show.effects.is_empty());
+        assert_eq!(engine.render().slot(1, 1), Some(255));
+    }
+
+    #[test]
+    fn phase_three_objects_survive_a_save_and_load() {
+        let mut engine = two_fixture_engine();
+        let path = std::env::temp_dir().join(format!(
+            "openlight-phase3-{}.olshow.json",
+            std::process::id()
+        ));
+        engine.execute("Fixture 1 Thru 2 At Full").unwrap();
+        engine.execute("Store Group 1 \"All\"").unwrap();
+        engine.execute("Store World 2").unwrap();
+        engine.execute("Store Filter 3 Dimmer").unwrap();
+        engine.execute("Store Effect 4 \"Pulse\" Rate 2").unwrap();
+        engine.execute("Master Grand At 40").unwrap();
+        engine.execute("Master Rate At 200").unwrap();
+        engine.execute("Master Group 1 At 30").unwrap();
+        engine
+            .execute(&format!("Save \"{}\"", path.display()))
+            .unwrap();
+        engine
+            .execute(&format!("Load \"{}\"", path.display()))
+            .unwrap();
+
+        assert_eq!(engine.show.groups.len(), 1);
+        assert_eq!(engine.show.groups[0].master, 0.3);
+        assert_eq!(engine.show.worlds.len(), 1);
+        assert_eq!(engine.show.filters.len(), 1);
+        assert_eq!(engine.show.effects.len(), 1);
+        assert_eq!(engine.show.effects[0].rate_hz, 2.0);
+        assert_eq!(engine.show.grand_master, 0.4);
+        assert_eq!(engine.show.rate_master, 2.0);
+        assert!(!engine.effects.is_running(), "runs are not saved");
+        assert_eq!(engine.world, None);
+        assert_eq!(engine.filter, None);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn phase_three_commands_report_bad_input() {
+        let mut engine = engine();
+        assert!(engine.execute("Group 1").is_err(), "no groups yet");
+        assert!(engine.execute("World 1").is_err());
+        assert!(engine.execute("Filter 1").is_err());
+        assert!(engine.execute("Fixture 1").is_ok());
+        assert!(engine.execute("Store Filter 1 Colour").is_err());
+        assert!(engine.execute("Master Grand At 101").is_err());
+        assert!(engine.execute("Master Rate At 401").is_err());
+        assert!(engine.execute("Master Group 1 At 50").is_err());
+        assert!(engine.execute("Store Effect 1 Waveform Wobble").is_err());
+        assert!(engine.execute("Store Effect 2 Size 150").is_err());
+        assert!(engine.execute("Store Effect 3 Spread 400").is_err());
+        assert!(engine.execute("Effect 9 On").is_err());
+        assert!(engine.execute("Store Group 2").is_ok(), "selection exists");
+        assert!(engine.execute("Group 2").is_ok());
+        assert!(engine.execute("Delete Group 2").is_ok());
+        assert!(engine.execute("Delete Group 2").is_err());
+    }
+
+    #[test]
+    fn status_describes_pools_masters_and_effects() {
+        let mut engine = engine();
+        engine.execute("Fixture 1").unwrap();
+        engine.execute("Store Group 1").unwrap();
+        engine.execute("Store World 1").unwrap();
+        engine.execute("Store Filter 1 Dimmer").unwrap();
+        engine.execute("Store Effect 1").unwrap();
+        engine.execute("Effect 1 On").unwrap();
+        engine.execute("World 1").unwrap();
+        engine.execute("Filter 1").unwrap();
+
+        let status = engine.execute("Status").unwrap().lines.join("\n");
+        assert!(status.contains("Groups: 1 | Worlds: 1"), "{status}");
+        assert!(
+            status.contains("Masters: grand 100% | rate 100%"),
+            "{status}"
+        );
+        assert!(status.contains("World: World 1"), "{status}");
+        assert!(status.contains("Filter: Filter 1"), "{status}");
+        assert!(status.contains("Effect 1: running on 1"), "{status}");
+        assert_eq!(
+            engine.render().slot(1, 1),
+            Some(0),
+            "dimmer at 0 with no level"
+        );
     }
 
     fn write_demo_gdtf(path: &Path) {
