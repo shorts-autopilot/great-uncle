@@ -10,6 +10,7 @@ use crate::{DmxResult, DmxTransport, DMX_SLOTS, DMX_START_CODE};
 
 pub struct GenericSerialTransport {
     link: Box<dyn SerialLink>,
+    path: String,
     settings: SerialSettings,
     configured: bool,
     frame: Vec<u8>,
@@ -20,6 +21,7 @@ impl GenericSerialTransport {
     pub fn open(path: &str, settings: SerialSettings) -> DmxResult<Self> {
         Ok(Self {
             link: serial::open(path)?,
+            path: path.to_string(),
             settings,
             configured: false,
             frame: vec![0; DMX_SLOTS + 1],
@@ -67,6 +69,12 @@ impl DmxTransport for GenericSerialTransport {
 
     fn shutdown(&mut self) -> DmxResult<()> {
         self.send_frame(&[0; DMX_SLOTS])
+    }
+
+    fn reopen(&mut self) -> DmxResult<()> {
+        self.link = serial::open(&self.path)?;
+        self.configured = false;
+        Ok(())
     }
 }
 
@@ -120,6 +128,7 @@ mod tests {
         };
         let transport = GenericSerialTransport {
             link: Box::new(link),
+            path: "/dev/null".into(),
             settings,
             configured: false,
             frame: vec![0; DMX_SLOTS + 1],

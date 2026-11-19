@@ -236,7 +236,15 @@ impl UiState {
         let height = height.max(CHROME + 1);
         let body_height = height - CHROME;
 
-        let left = format!(" OpenLight — {}", engine.show.name);
+        let left = format!(
+            " OpenLight — {}{}",
+            engine.show.name,
+            if engine.desk.blackout.is_some() {
+                "   BLACKOUT"
+            } else {
+                ""
+            }
+        );
         let right = format!("{}  ", engine.timecode_status());
         let mut lines = vec![join(&left, &right, width)];
 

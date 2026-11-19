@@ -1,19 +1,29 @@
 //! Output runtime.
 //!
-//! Two threads, both reading only:
+//! Three kinds of thread, all reading only:
 //!
 //! * the **engine tick** advances playback and re-renders when the engine
-//!   revision changes (60 Hz by default). A running fade changes the revision,
-//!   so the sender picks it up on the next frame.
-//! * the **frame sender** pushes the latest frame to every bound transport at
-//!   the configured DMX rate (30 Hz by default, the usual console refresh).
+//!   revision changes (60 Hz by default). It stamps every frame with the time
+//!   it was built, which is what the watchdog reads.
+//! * one **worker per universe** pushes that universe at the rate its wire
+//!   allows. A slow universe slows itself and nothing else: there is no global
+//!   ticker that can starve a second port.
 //!
 //! Mutation always happens on the caller's thread through the engine mutex, so
-//! there is exactly one writer. On stop the sender transmits one black frame:
-//! a dark rig is safer than a frozen look.
+//! there is exactly one writer.
+//!
+//! **Watchdog.** DMX needs continuous refresh. If the engine has not rendered
+//! for `stale_ms` the worker keeps sending the last frame and reports `stale`;
+//! after `blackout_ms` it sends zeros instead, so a wedged engine cannot leave
+//! a frozen look on stage for longer than that.
+//!
+//! **Reconnect.** A failed send puts that universe into `reconnecting`: it
+//! retries the transport on an exponential backoff and resumes by itself, with
+//! one log line per state change rather than one per frame.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
@@ -29,12 +39,70 @@ pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-#[derive(Debug, Clone, Default)]
+/// What a universe is doing right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OutputState {
+    /// Frames are being sent at the rate the wire allows.
+    #[default]
+    Ok,
+    /// The engine has not rendered recently; the last frame is repeating.
+    Stale,
+    /// The transport failed and is being reopened.
+    Reconnecting,
+    /// The transport cannot be reopened; frames are being dropped.
+    Offline,
+    /// Output has been stopped.
+    Stopped,
+}
+
+impl OutputState {
+    pub fn label(self) -> &'static str {
+        match self {
+            OutputState::Ok => "ok",
+            OutputState::Stale => "stale",
+            OutputState::Reconnecting => "reconnecting",
+            OutputState::Offline => "offline",
+            OutputState::Stopped => "stopped",
+        }
+    }
+}
+
+impl std::fmt::Display for OutputState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.label())
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct UniverseStatus {
     pub transport: String,
+    pub state: OutputState,
     pub frames: u64,
     pub errors: u64,
+    pub reconnects: u64,
+    /// Smoothed frames per second actually achieved.
+    pub achieved_hz: f64,
+    /// How long the most recent send took, in microseconds.
+    pub last_send_us: u64,
+    /// How old the frame being sent was, in milliseconds.
+    pub stale_ms: u64,
     pub last_error: Option<String>,
+}
+
+impl Default for UniverseStatus {
+    fn default() -> Self {
+        Self {
+            transport: String::new(),
+            state: OutputState::Stopped,
+            frames: 0,
+            errors: 0,
+            reconnects: 0,
+            achieved_hz: 0.0,
+            last_send_us: 0,
+            stale_ms: 0,
+            last_error: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +110,7 @@ pub struct OutputStatus {
     pub running: bool,
     pub frame_hz: f64,
     pub engine_hz: f64,
+    /// Frames sent across every universe.
     pub frames: u64,
     pub last_frame: Option<SystemTime>,
     pub universes: BTreeMap<u16, UniverseStatus>,
@@ -72,6 +141,12 @@ pub struct TransportBinding {
 pub struct RuntimeConfig {
     pub engine_hz: f64,
     pub frame_hz: f64,
+    /// Age at which a frame is reported stale, in milliseconds.
+    pub stale_ms: u64,
+    /// Age at which the worker sends black instead of the last look.
+    pub blackout_ms: u64,
+    /// First reconnect delay, in milliseconds; doubles up to 8 s.
+    pub reconnect_ms: u64,
 }
 
 impl Default for RuntimeConfig {
@@ -79,25 +154,42 @@ impl Default for RuntimeConfig {
         Self {
             engine_hz: 60.0,
             frame_hz: 30.0,
+            stale_ms: 500,
+            blackout_ms: 2_000,
+            reconnect_ms: 500,
         }
     }
 }
 
 impl RuntimeConfig {
     fn sanitized(self) -> Self {
+        let stale_ms = self.stale_ms.max(1);
         Self {
             engine_hz: self.engine_hz.clamp(1.0, 200.0),
             frame_hz: self.frame_hz.clamp(1.0, 200.0),
+            stale_ms,
+            blackout_ms: self.blackout_ms.max(stale_ms),
+            reconnect_ms: self.reconnect_ms.max(1),
         }
     }
 }
 
 pub struct Runtime {
     engine: Arc<Mutex<Engine>>,
+    status: Arc<Mutex<OutputStatus>>,
     stop: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
     config: RuntimeConfig,
 }
+
+/// The frame the workers send and the moment it was built.
+struct SharedFrame {
+    frame: Arc<OutputFrame>,
+    built_at: Instant,
+    revision: u64,
+}
+
+type Shared = Arc<Mutex<SharedFrame>>;
 
 impl Runtime {
     pub fn start(engine: Engine, transports: Vec<TransportBinding>, config: RuntimeConfig) -> Self {
@@ -126,28 +218,42 @@ impl Runtime {
         }
 
         let engine = Arc::new(Mutex::new(engine));
-        let frame = Arc::new(Mutex::new(OutputFrame::default()));
+        let shared: Shared = Arc::new(Mutex::new(SharedFrame {
+            frame: Arc::new(OutputFrame::default()),
+            built_at: Instant::now(),
+            revision: u64::MAX,
+        }));
         let stop = Arc::new(AtomicBool::new(false));
 
         let engine_thread = {
             let engine = Arc::clone(&engine);
-            let frame = Arc::clone(&frame);
+            let shared = Arc::clone(&shared);
             let stop = Arc::clone(&stop);
-            thread::spawn(move || engine_loop(engine, frame, stop, config.engine_hz))
+            thread::spawn(move || engine_loop(engine, shared, stop, config.engine_hz))
         };
-        let output_thread = {
-            let frame = Arc::clone(&frame);
+
+        let mut threads = vec![engine_thread];
+        for binding in transports {
+            let shared = Arc::clone(&shared);
             let stop = Arc::clone(&stop);
             let status = Arc::clone(&status);
-            thread::spawn(move || {
-                output_loop(transports, frame, stop, status, config.frame_hz);
-            })
-        };
+            threads.push(thread::spawn(move || {
+                Worker {
+                    binding,
+                    shared,
+                    stop,
+                    status,
+                    config,
+                }
+                .run()
+            }));
+        }
 
         Self {
             engine,
+            status,
             stop,
-            threads: vec![engine_thread, output_thread],
+            threads,
             config,
         }
     }
@@ -168,8 +274,9 @@ impl Runtime {
     fn shutdown(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         for thread in self.threads.drain(..) {
-            let _ = thread.join();
+            join_with_timeout(thread, Duration::from_secs(2));
         }
+        lock(&self.status).running = false;
     }
 }
 
@@ -179,86 +286,176 @@ impl Drop for Runtime {
     }
 }
 
-fn engine_loop(
-    engine: Arc<Mutex<Engine>>,
-    frame: Arc<Mutex<OutputFrame>>,
-    stop: Arc<AtomicBool>,
-    rate_hz: f64,
-) {
+/// Join a thread without letting a wedged driver hang process exit.
+fn join_with_timeout(handle: JoinHandle<()>, timeout: Duration) -> bool {
+    let (sender, receiver) = mpsc::channel();
+    let joiner = thread::spawn(move || {
+        let _ = handle.join();
+        let _ = sender.send(());
+    });
+    let joined = receiver.recv_timeout(timeout).is_ok();
+    if joined {
+        let _ = joiner.join();
+    }
+    joined
+}
+
+fn engine_loop(engine: Arc<Mutex<Engine>>, shared: Shared, stop: Arc<AtomicBool>, rate_hz: f64) {
     let mut ticker = Ticker::new(rate_hz);
-    let mut revision = u64::MAX;
 
     while !stop.load(Ordering::Relaxed) {
         ticker.wait();
         if stop.load(Ordering::Relaxed) {
             break;
         }
-        let rendered = {
-            let mut state = lock(&engine);
-            let advanced = state.tick(Instant::now());
-            if advanced || state.revision != revision {
-                Some((state.render(), state.revision))
-            } else {
-                None
-            }
-        };
-        if let Some((rendered, current_revision)) = rendered {
-            *lock(&frame) = rendered;
-            revision = current_revision;
+        let now = Instant::now();
+        let mut state = lock(&engine);
+        let advanced = state.tick(now);
+        let revision = state.revision;
+        let mut shared = lock(&shared);
+        // A healthy idle engine still re-stamps its frame, so the watchdog only
+        // trips when the engine itself has stopped.
+        if advanced || revision != shared.revision {
+            shared.frame = Arc::new(state.render());
+            shared.revision = revision;
         }
+        shared.built_at = now;
     }
 }
 
-fn output_loop(
-    mut transports: Vec<TransportBinding>,
-    frame: Arc<Mutex<OutputFrame>>,
+struct Worker {
+    binding: TransportBinding,
+    shared: Shared,
     stop: Arc<AtomicBool>,
     status: Arc<Mutex<OutputStatus>>,
-    rate_hz: f64,
-) {
-    let mut ticker = Ticker::new(rate_hz);
+    config: RuntimeConfig,
+}
 
-    while !stop.load(Ordering::Relaxed) {
-        ticker.wait();
-        if stop.load(Ordering::Relaxed) {
-            break;
-        }
+impl Worker {
+    fn run(mut self) {
+        let universe = self.binding.universe;
+        let period = Duration::from_secs_f64(1.0 / self.config.frame_hz);
+        let mut start = Instant::now();
+        let mut backoff = Duration::from_millis(self.config.reconnect_ms);
+        let mut reconnect_since: Option<Instant> = None;
+        let zeros = [0u8; DMX_SLOTS];
 
-        // Copy once per frame so transports never hold the frame lock.
-        let snapshot = lock(&frame).clone();
-        let mut results = Vec::with_capacity(transports.len());
-        let mut warnings = Vec::new();
-        for binding in transports.iter_mut() {
-            let slots = snapshot
-                .get(binding.universe)
-                .copied()
-                .unwrap_or([0; DMX_SLOTS]);
-            let result = binding.transport.send_frame(&slots);
-            if let Some(warning) = binding.transport.take_warning() {
-                warnings.push(warning);
+        while !self.stop.load(Ordering::Relaxed) {
+            let (frame, built_at) = {
+                let shared = lock(&self.shared);
+                (Arc::clone(&shared.frame), shared.built_at)
+            };
+            let age = built_at.elapsed();
+            let stale = age >= Duration::from_millis(self.config.stale_ms);
+            let black = age >= Duration::from_millis(self.config.blackout_ms);
+            let slots = if black {
+                &zeros
+            } else {
+                frame.get(universe).unwrap_or(&zeros)
+            };
+
+            let began = Instant::now();
+            let result = self.binding.transport.send_frame(slots);
+            let took = began.elapsed();
+
+            let mut entries = Vec::new();
+            if let Some(warning) = self.binding.transport.take_warning() {
+                entries.push(format!("universe {universe}: {warning}"));
             }
-            results.push((binding.universe, result));
-        }
 
-        let mut status = lock(&status);
-        status.frames += 1;
-        status.last_frame = Some(SystemTime::now());
-        for (universe, result) in results {
-            if let Some(entry) = status.universes.get_mut(&universe) {
-                entry.frames += 1;
-                if let Err(error) = result {
-                    entry.errors += 1;
-                    entry.last_error = Some(error.to_string());
+            let mut recovered = None;
+            {
+                let mut status = lock(&self.status);
+                if result.is_ok() {
+                    status.frames += 1;
+                    status.last_frame = Some(SystemTime::now());
+                    recovered = reconnect_since.take();
+                }
+                let entry = status.universes.entry(universe).or_default();
+                entry.stale_ms = u64::try_from(age.as_millis()).unwrap_or(u64::MAX);
+                entry.last_send_us = u64::try_from(took.as_micros()).unwrap_or(u64::MAX);
+                let measured = 1.0 / took.as_secs_f64().max(1e-6);
+                entry.achieved_hz = if entry.achieved_hz == 0.0 {
+                    measured
+                } else {
+                    entry.achieved_hz * 0.95 + measured * 0.05
+                };
+                match &result {
+                    Ok(()) => {
+                        entry.frames += 1;
+                        if recovered.is_some() {
+                            entry.reconnects += 1;
+                        }
+                        entry.state = if stale {
+                            OutputState::Stale
+                        } else {
+                            OutputState::Ok
+                        };
+                    }
+                    Err(error) => {
+                        entry.errors += 1;
+                        entry.last_error = Some(error.to_string());
+                        if reconnect_since.is_none() {
+                            reconnect_since = Some(Instant::now());
+                            entries.push(format!("universe {universe} offline: {error}"));
+                        }
+                        entry.state = OutputState::Reconnecting;
+                    }
                 }
             }
-        }
-        status.warnings.extend(warnings);
-    }
+            if let Some(since) = recovered {
+                entries.push(format!(
+                    "universe {universe} recovered after {:.1} s",
+                    since.elapsed().as_secs_f64()
+                ));
+            }
 
-    for binding in transports.iter_mut() {
-        let _ = binding.transport.shutdown();
+            if !entries.is_empty() {
+                lock(&self.status).warnings.extend(entries);
+            }
+
+            // A failed universe retries on a backoff; the others never wait for
+            // it because each worker has its own clock.
+            if reconnect_since.is_some() {
+                match self.binding.transport.reopen() {
+                    Ok(()) => {
+                        // The next send proves the port really works; a failure
+                        // puts it straight back into reconnecting.
+                        backoff = Duration::from_millis(self.config.reconnect_ms);
+                    }
+                    Err(error) => {
+                        let mut status = lock(&self.status);
+                        if let Some(entry) = status.universes.get_mut(&universe) {
+                            entry.last_error = Some(error.to_string());
+                        }
+                        drop(status);
+                        thread::sleep(backoff);
+                        backoff = (backoff * 2).min(Duration::from_secs(8));
+                        start = Instant::now();
+                        continue;
+                    }
+                }
+            }
+
+            // Self-clocked: the period is measured from the start of this send,
+            // so a slow wire slows this universe and nothing else.
+            let deadline = start + period;
+            let now = Instant::now();
+            if deadline > now {
+                thread::sleep(deadline - now);
+            }
+            start = deadline.max(now);
+        }
+
+        for _ in 0..2 {
+            let _ = self.binding.transport.send_frame(&zeros);
+        }
+        let _ = self.binding.transport.shutdown();
+        let mut status = lock(&self.status);
+        if let Some(entry) = status.universes.get_mut(&universe) {
+            entry.state = OutputState::Stopped;
+        }
     }
-    lock(&status).running = false;
 }
 
 struct Ticker {
@@ -322,6 +519,7 @@ mod tests {
             RuntimeConfig {
                 engine_hz: 100.0,
                 frame_hz: 100.0,
+                ..RuntimeConfig::default()
             },
         );
 
@@ -354,6 +552,7 @@ mod tests {
             RuntimeConfig {
                 engine_hz: 100.0,
                 frame_hz: 100.0,
+                ..RuntimeConfig::default()
             },
         );
 
@@ -388,6 +587,7 @@ mod tests {
             RuntimeConfig {
                 engine_hz: 100.0,
                 frame_hz: 100.0,
+                ..RuntimeConfig::default()
             },
         );
 
@@ -413,6 +613,7 @@ mod tests {
             RuntimeConfig {
                 engine_hz: 100.0,
                 frame_hz: 100.0,
+                ..RuntimeConfig::default()
             },
         );
 
@@ -455,10 +656,187 @@ mod tests {
             RuntimeConfig {
                 engine_hz: 100.0,
                 frame_hz: 100.0,
+                ..RuntimeConfig::default()
             },
         );
         thread::sleep(Duration::from_millis(80));
         runtime.stop();
         assert!(lock(&state).frames > 0);
+    }
+
+    /// A transport whose behaviour the test controls.
+    struct Scripted {
+        failures: Arc<Mutex<u32>>,
+        sent: Arc<Mutex<u64>>,
+        saw_nonzero: Arc<AtomicBool>,
+        slow: Duration,
+    }
+
+    impl Scripted {
+        fn new(failures: u32, slow: Duration) -> Self {
+            Self {
+                failures: Arc::new(Mutex::new(failures)),
+                sent: Arc::new(Mutex::new(0)),
+                saw_nonzero: Arc::new(AtomicBool::new(false)),
+                slow,
+            }
+        }
+    }
+
+    impl DmxTransport for Scripted {
+        fn describe(&self) -> String {
+            "scripted".into()
+        }
+
+        fn send_frame(&mut self, slots: &[u8; DMX_SLOTS]) -> dmx::DmxResult<()> {
+            if !self.slow.is_zero() {
+                thread::sleep(self.slow);
+            }
+            if slots.iter().any(|slot| *slot != 0) {
+                self.saw_nonzero.store(true, Ordering::SeqCst);
+            }
+            let mut failures = lock(&self.failures);
+            if *failures > 0 {
+                *failures -= 1;
+                return Err(dmx::DmxError::io(
+                    "scripted",
+                    std::io::Error::other("unplugged"),
+                ));
+            }
+            *lock(&self.sent) += 1;
+            Ok(())
+        }
+
+        fn reopen(&mut self) -> dmx::DmxResult<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_stalled_engine_sends_black_rather_than_a_frozen_look() {
+        let show = demo_show();
+        let mut engine = Engine::new(show);
+        engine.desk.programmer.set(1, "Dimmer", 1.0);
+        let frame = Arc::new(engine.render());
+
+        let transport = Scripted::new(0, Duration::ZERO);
+        let saw_nonzero = Arc::clone(&transport.saw_nonzero);
+        let shared: Shared = Arc::new(Mutex::new(SharedFrame {
+            frame,
+            // Older than the blackout threshold: the engine has stalled.
+            built_at: Instant::now() - Duration::from_secs(5),
+            revision: 1,
+        }));
+        let status = Arc::new(Mutex::new(OutputStatus::default()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let config = RuntimeConfig {
+            frame_hz: 100.0,
+            stale_ms: 10,
+            blackout_ms: 20,
+            ..RuntimeConfig::default()
+        };
+        let worker = Worker {
+            binding: TransportBinding {
+                universe: 1,
+                transport: Box::new(transport),
+            },
+            shared,
+            stop: Arc::clone(&stop),
+            status: Arc::clone(&status),
+            config,
+        };
+        let handle = thread::spawn(move || worker.run());
+        thread::sleep(Duration::from_millis(60));
+        stop.store(true, Ordering::SeqCst);
+        handle.join().unwrap();
+
+        assert!(
+            !saw_nonzero.load(Ordering::SeqCst),
+            "a stalled engine must not keep a frozen look on the wire"
+        );
+        assert_eq!(lock(&status).universes[&1].state, OutputState::Stopped);
+    }
+
+    #[test]
+    fn a_slow_universe_does_not_starve_a_fast_one() {
+        let slow = Scripted::new(0, Duration::from_millis(20));
+        let slow_sent = Arc::clone(&slow.sent);
+        let fast = Scripted::new(0, Duration::ZERO);
+        let fast_sent = Arc::clone(&fast.sent);
+
+        let runtime = Runtime::start(
+            engine_with_full_dimmer(),
+            vec![
+                TransportBinding {
+                    universe: 1,
+                    transport: Box::new(slow),
+                },
+                TransportBinding {
+                    universe: 2,
+                    transport: Box::new(fast),
+                },
+            ],
+            RuntimeConfig {
+                engine_hz: 100.0,
+                frame_hz: 100.0,
+                ..RuntimeConfig::default()
+            },
+        );
+        thread::sleep(Duration::from_millis(300));
+        runtime.stop();
+
+        let slow = *lock(&slow_sent);
+        let fast = *lock(&fast_sent);
+        assert!(slow > 0 && fast > 0, "both universes sent frames");
+        assert!(
+            fast > slow + 5,
+            "the slow wire must not slow the fast one: {fast} vs {slow}"
+        );
+    }
+
+    #[test]
+    fn a_dropped_transport_reconnects_and_says_so_once() {
+        let transport = Scripted::new(2, Duration::ZERO);
+        let sent = Arc::clone(&transport.sent);
+        let runtime = Runtime::start(
+            engine_with_full_dimmer(),
+            vec![TransportBinding {
+                universe: 1,
+                transport: Box::new(transport),
+            }],
+            RuntimeConfig {
+                engine_hz: 100.0,
+                frame_hz: 100.0,
+                reconnect_ms: 1,
+                ..RuntimeConfig::default()
+            },
+        );
+        thread::sleep(Duration::from_millis(200));
+        let status = {
+            let handle = runtime.engine();
+            let status = Arc::clone(&lock(&handle).status);
+            status
+        };
+        runtime.stop();
+
+        assert!(*lock(&sent) > 0, "output resumed after reconnecting");
+        let status = lock(&status);
+        let entry = &status.universes[&1];
+        assert_eq!(entry.reconnects, 1, "one reconnect, not one per frame");
+        assert!(entry.frames > 0);
+        assert!(
+            status
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("recovered")),
+            "{:?}",
+            status.warnings
+        );
+    }
+
+    fn engine_with_full_dimmer() -> Engine {
+        let mut engine = Engine::new(demo_show());
+        engine.desk.programmer.set(1, "Dimmer", 1.0);
+        engine
     }
 }

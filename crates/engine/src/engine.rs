@@ -147,6 +147,12 @@ impl Engine {
             }
             self.label = statement.trim().to_string();
             let parsed = command::parse(&tokens)?;
+            if self.desk.lock.is_some() && parsed.mutates() {
+                return Err(CommandError::with_hint(
+                    "the desk is locked",
+                    "`Unlock <code>` releases it",
+                ));
+            }
             outcome.lines.extend(self.dispatch(parsed)?.lines);
         }
         Ok(outcome)
@@ -162,6 +168,7 @@ impl Engine {
             self.playback.output(),
             &effects,
             &self.desk.masters,
+            self.desk.blackout_master(self.clock),
         )
     }
 
@@ -290,6 +297,9 @@ impl Engine {
             Command::Back { target } => self.playback_back(target),
             Command::Pause { target } => self.playback_pause(target),
             Command::Release { target } => self.playback_release(target),
+            Command::Blackout { off, fade } => self.set_blackout(off, fade),
+            Command::Lock { code } => self.lock_desk(code),
+            Command::Unlock { code } => self.unlock_desk(code),
             Command::Sheet => Ok(self.sheet()),
             Command::Status => Ok(self.status_report()),
             Command::Save { path } => self.save(&path, true, true),
@@ -908,6 +918,7 @@ impl Engine {
             playback,
             &effects,
             &self.desk.masters,
+            self.desk.blackout_master(self.clock),
         );
 
         for fixture in fixtures {
@@ -952,10 +963,10 @@ impl Engine {
         let status = lock(&self.status);
         let mut lines = vec![
             format!(
-                "Output: {} — {} Hz frames, {} Hz engine tick",
+                "Output: {}   engine {:.1} Hz   frame {:.1} Hz target",
                 if status.running { "running" } else { "stopped" },
-                status.frame_hz,
-                status.engine_hz
+                status.engine_hz,
+                status.frame_hz
             ),
             format!("Frames sent: {}", status.frames),
         ];
@@ -968,11 +979,19 @@ impl Engine {
             let last_error = entry
                 .last_error
                 .as_ref()
-                .map(|error| format!(" (last error: {error})"))
+                .map(|error| format!("  last error: {error}"))
                 .unwrap_or_default();
             lines.push(format!(
-                "Universe {universe}: {} — {} frames, {} errors{}",
-                entry.transport, entry.frames, entry.errors, last_error
+                "Universe {universe}  {:<24} {:<12} {:>5.1} Hz  frames {}  errors {}  reconnects {}  \
+                 send {} us  stale {} ms{last_error}",
+                entry.transport,
+                entry.state.label(),
+                entry.achieved_hz,
+                entry.frames,
+                entry.errors,
+                entry.reconnects,
+                entry.last_send_us,
+                entry.stale_ms
             ));
         }
         for warning in status.warnings.iter().take(8) {
@@ -1017,6 +1036,22 @@ impl Engine {
             "Masters: grand {}% | rate {}%",
             (self.desk.masters.grand * 100.0).round() as i64,
             (self.desk.masters.rate * 100.0).round() as i64
+        ));
+        lines.push(format!(
+            "Blackout: {} | Lock: {}",
+            match self.desk.blackout {
+                Some(state) => format!(
+                    "on ({}%, fade {:.1}s)",
+                    (self.desk.blackout_master(self.clock) * 100.0).round() as i64,
+                    state.fade.as_secs_f64()
+                ),
+                None => "off".to_string(),
+            },
+            if self.desk.lock.is_some() {
+                "on"
+            } else {
+                "off"
+            }
         ));
         lines.push(format!(
             "World: {} | Filter: {}",
@@ -2255,6 +2290,55 @@ impl Engine {
         CommandOutcome::with_lines(lines)
     }
 
+    fn set_blackout(
+        &mut self,
+        off: bool,
+        fade: Option<f64>,
+    ) -> Result<CommandOutcome, CommandError> {
+        let fade = fade.unwrap_or(0.0);
+        if !fade.is_finite() || !(0.0..=MAX_TIME).contains(&fade) {
+            return Err(CommandError::new(format!(
+                "blackout fade {fade} is outside 0..={MAX_TIME} seconds"
+            )));
+        }
+        let level = if off { 1.0 } else { 0.0 };
+        self.desk
+            .set_blackout(level, std::time::Duration::from_secs_f64(fade), self.clock);
+        self.revision += 1;
+        Ok(CommandOutcome::message(if off {
+            "Blackout lifted".to_string()
+        } else {
+            "Blackout".to_string()
+        }))
+    }
+
+    fn lock_desk(&mut self, code: Option<String>) -> Result<CommandOutcome, CommandError> {
+        if self.desk.lock.is_some() {
+            return Ok(CommandOutcome::message(
+                "The desk is already locked; `Unlock <code>` releases it",
+            ));
+        }
+        self.desk.lock = Some(code.unwrap_or_default());
+        Ok(CommandOutcome::message(
+            "Desk locked; mutating commands are refused until `Unlock <code>`",
+        ))
+    }
+
+    fn unlock_desk(&mut self, code: Option<String>) -> Result<CommandOutcome, CommandError> {
+        let Some(required) = self.desk.lock.clone() else {
+            return Ok(CommandOutcome::message("The desk is not locked"));
+        };
+        if constant_time_eq(required.as_bytes(), code.unwrap_or_default().as_bytes()) {
+            self.desk.lock = None;
+            Ok(CommandOutcome::message("Desk unlocked"))
+        } else {
+            Err(CommandError::with_hint(
+                "wrong unlock code",
+                "`Unlock <code>` — the desk stays locked",
+            ))
+        }
+    }
+
     fn set_grand_master(&mut self, level: Level) -> Result<CommandOutcome, CommandError> {
         let value = level_value(&level)?;
         self.desk.masters.grand = value;
@@ -3177,6 +3261,8 @@ pub const HELP: &[&str] = &[
     "Master Grand At 75 / Master Rate At 200 / Master Group 1 At 50 / Master",
     "Store Effect 1 \"Pulse\" [Attribute Dimmer] [Waveform Sine] [Rate 1] [Size 50] [Spread 0]",
     "Effect 1 On [Fixture 1 Thru 4] / Effect 1 Off / Effect Off / Effect",
+    "Blackout [Fade 2] / Blackout Off      darken the rig without losing the look",
+    "Lock [code] / Unlock [code]           refuse mutating commands while locked",
     "Sheet                                  print the fixture sheet",
     "Status                                 output, show and playback state",
     "Save \"show.json\"                     write the show and its desk beside it",
@@ -3200,6 +3286,18 @@ pub fn level_value(level: &Level) -> Result<f64, CommandError> {
         }
         Level::Full => Ok(1.0),
     }
+}
+
+/// Compare two secrets without an early exit on the first difference.
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut difference = 0u8;
+    for (a, b) in left.iter().zip(right) {
+        difference |= a ^ b;
+    }
+    difference == 0
 }
 
 /// `1 step`, `2 steps`: keeps reports grammatical without a crate.
@@ -4486,5 +4584,79 @@ mod tests {
             .write_all(crate::gdtf::tests::DEMO_XML.as_bytes())
             .unwrap();
         writer.finish().unwrap();
+    }
+
+    #[test]
+    fn blackout_is_a_render_master_and_never_an_edit() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 50").unwrap();
+        let lit = engine.render().slot(1, 1);
+        assert!(lit.unwrap() > 0, "the fixture is lit");
+
+        engine.execute("Blackout").unwrap();
+        assert_eq!(engine.render().slot(1, 1), Some(0));
+        assert_eq!(
+            engine.desk.programmer.get(1, "Dimmer"),
+            Some(0.5),
+            "blackout never touches the programmer"
+        );
+        let undid = engine.execute("Undo").unwrap();
+        assert!(
+            !undid.lines[0].contains("Blackout"),
+            "blackout is not an undo step: {undid:?}"
+        );
+
+        // Undo stepped past the blackout and back to the edit before it.
+        assert!(engine.desk.programmer.is_empty());
+        engine.execute("Fixture 1 At 50").unwrap();
+        assert_eq!(engine.render().slot(1, 1), Some(0), "still blacked out");
+        engine.execute("Blackout Off").unwrap();
+        assert_eq!(engine.render().slot(1, 1), lit, "the same look returns");
+    }
+
+    #[test]
+    fn a_lock_refuses_mutations_but_still_answers_questions() {
+        let mut engine = engine();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Lock 4711").unwrap();
+
+        for line in [
+            "Fixture 1 At 50",
+            "Store Cue 2",
+            "Delete Cue 1",
+            "Patch Fixture 9 At 1.101",
+            "New",
+            "Load \"x.olshow\"",
+            "Master Grand At 50",
+        ] {
+            let error = engine.execute(line).unwrap_err();
+            assert!(error.to_string().contains("locked"), "{line}: {error}");
+            assert_eq!(
+                error.hint.as_deref(),
+                Some("`Unlock <code>` releases it"),
+                "{line}"
+            );
+        }
+
+        assert!(engine.execute("Status").is_ok());
+        assert!(engine.execute("Sheet").is_ok());
+        assert!(engine.execute("Sequence").is_ok());
+        assert!(
+            engine
+                .execute("Status")
+                .unwrap()
+                .lines
+                .iter()
+                .any(|line| line.contains("Lock: on")),
+            "status names the lock"
+        );
+
+        // A wrong code leaves the desk locked, and lifting a blackout works.
+        assert!(engine.execute("Unlock 0000").is_err());
+        assert!(engine.execute("Fixture 1 At 50").is_err());
+        engine.execute("Blackout Off").unwrap();
+
+        engine.execute("Unlock 4711").unwrap();
+        engine.execute("Fixture 1 At 50").unwrap();
     }
 }

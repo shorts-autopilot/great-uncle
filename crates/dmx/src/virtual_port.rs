@@ -54,6 +54,12 @@ impl DmxTransport for VirtualTransport {
         "virtual".into()
     }
 
+    /// A virtual port has nothing to reopen, so a reconnect test can drive the
+    /// recovery path without hardware.
+    fn reopen(&mut self) -> DmxResult<()> {
+        Ok(())
+    }
+
     fn send_frame(&mut self, slots: &[u8; DMX_SLOTS]) -> DmxResult<()> {
         let mut state = lock(&self.state);
         state.frames += 1;

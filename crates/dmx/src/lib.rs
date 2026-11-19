@@ -38,6 +38,16 @@ pub trait DmxTransport: Send {
     fn shutdown(&mut self) -> DmxResult<()> {
         Ok(())
     }
+
+    /// Reopen the underlying device after a failure.
+    ///
+    /// The default reports that reconnecting is not possible, which is what a
+    /// transport with nothing to reopen should do.
+    fn reopen(&mut self) -> DmxResult<()> {
+        Err(crate::DmxError::Unsupported(
+            "reconnect is not supported".into(),
+        ))
+    }
 }
 
 /// Build a transport from a spec string.

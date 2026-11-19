@@ -82,6 +82,7 @@ pub struct Stage<'a> {
     playback: &'a Levels,
     effects: &'a EffectOutput,
     masters: &'a Masters,
+    blackout: f64,
 }
 
 impl<'a> Stage<'a> {
@@ -91,6 +92,7 @@ impl<'a> Stage<'a> {
         playback: &'a Levels,
         effects: &'a EffectOutput,
         masters: &'a Masters,
+        blackout: f64,
     ) -> Self {
         Self {
             show,
@@ -98,6 +100,7 @@ impl<'a> Stage<'a> {
             playback,
             effects,
             masters,
+            blackout,
         }
     }
 
@@ -115,7 +118,7 @@ impl<'a> Stage<'a> {
             None => base,
         };
         if is_intensity(attribute) {
-            level * intensity_master(self.show, self.masters, fixture.number)
+            level * intensity_master(self.show, self.masters, fixture.number) * self.blackout
         } else {
             level
         }
@@ -133,13 +136,14 @@ pub fn render(
     playback: &Levels,
     effects: &EffectOutput,
     masters: &Masters,
+    blackout: f64,
 ) -> OutputFrame {
     let mut frame = OutputFrame::default();
     for universe in &show.universes {
         frame.ensure(universe.number);
     }
 
-    let stage = Stage::new(show, programmer, playback, effects, masters);
+    let stage = Stage::new(show, programmer, playback, effects, masters, blackout);
     for fixture in &show.fixtures {
         let Ok((_, mode)) = show.mode_for(fixture) else {
             continue;
@@ -180,6 +184,7 @@ mod tests {
             &Levels::new(),
             &EffectOutput::default(),
             masters,
+            1.0,
         )
     }
 
@@ -252,6 +257,7 @@ mod tests {
             &playback,
             &EffectOutput::default(),
             &masters(),
+            1.0,
         );
         assert_eq!(frame.slot(1, 1), Some(128));
         assert_eq!(frame.slot(1, 4), Some(255));
@@ -269,6 +275,7 @@ mod tests {
             &playback,
             &EffectOutput::default(),
             &masters(),
+            1.0,
         );
         assert_eq!(
             frame.slot(1, 1),
@@ -334,12 +341,26 @@ mod tests {
         let programmer = programmer(&show, &[(1, "Dimmer", 0.6)]);
         let mut effects = EffectOutput::default();
         effects.add(1, "Dimmer", 0.2);
-        let frame = render(&show, &programmer, &Levels::new(), &effects, &masters());
+        let frame = render(
+            &show,
+            &programmer,
+            &Levels::new(),
+            &effects,
+            &masters(),
+            1.0,
+        );
         assert_eq!(frame.slot(1, 1), Some(204));
 
         let mut clipped = EffectOutput::default();
         clipped.add(1, "Dimmer", 5.0);
-        let frame = render(&show, &programmer, &Levels::new(), &clipped, &masters());
+        let frame = render(
+            &show,
+            &programmer,
+            &Levels::new(),
+            &clipped,
+            &masters(),
+            1.0,
+        );
         assert_eq!(frame.slot(1, 1), Some(255), "clamped to full");
     }
 
@@ -351,7 +372,7 @@ mod tests {
         masters.grand = 0.5;
         let mut effects = EffectOutput::default();
         effects.add(1, "ColorAdd_R", -0.5);
-        let frame = render(&show, &programmer, &Levels::new(), &effects, &masters);
+        let frame = render(&show, &programmer, &Levels::new(), &effects, &masters, 1.0);
         assert_eq!(frame.slot(1, 2), Some(128), "half red, no master applied");
     }
 
@@ -382,5 +403,42 @@ mod tests {
         let frame = program(&show, &programmer, &Masters::new());
         assert_eq!(frame.slot(1, 1), Some(255));
         assert_eq!(frame.slot(2, 1), Some(255));
+    }
+
+    #[test]
+    fn blackout_zeroes_intensity_and_keeps_colour() {
+        let show = demo_show();
+        let programmer = programmer(&show, &[(1, "Dimmer", 1.0), (1, "ColorAdd_R", 1.0)]);
+        let lit = program(&show, &programmer, &masters());
+        let dark = render(
+            &show,
+            &programmer,
+            &Levels::new(),
+            &EffectOutput::default(),
+            &masters(),
+            0.0,
+        );
+        assert_eq!(dark.slot(1, 1), Some(0), "dimmer is blacked out");
+        assert_eq!(dark.slot(1, 2), Some(255), "colour stays where it was");
+
+        // Lifting the blackout restores the exact frame.
+        let again = program(&show, &programmer, &masters());
+        assert_eq!(again.slot(1, 1), lit.slot(1, 1));
+        assert_eq!(again.slot(1, 2), lit.slot(1, 2));
+    }
+
+    #[test]
+    fn a_half_faded_blackout_is_half_intensity() {
+        let show = demo_show();
+        let programmer = programmer(&show, &[(1, "Dimmer", 1.0)]);
+        let frame = render(
+            &show,
+            &programmer,
+            &Levels::new(),
+            &EffectOutput::default(),
+            &masters(),
+            0.5,
+        );
+        assert_eq!(frame.slot(1, 1), Some(128));
     }
 }

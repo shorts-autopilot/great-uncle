@@ -233,6 +233,7 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
         RuntimeConfig {
             engine_hz: options.engine_hz,
             frame_hz: options.fps,
+            ..RuntimeConfig::default()
         },
     );
 

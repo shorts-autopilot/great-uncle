@@ -23,6 +23,7 @@ pub const MIN_PAYLOAD: usize = 25;
 
 pub struct EnttecProTransport {
     link: Box<dyn SerialLink>,
+    path: String,
     label: u8,
     settings: SerialSettings,
     configured: bool,
@@ -38,6 +39,7 @@ impl EnttecProTransport {
     pub fn open_with_label(path: &str, label: u8) -> DmxResult<Self> {
         Ok(Self {
             link: serial::open(path)?,
+            path: path.to_string(),
             label,
             settings: SerialSettings::enttec_pro(),
             configured: false,
@@ -95,6 +97,12 @@ impl DmxTransport for EnttecProTransport {
     fn shutdown(&mut self) -> DmxResult<()> {
         self.send_frame(&[0; DMX_SLOTS])
     }
+
+    fn reopen(&mut self) -> DmxResult<()> {
+        self.link = serial::open(&self.path)?;
+        self.configured = false;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -150,6 +158,7 @@ mod tests {
         let settings = link.settings.clone();
         let mut transport = EnttecProTransport {
             link: Box::new(link),
+            path: "/dev/null".into(),
             label: LABEL_SEND_DMX,
             settings: SerialSettings::enttec_pro(),
             configured: false,

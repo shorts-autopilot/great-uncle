@@ -19,19 +19,25 @@ profiles that you supply.
 | 2 | Palettes, cues, sequences, executor faders | done — see [`docs/PHASE2.md`](docs/PHASE2.md) |
 | 3 | Groups, worlds, filters, masters, effects | done — see [`docs/PHASE3.md`](docs/PHASE3.md) |
 | 4 | Timecode, move-in-black, undo, first UI shell | done — see [`docs/PHASE4.md`](docs/PHASE4.md) |
-| 5+ | triggers, desk state, timing, GUI, … | designed — see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
+| 5+ | desk state, output scheduling, blackout/lock | in progress — see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
+| 5+ | triggers, timing, GUI, … | designed — see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 
 It is a console with a command line, a full-screen terminal shell, a script
 runner and four output transports. You can program, store palettes and cues, run
 a cue list from an executor fader, address the rig through groups, fence it off
 with worlds and filters, scale it with grand, rate and group masters, animate it
 with effects, run cues from a timecode show, move fixtures in black and undo any
-show edit. There is no desktop GUI yet.
+show edit. The programmer, the faders and the playback positions live in a desk
+file written beside the show (`look.olshow` + `look.oldesk`), so a document
+never carries someone else's half-finished look. `Blackout` darkens the rig
+without touching the programming, `Lock` refuses changes until it is released,
+and every universe reports the frame rate and send time it actually achieved.
+There is no desktop GUI yet.
 
 ## Quick start
 
 ```bash
-cargo test --workspace            # 184 tests, no hardware needed
+cargo test --workspace            # 206 tests, no hardware needed
 cargo run -p openlight-console    # interactive console
 cargo run -p openlight-console -- --ui   # full-screen terminal shell
 ```

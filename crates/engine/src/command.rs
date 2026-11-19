@@ -38,6 +38,8 @@
 //! Timecode 1 Add 00:00:10:00 Sequence 1 Cue 2
 //! Timecode 1 Remove 00:00:10:00 | Timecode 1 At 00:00:10:00
 //! Timecode 1 Start | Pause | Stop
+//! Blackout [Fade 2] | Blackout Off
+//! Lock [code] | Unlock [code]
 //! Sheet | Status | Help
 //! Save [Show|Desk] "file" | Load [Show] "file"
 //! ```
@@ -277,6 +279,16 @@ pub enum Command {
     Release {
         target: Option<PlaybackRef>,
     },
+    Blackout {
+        off: bool,
+        fade: Option<f64>,
+    },
+    Lock {
+        code: Option<String>,
+    },
+    Unlock {
+        code: Option<String>,
+    },
     Sheet,
     Status,
     Save {
@@ -294,6 +306,35 @@ pub enum Command {
         show_only: bool,
     },
     Help,
+}
+
+impl Command {
+    /// Whether running this command changes persisted state.
+    ///
+    /// The desk lock refuses everything that does. The match lists the
+    /// non-mutating commands explicitly and treats anything unclassified as
+    /// mutating, so a new command is locked out until someone classifies it:
+    /// the failure mode is an over-strict lock, never an unlocked desk.
+    pub fn mutates(&self) -> bool {
+        match self {
+            Command::Help
+            | Command::Status
+            | Command::Sheet
+            | Command::ListPalettes
+            | Command::ListSequences { .. }
+            | Command::ListExecutors { .. }
+            | Command::ListGroups
+            | Command::ListWorlds
+            | Command::ListFilters
+            | Command::ListMasters
+            | Command::ListEffects { .. }
+            | Command::ListTimecodes { .. }
+            | Command::Unlock { .. } => false,
+            // Lifting a blackout is always allowed: refusing it is a hazard.
+            Command::Blackout { off: true, .. } => false,
+            _ => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -681,6 +722,32 @@ impl Parser<'_> {
         if word.eq_ignore_ascii_case("redo") {
             self.expect_end()?;
             return Ok(Command::Redo);
+        }
+        if word.eq_ignore_ascii_case("blackout") || word.eq_ignore_ascii_case("black") {
+            if self.eat_word("off") {
+                self.expect_end()?;
+                return Ok(Command::Blackout {
+                    off: true,
+                    fade: None,
+                });
+            }
+            let fade = if self.eat_word("fade") {
+                Some(self.number_value("fade seconds")?)
+            } else {
+                None
+            };
+            self.expect_end()?;
+            return Ok(Command::Blackout { off: false, fade });
+        }
+        if word.eq_ignore_ascii_case("lock") {
+            let code = self.optional_code()?;
+            self.expect_end()?;
+            return Ok(Command::Lock { code });
+        }
+        if word.eq_ignore_ascii_case("unlock") {
+            let code = self.optional_code()?;
+            self.expect_end()?;
+            return Ok(Command::Unlock { code });
         }
         if word.eq_ignore_ascii_case("sheet") || word.eq_ignore_ascii_case("fixtures") {
             self.expect_end()?;
@@ -1550,6 +1617,18 @@ impl Parser<'_> {
         }
     }
 
+    /// A lock code: one token, quoted or bare. `Lock a b` is rejected because
+    /// `expect_end` sees the leftover word.
+    fn optional_code(&mut self) -> Result<Option<String>, CommandError> {
+        match self.peek().cloned() {
+            Some(Token::Quoted(code)) | Some(Token::Word(code)) | Some(Token::Number(code)) => {
+                self.position += 1;
+                Ok(Some(code))
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn path_token(&mut self) -> Result<String, CommandError> {
         match self.bump() {
             Some(Token::Quoted(path)) | Some(Token::Word(path)) | Some(Token::Number(path)) => {
@@ -2179,5 +2258,83 @@ mod tests {
             command("Delete Effect 2"),
             Command::DeleteEffect { number: 2 }
         );
+    }
+
+    #[test]
+    fn parses_blackout_and_locking() {
+        assert_eq!(
+            command("Blackout"),
+            Command::Blackout {
+                off: false,
+                fade: None
+            }
+        );
+        assert_eq!(
+            command("Blackout Fade 2"),
+            Command::Blackout {
+                off: false,
+                fade: Some(2.0)
+            }
+        );
+        assert_eq!(
+            command("Blackout Off"),
+            Command::Blackout {
+                off: true,
+                fade: None
+            }
+        );
+        assert_eq!(
+            command("Lock 4711"),
+            Command::Lock {
+                code: Some("4711".into())
+            }
+        );
+        assert_eq!(command("Lock"), Command::Lock { code: None });
+        assert_eq!(
+            command("Unlock 4711"),
+            Command::Unlock {
+                code: Some("4711".into())
+            }
+        );
+        assert!(lex("Blackout Fade -1")
+            .and_then(|tokens| parse(&tokens))
+            .is_err());
+        assert!(
+            lex("Lock a b").and_then(|tokens| parse(&tokens)).is_err(),
+            "one code, not a phrase"
+        );
+    }
+
+    #[test]
+    fn the_lock_allow_list_is_a_classification() {
+        // Questions and listings are always answerable.
+        for line in [
+            "Help", "Status", "Sheet", "Palette", "Sequence", "Executor", "Group", "World",
+            "Filter", "Master", "Effect", "Timecode",
+        ] {
+            assert!(!command(line).mutates(), "{line} must not mutate");
+        }
+        assert!(!command("Unlock 1").mutates());
+        assert!(
+            !command("Blackout Off").mutates(),
+            "lifting is a safety action"
+        );
+        // Everything that changes the show, the desk or the document.
+        for line in [
+            "Fixture 1 At 50",
+            "Store Cue 1",
+            "Delete Cue 1",
+            "Patch Fixture 1 At 1.001",
+            "New",
+            "Save \"a.olshow\"",
+            "Import Gdtf \"a.gdtf\"",
+            "Go",
+        ] {
+            let parsed = lex(line).and_then(|tokens| parse(&tokens));
+            assert!(parsed.is_ok(), "{line} must parse");
+            assert!(parsed.unwrap().mutates(), "{line} must mutate");
+        }
+        assert!(command("Blackout").mutates());
+        assert!(command("Lock").mutates());
     }
 }

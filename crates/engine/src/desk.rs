@@ -13,6 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -88,6 +89,30 @@ fn set_level(faders: &mut BTreeMap<u16, f64>, number: u16, level: f64) {
     }
 }
 
+/// A blackout in progress: a master ramping from `from` to `level`.
+///
+/// Blackout is a render-stage master, never an edit, so lifting it restores the
+/// look exactly as it was and leaves nothing in the show or the programmer.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BlackoutState {
+    pub from: f64,
+    pub level: f64,
+    pub started: Instant,
+    pub fade: Duration,
+}
+
+impl BlackoutState {
+    /// The master at `now`: a pure function of time, so tests never sleep.
+    pub fn master(&self, now: Instant) -> f64 {
+        if self.fade.is_zero() {
+            return self.level;
+        }
+        let elapsed = now.saturating_duration_since(self.started);
+        let t = (elapsed.as_secs_f64() / self.fade.as_secs_f64()).clamp(0.0, 1.0);
+        self.from + (self.level - self.from) * t
+    }
+}
+
 /// Where one playback is: which cue, and whether it is held.
 ///
 /// This is a *projection* of the live run, not the run itself. The desk records
@@ -129,6 +154,12 @@ pub struct Desk {
     /// Active filter: limits the features commands may touch.
     pub filter: Option<u16>,
     pub masters: Masters,
+    /// A blackout in progress. Saved as its level, so a recovered desk comes
+    /// back dark rather than unexpectedly lit.
+    pub blackout: Option<BlackoutState>,
+    /// `None` is unlocked; `Some(code)` refuses every mutating command. This is
+    /// a lock, not authentication: the code is plaintext in the desk file.
+    pub lock: Option<String>,
     /// Playback positions, written on save and applied on load.
     pub runs: Vec<RunState>,
 }
@@ -144,6 +175,27 @@ impl Desk {
     /// Drop everything that refers to the show currently loaded.
     pub fn clear(&mut self) {
         *self = Self::new();
+    }
+
+    /// The blackout master: 1 when there is no blackout.
+    pub fn blackout_master(&self, now: Instant) -> f64 {
+        self.blackout.map(|state| state.master(now)).unwrap_or(1.0)
+    }
+
+    /// True when the stage is fully dark because of a blackout.
+    pub fn is_blacked_out(&self, now: Instant) -> bool {
+        self.blackout.is_some() && self.blackout_master(now) <= 1e-9
+    }
+
+    /// Start or finish a blackout. `level` is 0 to black out, 1 to lift it.
+    pub fn set_blackout(&mut self, level: f64, fade: Duration, now: Instant) {
+        let from = self.blackout_master(now);
+        self.blackout = Some(BlackoutState {
+            from,
+            level,
+            started: now,
+            fade,
+        });
     }
 
     /// The desk file that belongs to a show file: `look.olshow` → `look.oldesk`.
@@ -264,6 +316,14 @@ impl Desk {
             world: file.world,
             filter: file.filter,
             masters: file.masters,
+            // A saved blackout comes back at its level, not mid-ramp.
+            blackout: file.blackout.map(|saved| BlackoutState {
+                from: saved.level,
+                level: saved.level,
+                started: Instant::now(),
+                fade: Duration::ZERO,
+            }),
+            lock: file.lock,
             runs: file.runs,
         };
         let mut warnings = desk.sanitise(show);
@@ -287,6 +347,11 @@ impl Desk {
             world: self.world,
             filter: self.filter,
             masters: self.masters.clone(),
+            blackout: self.blackout.map(|state| SavedBlackout {
+                level: state.level,
+                fade: state.fade.as_secs_f64(),
+            }),
+            lock: self.lock.clone(),
             runs: self.runs.clone(),
         };
         let json = serde_json::to_string_pretty(&file).map_err(|source| DeskError::Parse {
@@ -378,7 +443,20 @@ struct DeskFile {
     #[serde(default)]
     masters: Masters,
     #[serde(default)]
+    blackout: Option<SavedBlackout>,
+    #[serde(default)]
+    lock: Option<String>,
+    #[serde(default)]
     runs: Vec<RunState>,
+}
+
+/// The persistable part of a blackout: where it is, not when it started.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedBlackout {
+    level: f64,
+    #[serde(default)]
+    fade: f64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -527,5 +605,36 @@ mod tests {
             Desk::path_for(Path::new("shows/look.olshow")),
             PathBuf::from("shows/look.oldesk")
         );
+    }
+
+    #[test]
+    fn blackout_and_lock_round_trip() {
+        let show = demo_show();
+        let mut desk = Desk::new();
+        let now = Instant::now();
+        desk.set_blackout(0.0, Duration::from_secs(2), now);
+        desk.lock = Some("4711".into());
+
+        let path = temp_path("blackout");
+        desk.save(&path, &show).unwrap();
+        let (loaded, warnings) = Desk::load(&path, &show).unwrap().unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(loaded.is_blacked_out(Instant::now()));
+        assert_eq!(loaded.lock.as_deref(), Some("4711"));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_blackout_fades_from_where_it_was() {
+        let mut desk = Desk::new();
+        let start = Instant::now();
+        desk.set_blackout(0.0, Duration::from_secs(2), start);
+        assert_eq!(desk.blackout_master(start), 1.0);
+        assert!((desk.blackout_master(start + Duration::from_secs(1)) - 0.5).abs() < 1e-9);
+        assert_eq!(desk.blackout_master(start + Duration::from_secs(2)), 0.0);
+
+        // Lifting mid-fade starts from the level it reached, not from 0.
+        desk.set_blackout(1.0, Duration::from_secs(2), start + Duration::from_secs(1));
+        assert!((desk.blackout_master(start + Duration::from_secs(2)) - 0.75).abs() < 1e-9);
     }
 }
