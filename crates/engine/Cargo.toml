@@ -1,0 +1,20 @@
+[package]
+name = "openlight-engine"
+description = "Lighting engine: show file, patch, fixture types, command line, DMX rendering and output runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "engine"
+
+[dependencies]
+dmx = { package = "openlight-dmx", path = "../dmx" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+zip = "2"
+roxmltree = "0.20"
+
+[dev-dependencies]

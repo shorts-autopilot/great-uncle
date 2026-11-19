@@ -1,0 +1,22 @@
+# Phase 1 demo — light two fixtures over the configured output.
+#
+#   cargo run -p openlight-console -- \
+#     --output 1=virtual \
+#     --script examples/phase1-demo.txt \
+#     --frames 30 --trace
+#
+# Lines starting with `#` are comments. Every line is one engine command, the
+# same text the GUI and the REPL will send.
+
+Import Gdtf "examples/gdtf/openlight-demo-wash.gdtf"
+
+Patch Fixture 1 At 1.001 Type "OpenLight Demo Wash" Mode "4ch"
+Patch Fixture 2 At 1.005 Type "OpenLight Demo Wash" Mode "4ch"
+
+# Address 1 is Dimmer, 2..4 are red, green and blue.
+Fixture 1 Thru 2 At Full
+
+Sheet
+Status
+
+Save "target/phase1-demo.olshow.json"

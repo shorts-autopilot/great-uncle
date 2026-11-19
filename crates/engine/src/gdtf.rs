@@ -1,0 +1,541 @@
+//! GDTF import.
+//!
+//! A `.gdtf` file is a zip archive holding `description.xml`. Only the parts the
+//! engine needs are read: attributes, DMX modes, channel offsets and the channel
+//! functions that describe each attribute's physical range.
+//!
+//! Deliberately not read (yet): wheels, models, physical descriptions, MP
+//! ranges, channel sets and 16-bit functions beyond their low byte. Everything
+//! skipped is reported as an import warning instead of failing the import.
+
+use std::fs::File;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+
+use roxmltree::{Document, Node};
+
+use crate::fixture_type::{AttributeDef, Channel, ChannelFunction, FixtureType, Mode};
+
+#[derive(Debug, Default)]
+pub struct ImportReport {
+    pub types: Vec<FixtureType>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{}: {kind}", path.display())]
+pub struct GdtfError {
+    pub path: PathBuf,
+    pub kind: GdtfErrorKind,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum GdtfErrorKind {
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
+    #[error("not a readable .gdtf archive: {0}")]
+    Archive(String),
+    #[error("archive has no description.xml")]
+    MissingDescription,
+    #[error("description.xml is not valid XML: {0}")]
+    Xml(String),
+    #[error("description.xml contains no <FixtureType>")]
+    NoFixtureType,
+}
+
+/// Read a `.gdtf` archive.
+pub fn import(path: &Path) -> Result<ImportReport, GdtfError> {
+    let file = File::open(path).map_err(|source| GdtfError {
+        path: path.to_path_buf(),
+        kind: GdtfErrorKind::Io(source),
+    })?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|error| GdtfError {
+        path: path.to_path_buf(),
+        kind: GdtfErrorKind::Archive(error.to_string()),
+    })?;
+
+    let mut xml = None;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|error| GdtfError {
+            path: path.to_path_buf(),
+            kind: GdtfErrorKind::Archive(error.to_string()),
+        })?;
+        let name = entry.name().replace('\\', "/").to_ascii_lowercase();
+        if name == "description.xml" || name.ends_with("/description.xml") {
+            let mut text = String::new();
+            entry
+                .read_to_string(&mut text)
+                .map_err(|source| GdtfError {
+                    path: path.to_path_buf(),
+                    kind: GdtfErrorKind::Io(source),
+                })?;
+            xml = Some(text);
+            break;
+        }
+    }
+
+    let xml = xml.ok_or_else(|| GdtfError {
+        path: path.to_path_buf(),
+        kind: GdtfErrorKind::MissingDescription,
+    })?;
+    parse_description(&xml).map_err(|kind| GdtfError {
+        path: path.to_path_buf(),
+        kind,
+    })
+}
+
+/// Parse the contents of `description.xml`.
+pub fn parse_description(xml: &str) -> Result<ImportReport, GdtfErrorKind> {
+    let document = Document::parse(xml).map_err(|error| GdtfErrorKind::Xml(error.to_string()))?;
+    let root = document.root_element();
+
+    let nodes: Vec<Node> = if root.has_tag_name("FixtureType") {
+        vec![root]
+    } else {
+        root.children()
+            .filter(|node| node.has_tag_name("FixtureType"))
+            .collect()
+    };
+
+    let mut types = Vec::new();
+    let mut warnings = Vec::new();
+    for node in nodes {
+        types.push(parse_fixture_type(node, &mut warnings));
+    }
+    if types.is_empty() {
+        return Err(GdtfErrorKind::NoFixtureType);
+    }
+    for fixture_type in &types {
+        if fixture_type.modes.is_empty() {
+            warnings.push(format!("{}: no DMX modes", fixture_type.key()));
+        }
+    }
+    Ok(ImportReport { types, warnings })
+}
+
+fn parse_fixture_type(node: Node, warnings: &mut Vec<String>) -> FixtureType {
+    let manufacturer = attribute(node, "Manufacturer").unwrap_or_default();
+    let name = attribute(node, "Name")
+        .or_else(|| attribute(node, "LongName"))
+        .unwrap_or_else(|| "Unnamed".to_string());
+    let description = attribute(node, "Description")
+        .or_else(|| attribute(node, "LongName"))
+        .unwrap_or_default();
+
+    let mut attributes = Vec::new();
+    if let Some(collect) = child(node, "Attributes") {
+        for attribute_node in collect.children().filter(|n| n.has_tag_name("Attribute")) {
+            let name = attribute(attribute_node, "Name").unwrap_or_default();
+            if name.is_empty() {
+                continue;
+            }
+            attributes.push(AttributeDef {
+                pretty: attribute(attribute_node, "Pretty").unwrap_or_else(|| name.clone()),
+                feature: attribute(attribute_node, "Feature").unwrap_or_default(),
+                unit: attribute(attribute_node, "PhysicalUnit").unwrap_or_default(),
+                name,
+            });
+        }
+    }
+
+    let mut modes = Vec::new();
+    if let Some(collect) = child(node, "DMXModes") {
+        for mode_node in collect.children().filter(|n| n.has_tag_name("DMXMode")) {
+            modes.push(parse_mode(mode_node, &manufacturer, &name, warnings));
+        }
+    }
+
+    FixtureType {
+        manufacturer,
+        name,
+        description,
+        attributes,
+        modes,
+    }
+}
+
+fn parse_mode(node: Node, manufacturer: &str, fixture: &str, warnings: &mut Vec<String>) -> Mode {
+    let name = attribute(node, "Name").unwrap_or_else(|| "Mode".to_string());
+    let context = format!("{manufacturer} {fixture} / {name}");
+    let mut channels = Vec::new();
+
+    if let Some(collect) = child(node, "DMXChannels") {
+        for channel_node in collect.children().filter(|n| n.has_tag_name("DMXChannel")) {
+            let dmx_break: u16 = attribute(channel_node, "DMXBreak")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(1);
+            if dmx_break != 1 {
+                warnings.push(format!(
+                    "{context}: channel on DMX break {dmx_break} skipped (only break 1 is output)"
+                ));
+                continue;
+            }
+
+            let offset = attribute(channel_node, "Offset")
+                .map(|value| parse_address(&value))
+                .unwrap_or(1);
+            if offset == 0 {
+                warnings.push(format!("{context}: channel with offset 0 skipped"));
+                continue;
+            }
+            let default_raw = attribute(channel_node, "Default")
+                .map(|value| parse_dmx_value(&value).1)
+                .unwrap_or(0);
+
+            let logical: Vec<Node> = channel_node
+                .children()
+                .filter(|n| n.has_tag_name("LogicalChannel"))
+                .collect();
+            let found_attribute = logical
+                .first()
+                .and_then(|node| attribute(*node, "Attribute"))
+                .or_else(|| attribute(channel_node, "Attribute"));
+            let Some(attribute_name) = found_attribute else {
+                warnings.push(format!(
+                    "{context}: channel at offset {offset} has no attribute, skipped"
+                ));
+                continue;
+            };
+            if logical.len() > 1 {
+                let ignored: Vec<String> = logical
+                    .iter()
+                    .skip(1)
+                    .filter_map(|node| attribute(*node, "Attribute"))
+                    .collect();
+                warnings.push(format!(
+                    "{context}: mutually exclusive logical channels on offset {offset}; \
+                     using `{attribute_name}` and ignoring {}",
+                    ignored.join(", ")
+                ));
+            }
+
+            let functions = logical
+                .first()
+                .map(|node| parse_functions(*node, &attribute_name, &context, warnings))
+                .unwrap_or_default();
+
+            channels.push(Channel {
+                offset,
+                attribute: attribute_name,
+                default_raw,
+                functions,
+            });
+        }
+    }
+
+    channels.sort_by_key(|channel| channel.offset);
+    Mode { name, channels }
+}
+
+fn parse_functions(
+    logical: Node,
+    attribute_name: &str,
+    context: &str,
+    warnings: &mut Vec<String>,
+) -> Vec<ChannelFunction> {
+    struct Raw {
+        name: String,
+        from: (u8, u8),
+        to: Option<(u8, u8)>,
+        physical_from: f64,
+        physical_to: f64,
+    }
+
+    let mut raw_functions = Vec::new();
+    for node in logical
+        .children()
+        .filter(|n| n.has_tag_name("ChannelFunction"))
+    {
+        let name = attribute(node, "Name").unwrap_or_else(|| attribute_name.to_string());
+        let from = attribute(node, "DMXFrom")
+            .map(|value| parse_dmx_value(&value))
+            .unwrap_or((0, 1));
+        let to = attribute(node, "DMXTo").map(|value| parse_dmx_value(&value));
+        let physical_from = attribute(node, "PhysicalFrom")
+            .and_then(|value| value.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        let physical_to = attribute(node, "PhysicalTo")
+            .and_then(|value| value.parse::<f64>().ok())
+            .unwrap_or(1.0);
+        raw_functions.push(Raw {
+            name,
+            from,
+            to,
+            physical_from,
+            physical_to,
+        });
+    }
+
+    raw_functions.sort_by_key(|function| (function.from.0, function.from.1));
+    let mut functions = Vec::new();
+    for (index, raw) in raw_functions.iter().enumerate() {
+        let wide = raw.from.0 != 0 || raw.to.map(|(byte, _)| byte != 0).unwrap_or(false);
+        if wide {
+            warnings.push(format!(
+                "{context}: 16-bit function `{}` treated as 8-bit",
+                raw.name
+            ));
+        }
+        let dmx_from = raw.from.1;
+        let dmx_to = match raw.to {
+            Some((_, value)) => value,
+            None => raw_functions
+                .get(index + 1)
+                .map(|next| next.from.1.saturating_sub(1))
+                .unwrap_or(255),
+        };
+        if dmx_to < dmx_from {
+            warnings.push(format!(
+                "{context}: function `{}` has DMX range {dmx_from}..{dmx_to}, ignored",
+                raw.name
+            ));
+            continue;
+        }
+        functions.push(ChannelFunction {
+            name: raw.name.clone(),
+            dmx_from,
+            dmx_to,
+            physical_from: raw.physical_from,
+            physical_to: raw.physical_to,
+        });
+    }
+
+    if functions.is_empty() {
+        functions.push(ChannelFunction {
+            name: attribute_name.to_string(),
+            ..ChannelFunction::default()
+        });
+    }
+    functions
+}
+
+fn attribute(node: Node, name: &str) -> Option<String> {
+    node.attribute(name)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn child<'a, 'input>(node: Node<'a, 'input>, name: &str) -> Option<Node<'a, 'input>> {
+    node.children().find(|child| child.has_tag_name(name))
+}
+
+/// GDTF `DMXValue` is `byte/value`; plain numbers are a byte 0 value.
+fn parse_dmx_value(raw: &str) -> (u8, u8) {
+    match raw.split_once('/') {
+        Some((byte, value)) => (
+            byte.trim().parse().unwrap_or(0),
+            value.trim().parse().unwrap_or(0),
+        ),
+        None => (0, raw.trim().parse().unwrap_or(0)),
+    }
+}
+
+/// GDTF `DMXAddress` may be `universe/address`; channel offsets are relative.
+fn parse_address(raw: &str) -> u16 {
+    raw.rsplit('/')
+        .next()
+        .unwrap_or(raw)
+        .trim()
+        .parse()
+        .unwrap_or(1)
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use std::io::{Cursor, Write};
+
+    pub(crate) const DEMO_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<GDTF DataVersion="1.2">
+  <FixtureType Name="Demo Wash" ShortName="Demo" Manufacturer="OpenLight"
+               Description="Synthetic four channel wash for tests and demos.">
+    <Attributes>
+      <Attribute Name="Dimmer" Pretty="Dimmer" Feature="Dimmer" PhysicalUnit="Percent"/>
+      <Attribute Name="ColorAdd_R" Pretty="Red" Feature="Color" PhysicalUnit="Percent"/>
+      <Attribute Name="ColorAdd_G" Pretty="Green" Feature="Color" PhysicalUnit="Percent"/>
+      <Attribute Name="ColorAdd_B" Pretty="Blue" Feature="Color" PhysicalUnit="Percent"/>
+    </Attributes>
+    <DMXModes>
+      <DMXMode Name="4ch" Geometry="Body">
+        <DMXChannels>
+          <DMXChannel DMXBreak="1" Offset="1" Default="0/0" Geometry="Body">
+            <LogicalChannel Attribute="Dimmer">
+              <ChannelFunction Name="Dimmer" Attribute="Dimmer"
+                               DMXFrom="0/0" DMXTo="0/255"
+                               PhysicalFrom="0" PhysicalTo="100"/>
+            </LogicalChannel>
+          </DMXChannel>
+          <DMXChannel DMXBreak="1" Offset="2" Default="0/0" Geometry="Body">
+            <LogicalChannel Attribute="ColorAdd_R">
+              <ChannelFunction Name="Red" Attribute="ColorAdd_R"
+                               DMXFrom="0/0" DMXTo="0/255"
+                               PhysicalFrom="0" PhysicalTo="100"/>
+            </LogicalChannel>
+          </DMXChannel>
+          <DMXChannel DMXBreak="1" Offset="3" Default="0/0" Geometry="Body">
+            <LogicalChannel Attribute="ColorAdd_G">
+              <ChannelFunction Name="Green" Attribute="ColorAdd_G"
+                               DMXFrom="0/0" DMXTo="0/255"
+                               PhysicalFrom="0" PhysicalTo="100"/>
+            </LogicalChannel>
+          </DMXChannel>
+          <DMXChannel DMXBreak="1" Offset="4" Default="0/0" Geometry="Body">
+            <LogicalChannel Attribute="ColorAdd_B">
+              <ChannelFunction Name="Blue" Attribute="ColorAdd_B"
+                               DMXFrom="0/0" DMXTo="0/255"
+                               PhysicalFrom="0" PhysicalTo="100"/>
+            </LogicalChannel>
+          </DMXChannel>
+        </DMXChannels>
+      </DMXMode>
+    </DMXModes>
+  </FixtureType>
+</GDTF>
+"#;
+
+    #[test]
+    fn parses_fixture_type_mode_and_channels() {
+        let report = parse_description(DEMO_XML).unwrap();
+        assert_eq!(report.types.len(), 1);
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+
+        let fixture_type = &report.types[0];
+        assert_eq!(fixture_type.key(), "OpenLight Demo Wash");
+        assert_eq!(fixture_type.attributes.len(), 4);
+        assert_eq!(fixture_type.modes.len(), 1);
+
+        let mode = &fixture_type.modes[0];
+        assert_eq!(mode.name, "4ch");
+        assert_eq!(mode.footprint(), 4);
+        assert_eq!(
+            mode.channels
+                .iter()
+                .map(|channel| channel.attribute.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Dimmer", "ColorAdd_R", "ColorAdd_G", "ColorAdd_B"]
+        );
+        let dimmer = mode.channel_for("Dimmer").unwrap();
+        assert_eq!(dimmer.raw_from_level(1.0), 255);
+        assert_eq!(dimmer.raw_from_level(0.0), 0);
+        assert_eq!(fixture_type.pretty_attribute("ColorAdd_R"), "Red");
+    }
+
+    #[test]
+    fn dmx_to_defaults_to_next_function_start_minus_one() {
+        let xml = r#"<GDTF><FixtureType Name="Two" Manufacturer="OL">
+          <DMXModes><DMXMode Name="M"><DMXChannels>
+            <DMXChannel Offset="1"><LogicalChannel Attribute="Dimmer">
+              <ChannelFunction Name="Off" DMXFrom="0/0" PhysicalFrom="0" PhysicalTo="1"/>
+              <ChannelFunction Name="On" DMXFrom="0/128" PhysicalFrom="1" PhysicalTo="2"/>
+            </LogicalChannel></DMXChannel>
+          </DMXChannels></DMXMode></DMXModes>
+        </FixtureType></GDTF>"#;
+        let report = parse_description(xml).unwrap();
+        let functions = &report.types[0].modes[0].channels[0].functions;
+        assert_eq!(functions.len(), 2);
+        assert_eq!((functions[0].dmx_from, functions[0].dmx_to), (0, 127));
+        assert_eq!((functions[1].dmx_from, functions[1].dmx_to), (128, 255));
+    }
+
+    #[test]
+    fn missing_dmx_to_on_last_function_is_255() {
+        let xml = r#"<GDTF><FixtureType Name="One" Manufacturer="OL">
+          <DMXModes><DMXMode Name="M"><DMXChannels>
+            <DMXChannel Offset="1"><LogicalChannel Attribute="Dimmer">
+              <ChannelFunction DMXFrom="0/0"/>
+            </LogicalChannel></DMXChannel>
+          </DMXChannels></DMXMode></DMXModes>
+        </FixtureType></GDTF>"#;
+        let report = parse_description(xml).unwrap();
+        let function = &report.types[0].modes[0].channels[0].functions[0];
+        assert_eq!((function.dmx_from, function.dmx_to), (0, 255));
+    }
+
+    #[test]
+    fn channel_without_functions_still_becomes_linear() {
+        let xml = r#"<GDTF><FixtureType Name="One" Manufacturer="OL">
+          <DMXModes><DMXMode Name="M"><DMXChannels>
+            <DMXChannel Offset="1"><LogicalChannel Attribute="Dimmer"/></DMXChannel>
+          </DMXChannels></DMXMode></DMXModes>
+        </FixtureType></GDTF>"#;
+        let report = parse_description(xml).unwrap();
+        let channel = &report.types[0].modes[0].channels[0];
+        assert_eq!(channel.functions.len(), 1);
+        assert_eq!(channel.raw_from_level(1.0), 255);
+    }
+
+    #[test]
+    fn non_break_1_channels_are_skipped_with_a_warning() {
+        let xml = r#"<GDTF><FixtureType Name="One" Manufacturer="OL">
+          <DMXModes><DMXMode Name="M"><DMXChannels>
+            <DMXChannel Offset="1" DMXBreak="2"><LogicalChannel Attribute="Dimmer"/></DMXChannel>
+            <DMXChannel Offset="2"><LogicalChannel Attribute="ColorAdd_R"/></DMXChannel>
+          </DMXChannels></DMXMode></DMXModes>
+        </FixtureType></GDTF>"#;
+        let report = parse_description(xml).unwrap();
+        assert_eq!(report.types[0].modes[0].channels.len(), 1);
+        assert!(report.warnings.iter().any(|w| w.contains("break 2")));
+    }
+
+    #[test]
+    fn sixteen_bit_functions_warn_about_loss() {
+        let xml = r#"<GDTF><FixtureType Name="Wide" Manufacturer="OL">
+          <DMXModes><DMXMode Name="M"><DMXChannels>
+            <DMXChannel Offset="1"><LogicalChannel Attribute="Pan">
+              <ChannelFunction DMXFrom="0/0" DMXTo="1/255"/>
+            </LogicalChannel></DMXChannel>
+          </DMXChannels></DMXMode></DMXModes>
+        </FixtureType></GDTF>"#;
+        let report = parse_description(xml).unwrap();
+        assert!(report.warnings.iter().any(|w| w.contains("16-bit")));
+    }
+
+    #[test]
+    fn missing_fixture_type_is_an_error() {
+        assert!(matches!(
+            parse_description("<GDTF></GDTF>"),
+            Err(GdtfErrorKind::NoFixtureType)
+        ));
+        assert!(matches!(
+            parse_description("<not xml"),
+            Err(GdtfErrorKind::Xml(_))
+        ));
+    }
+
+    #[test]
+    fn imports_from_a_real_zip_archive() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        writer.start_file("description.xml", options).unwrap();
+        writer.write_all(DEMO_XML.as_bytes()).unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+
+        let path =
+            std::env::temp_dir().join(format!("openlight-test-{}-demo.gdtf", std::process::id()));
+        std::fs::write(&path, bytes).unwrap();
+        let report = import(&path).unwrap();
+        assert_eq!(report.types[0].key(), "OpenLight Demo Wash");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn archive_without_description_is_an_error() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        writer.start_file("thumbnail.png", options).unwrap();
+        writer.write_all(b"not an image").unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+
+        let path =
+            std::env::temp_dir().join(format!("openlight-test-{}-empty.gdtf", std::process::id()));
+        std::fs::write(&path, bytes).unwrap();
+        assert!(matches!(
+            import(&path),
+            Err(GdtfError {
+                kind: GdtfErrorKind::MissingDescription,
+                ..
+            })
+        ));
+        let _ = std::fs::remove_file(&path);
+    }
+}

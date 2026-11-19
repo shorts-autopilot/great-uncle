@@ -1,47 +1,83 @@
-<div align="center">
+# OpenLight
 
-# 🤔 Project Name
+A lighting console for DMX512 rigs, built as a native desktop application. The
+engine, the show file and the command language are written from scratch in
+Rust; output goes to a **serial port** rather than over the network, so a plain
+USB-serial adapter is enough.
 
-*hmm i wonder where this has inspiration from hmm*
+OpenLight is an independent project. It is not affiliated with, endorsed by, or
+derived from any console manufacturer, and it ships no third-party fixture
+profiles, icons, manual text or artwork. Fixtures are read from open GDTF
+profiles that you supply.
 
-[![Status](https://shields.io)]()
-[![Inspiration](https://shields.io)]()
-[![License](https://shields.io)]()
+## Status
 
-</div>
+| Phase | Scope | State |
+|---|---|---|
+| 0 | Manual crawl → feature specification | done — see [`spec/REPORT.md`](spec/REPORT.md) |
+| 1 | Engine, show file, command line, DMX output | done — see [`docs/PHASE1.md`](docs/PHASE1.md) |
+| 2+ | Programming, playback, effects, UI | not started |
 
----
+Phase 1 is a headless console: a CLI with a REPL, a script runner and four
+output transports. There is no GUI yet.
 
-## 📖 About
+## Quick start
 
-> *"hmm i wonder where this has inspiration from hmm"*  
-> — Everyone looking at this repository
+```bash
+cargo test --workspace            # 83 tests, no hardware needed
+cargo run -p openlight-console    # interactive console
+```
 
-This project is a completely, 100% original creation that definitely did not draw any ideas, layouts, or mechanics from anywhere else. Any similarities to existing projects, famous games, or popular apps are purely coincidental.
+Light two fixtures on a virtual universe:
 
-## ✨ Key Features
+```bash
+python3 tools/make_demo_gdtf.py   # writes examples/gdtf/openlight-demo-wash.gdtf
+cargo run -p openlight-console -- \
+  --output 1=virtual \
+  --script examples/phase1-demo.txt \
+  --frames 20 --trace
+```
 
-- **Totally Unique Concept:** Built from the ground up with zero outside influence.
-- **Suspiciously Familiar Vibes:** Feels weirdly intuitive right out of the box.
-- **Plausible Deniability:** Fully documented to ensure nobody asks too many questions.
+The trace line ends with the first slots of the frame that went out:
 
-## 🚀 Getting Started
+```
+Universe 1: 20 frames, last frame 513 bytes, start code 0x00, 2 non-zero slots
+  00 FF 00 00 00 FF 00 00 …
+```
 
-1. Clone this completely original repository:
-   ```bash
-   git clone https://github.com
-   ```
-2. Navigate into the folder:
-   ```bash
-   cd your-repo-name
-   ```
-3. Run it and try not to think too hard about where you've seen this before.
+`00` is the DMX start code, `FF` at address 1 and 5 is the dimmer of each wash.
 
-## 🕵️‍♂️ Acknowledgments & Inspiration
+Send the same look to real hardware:
 
-- **Inspiration:** Wouldn't you like to know.
-- **Special Thanks:** Nobody in particular.
+```bash
+# bare USB-serial adapter (FTDI/CH340), 250 kbaud 8N2 with break and MAB
+cargo run -p openlight-console -- --output 1=generic:/dev/ttyUSB0 \
+  --script examples/phase1-demo.txt
 
-## 📄 License
+# ENTTEC DMX USB Pro (or DMX King in Pro-compatible mode)
+cargo run -p openlight-console -- --output 1=enttec:/dev/ttyUSB0
+```
 
-Distributed under the MIT License. See `LICENSE` for more information.
+## Layout
+
+```
+crates/dmx/       DMX512 transports: virtual, generic serial, ENTTEC, uDMX
+crates/engine/    show file, fixture types, GDTF import, commands, render, output runtime
+crates/console/   the `openlight` binary: CLI, REPL, script runner
+examples/         a demo show script and its synthetic GDTF profile
+tools/            manual crawler (Phase 0) and the demo profile generator
+spec/             the Phase 0 feature specification and evidence
+docs/             per-phase design notes
+```
+
+## Documentation
+
+- [`docs/PHASE1.md`](docs/PHASE1.md) — architecture, command reference, output
+  transports, test evidence, known limitations.
+- [`spec/matrix.md`](spec/matrix.md) — the Phase 0 feature matrix this work is
+  measured against.
+- [`spec/SCHEMA.md`](spec/SCHEMA.md) — how the crawled specification is stored.
+
+## Licence
+
+MIT.
