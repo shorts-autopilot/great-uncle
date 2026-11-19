@@ -19,6 +19,8 @@ use crate::show::Show;
 
 /// Longest fade or delay accepted, in seconds (24 hours).
 pub const MAX_TIME: f64 = 86_400.0;
+/// Largest cue number accepted, so a typo cannot produce unreadable output.
+pub const MAX_CUE_NUMBER: f64 = 1_000_000.0;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -125,20 +127,14 @@ impl Target {
             Target::Executor(number) => format!("Executor {number}"),
         }
     }
-
-    pub fn number(self) -> u16 {
-        match self {
-            Target::Sequence(number) | Target::Executor(number) => number,
-        }
-    }
 }
 
 /// One running cue transition.
 #[derive(Debug, Clone)]
 pub struct Run {
-    pub target: Target,
-    pub sequence: u16,
-    pub cue_index: usize,
+    /// Cue number, not its position: deleting an earlier cue must not make the
+    /// running playback point at the wrong cue.
+    pub cue_number: f64,
     from: Levels,
     to: Levels,
     start: Instant,
@@ -146,6 +142,8 @@ pub struct Run {
     fade: Duration,
     paused: Option<Levels>,
     paused_progress: f64,
+    paused_delay: Duration,
+    paused_fade: Duration,
     pub done: bool,
 }
 
@@ -168,14 +166,6 @@ impl Run {
 
     pub fn is_paused(&self) -> bool {
         self.paused.is_some()
-    }
-
-    pub fn fade(&self) -> Duration {
-        self.fade
-    }
-
-    pub fn delay(&self) -> Duration {
-        self.delay
     }
 
     /// Output of this playback at `now`.
@@ -248,9 +238,7 @@ impl Playback {
         self.runs.insert(
             target,
             Run {
-                target,
-                sequence: sequence_number,
-                cue_index,
+                cue_number: cue.number,
                 from,
                 to,
                 start: now,
@@ -258,18 +246,24 @@ impl Playback {
                 fade: seconds(cue.fade),
                 paused: None,
                 paused_progress: 1.0,
+                paused_delay: Duration::ZERO,
+                paused_fade: Duration::ZERO,
                 done: false,
             },
         );
         Ok(())
     }
 
-    /// Freeze a running cue where it is.
+    /// Freeze a running cue where it is, remembering the delay and fade time
+    /// that are still to come.
     pub fn pause(&mut self, target: Target, now: Instant) -> bool {
         match self.runs.get_mut(&target) {
             Some(run) if run.paused.is_none() => {
                 let progress = run.progress(now);
                 let levels = run.levels_at(now);
+                let elapsed = now.saturating_duration_since(run.start);
+                run.paused_delay = run.delay.saturating_sub(elapsed);
+                run.paused_fade = run.fade.mul_f64((1.0 - progress).clamp(0.0, 1.0));
                 run.paused = Some(levels);
                 run.paused_progress = progress;
                 true
@@ -278,7 +272,7 @@ impl Playback {
         }
     }
 
-    /// Continue a paused cue for the time that was left on its fade.
+    /// Continue a paused cue with the time that was left on its delay and fade.
     pub fn resume(&mut self, target: Target, now: Instant) -> bool {
         let Some(run) = self.runs.get_mut(&target) else {
             return false;
@@ -286,12 +280,9 @@ impl Playback {
         let Some(levels) = run.paused.take() else {
             return false;
         };
-        let remaining = run
-            .fade
-            .mul_f64((1.0 - run.paused_progress).clamp(0.0, 1.0));
         run.from = levels;
-        run.delay = Duration::ZERO;
-        run.fade = remaining;
+        run.delay = run.paused_delay;
+        run.fade = run.paused_fade;
         run.start = now;
         run.paused_progress = 1.0;
         true
@@ -500,6 +491,44 @@ mod tests {
             .unwrap()
             .levels_at(start + Duration::from_millis(1200));
         assert_eq!(finished.get(1, "Dimmer"), Some(1.0));
+    }
+
+    #[test]
+    fn pause_during_a_delay_keeps_the_remaining_delay() {
+        let mut show = demo_show();
+        let mut sequence = sequence();
+        sequence.cues[1].delay = 1.0;
+        show.sequences.push(sequence);
+        let start = Instant::now();
+        let mut playback = Playback::new();
+        playback
+            .go(&show, Target::Sequence(1), 1, 0, start)
+            .unwrap();
+        playback
+            .go(&show, Target::Sequence(1), 1, 1, start)
+            .unwrap();
+
+        assert!(playback.pause(Target::Sequence(1), start + Duration::from_millis(500)));
+        assert!(playback.resume(Target::Sequence(1), start + Duration::from_millis(600)));
+
+        let held = playback
+            .run(Target::Sequence(1))
+            .unwrap()
+            .levels_at(start + Duration::from_millis(900));
+        assert_eq!(
+            held.get(1, "Dimmer"),
+            Some(0.5),
+            "500 ms of delay were left after resuming at 600 ms"
+        );
+        let moving = playback
+            .run(Target::Sequence(1))
+            .unwrap()
+            .levels_at(start + Duration::from_millis(1600));
+        assert_eq!(
+            moving.get(1, "Dimmer"),
+            Some(0.75),
+            "half of the remaining fade"
+        );
     }
 
     #[test]

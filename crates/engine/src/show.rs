@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::fixture_type::{FixtureType, Mode};
 use crate::palette::Palette;
 use crate::patch::{self, PatchRange};
-use crate::playback::{Executor, Sequence, MAX_TIME};
+use crate::playback::{format_cue_number, Executor, Sequence, MAX_CUE_NUMBER, MAX_TIME};
 
 pub const SHOW_FORMAT: &str = "openlight-show";
 pub const SHOW_VERSION: u32 = 2;
@@ -441,31 +441,19 @@ impl Show {
                     sequence.cues.len()
                 ));
             }
-            let mut cue_numbers: Vec<f64> = Vec::new();
             for cue in &sequence.cues {
-                if !cue.number.is_finite() || cue.number < 0.0 {
+                let label = format_cue_number(cue.number);
+                if !cue.number.is_finite() || !(0.0..=MAX_CUE_NUMBER).contains(&cue.number) {
                     problems.push(format!(
-                        "sequence {}: cue number {} is not a finite positive number",
-                        sequence.number, cue.number
+                        "sequence {}: cue number {label} is outside 0..={MAX_CUE_NUMBER}",
+                        sequence.number
                     ));
                 }
-                if cue_numbers
-                    .iter()
-                    .any(|number| (*number - cue.number).abs() < 1e-9)
-                {
-                    problems.push(format!(
-                        "sequence {}: cue {} is defined twice",
-                        sequence.number,
-                        crate::playback::format_cue_number(cue.number)
-                    ));
-                }
-                cue_numbers.push(cue.number);
                 for (name, value) in [("fade", cue.fade), ("delay", cue.delay)] {
                     if !value.is_finite() || !(0.0..=MAX_TIME).contains(&value) {
                         problems.push(format!(
-                            "sequence {} cue {}: {name} {value} is outside 0..={MAX_TIME} seconds",
-                            sequence.number,
-                            crate::playback::format_cue_number(cue.number)
+                            "sequence {} cue {label}: {name} {value} is outside 0..={MAX_TIME} seconds",
+                            sequence.number
                         ));
                     }
                 }
@@ -473,28 +461,36 @@ impl Show {
                     for (attribute, level) in attributes {
                         if attribute.trim().is_empty() {
                             problems.push(format!(
-                                "sequence {} cue {}: value without an attribute",
-                                sequence.number,
-                                crate::playback::format_cue_number(cue.number)
+                                "sequence {} cue {label}: value without an attribute",
+                                sequence.number
                             ));
                         }
                         if !level.is_finite() || !(0.0..=1.0).contains(level) {
                             problems.push(format!(
-                                "sequence {} cue {}: fixture {fixture} `{attribute}` is {level}, expected 0..=1",
-                                sequence.number,
-                                crate::playback::format_cue_number(cue.number)
+                                "sequence {} cue {label}: fixture {fixture} `{attribute}` is {level}, expected 0..=1",
+                                sequence.number
                             ));
                         }
                     }
                 }
             }
+            // Playback advances through the list in order, so a cue that is out
+            // of order or repeated is rejected here, not discovered mid-show.
+            // Cues are sorted, which makes this an O(n) adjacent check.
             for pair in sequence.cues.windows(2) {
-                if pair[0].number > pair[1].number {
+                let (previous, next) = (&pair[0], &pair[1]);
+                if (next.number - previous.number).abs() < 1e-9 {
+                    problems.push(format!(
+                        "sequence {}: cue {} is defined twice",
+                        sequence.number,
+                        format_cue_number(next.number)
+                    ));
+                } else if next.number < previous.number {
                     problems.push(format!(
                         "sequence {}: cue {} comes after cue {} and is not in ascending order",
                         sequence.number,
-                        crate::playback::format_cue_number(pair[1].number),
-                        crate::playback::format_cue_number(pair[0].number)
+                        format_cue_number(next.number),
+                        format_cue_number(previous.number)
                     ));
                 }
             }
@@ -849,6 +845,13 @@ mod tests {
                     delay: 0.0,
                     levels: Levels::new(),
                 },
+                Cue {
+                    number: 1.0,
+                    name: String::new(),
+                    fade: 0.0,
+                    delay: 0.0,
+                    levels: Levels::new(),
+                },
             ],
         });
         show.executors.push(Executor {
@@ -863,6 +866,7 @@ mod tests {
         assert!(problems.iter().any(|p| p.contains("number 0")));
         assert!(problems.iter().any(|p| p.contains("fade -1")));
         assert!(problems.iter().any(|p| p.contains("ascending order")));
+        assert!(problems.iter().any(|p| p.contains("defined twice")));
         assert!(problems.iter().any(|p| p.contains("sequence 9")));
         assert!(problems.iter().any(|p| p.contains("fader 2")));
     }

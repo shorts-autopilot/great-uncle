@@ -17,7 +17,9 @@ use crate::levels::Levels;
 use crate::output::{lock, OutputStatus};
 use crate::palette::{self, Palette};
 use crate::patch::PatchRange;
-use crate::playback::{format_cue_number, Executor, Playback, Sequence, Target, MAX_TIME};
+use crate::playback::{
+    format_cue_number, Cue, Executor, Playback, Sequence, Target, MAX_CUE_NUMBER, MAX_TIME,
+};
 use crate::render::{self, OutputFrame};
 use crate::show::{Fixture, Show};
 
@@ -634,10 +636,11 @@ impl Engine {
         }
         let mut lines = vec![format!(
             "{:<4} {:<22} {:<26} {:<10} {:<10} {}",
-            "No.", "Name", "Type", "Mode", "Patch", "Levels"
+            "No.", "Name", "Type", "Mode", "Patch", "Output"
         )];
         let mut fixtures: Vec<&Fixture> = self.show.fixtures.iter().collect();
         fixtures.sort_by_key(|fixture| fixture.number);
+        let playback = self.playback.output();
 
         for fixture in fixtures {
             let (patch, levels) = match self.show.mode_for(fixture) {
@@ -648,12 +651,18 @@ impl Engine {
                         if !seen.insert(channel.attribute.to_ascii_lowercase()) {
                             continue;
                         }
-                        let level = fixture
+                        // The sheet shows what the rig is doing, including playback.
+                        let programmer = fixture
                             .levels
                             .iter()
                             .find(|(name, _)| name.eq_ignore_ascii_case(&channel.attribute))
-                            .map(|(_, level)| *level)
-                            .unwrap_or(0.0);
+                            .map(|(_, level)| *level);
+                        let level =
+                            match (programmer, playback.get(fixture.number, &channel.attribute)) {
+                                (Some(value), _) => value,
+                                (None, Some(value)) => value,
+                                (None, None) => 0.0,
+                            };
                         parts.push(format!(
                             "{} {}%",
                             fixture_type.pretty_attribute(&channel.attribute),
@@ -980,9 +989,9 @@ impl Engine {
         if sequence_number == 0 {
             return Err(CommandError::new("sequence number 0 is not allowed"));
         }
-        if !number.is_finite() || number < 0.0 {
+        if !number.is_finite() || !(0.0..=MAX_CUE_NUMBER).contains(&number) {
             return Err(CommandError::new(format!(
-                "cue number {number} is not a finite positive number"
+                "cue number {number} is outside 0..={MAX_CUE_NUMBER}"
             )));
         }
         for (label, value) in [("fade", fade), ("delay", delay)] {
@@ -1052,7 +1061,7 @@ impl Engine {
                 }
                 None => sequence.cues.insert(
                     insertion,
-                    crate::playback::Cue {
+                    Cue {
                         number,
                         name: cue_name.clone(),
                         fade,
@@ -1289,13 +1298,7 @@ impl Engine {
                     } else {
                         format!("{:.0}%", run.progress(self.clock) * 100.0)
                     };
-                    let cue = self
-                        .show
-                        .sequence(run.sequence)
-                        .and_then(|sequence| sequence.cues.get(run.cue_index))
-                        .map(|cue| format_cue_number(cue.number))
-                        .unwrap_or_else(|| "-".to_string());
-                    (state, cue)
+                    (state, format_cue_number(run.cue_number))
                 }
                 None => ("idle".to_string(), "-".to_string()),
             };
@@ -1363,14 +1366,10 @@ impl Engine {
     }
 
     fn running_cue_label(&self, target: Target) -> String {
-        let Some(run) = self.playback.run(target) else {
-            return "cue -".to_string();
-        };
-        self.show
-            .sequence(run.sequence)
-            .and_then(|sequence| sequence.cues.get(run.cue_index))
-            .map(|cue| format!("cue {}", format_cue_number(cue.number)))
-            .unwrap_or_else(|| "cue -".to_string())
+        match self.playback.run(target) {
+            Some(run) => format!("cue {}", format_cue_number(run.cue_number)),
+            None => "cue -".to_string(),
+        }
     }
 
     fn playback_go(
@@ -1408,8 +1407,10 @@ impl Engine {
             ));
         }
 
+        // Advance from the running cue's *number*, so deleting or inserting
+        // cues under a running playback cannot make it jump over one.
         let index = match self.playback.run(target) {
-            Some(run) => run.cue_index + 1,
+            Some(run) => sequence.insertion_index(run.cue_number),
             None => 0,
         };
         if index >= sequence.cues.len() {
@@ -1450,19 +1451,29 @@ impl Engine {
     ) -> Result<CommandOutcome, CommandError> {
         let target = self.resolve_target(reference)?;
         let sequence_number = self.sequence_number_for(target)?;
-        let Some(cue_index) = self.playback.run(target).map(|run| run.cue_index) else {
+        let Some(cue_number) = self.playback.run(target).map(|run| run.cue_number) else {
             return Ok(CommandOutcome::message(format!(
                 "{} is not running",
                 target.label()
             )));
         };
-        if cue_index == 0 {
+        let Some(sequence) = self.show.sequence(sequence_number).cloned() else {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence_number} does not exist"),
+                "store a cue first: `Store Cue 1`",
+            ));
+        };
+        // If the cue itself was deleted, go back from where it would sit.
+        let position = sequence
+            .cue_index(cue_number)
+            .unwrap_or_else(|| sequence.insertion_index(cue_number));
+        if position == 0 {
             return Ok(CommandOutcome::message(format!(
                 "{} is at the first cue",
                 target.label()
             )));
         }
-        let index = cue_index - 1;
+        let index = position - 1;
         self.playback
             .go(&self.show, target, sequence_number, index, self.clock)
             .map_err(CommandError::new)?;
@@ -2070,6 +2081,54 @@ mod tests {
     }
 
     #[test]
+    fn sheet_shows_the_live_output() {
+        let mut engine = engine();
+        let start = engine.clock();
+        engine.tick(start);
+        engine.execute("Fixture 1 At 40").unwrap();
+        assert!(engine.execute("Sheet").unwrap().lines[1].contains("Dimmer 40%"));
+
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Clear All").unwrap();
+        engine.execute("Go Sequence 1").unwrap();
+        engine.tick(start);
+        let sheet = engine.execute("Sheet").unwrap();
+        assert!(
+            sheet.lines[1].contains("Dimmer 40%"),
+            "playback drives the sheet after the programmer is cleared: {:?}",
+            sheet.lines
+        );
+    }
+
+    #[test]
+    fn deleting_a_cue_keeps_a_running_playback_on_its_own_number() {
+        let mut engine = engine();
+        let start = engine.clock();
+        engine.tick(start);
+        engine.execute("Fixture 1 At 20").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Fixture 1 At 60").unwrap();
+        engine.execute("Store Cue 2").unwrap();
+        engine.execute("Clear All").unwrap();
+
+        engine.execute("Go Sequence 1").unwrap();
+        engine.tick(start);
+        engine.execute("Delete Cue 1").unwrap();
+        let status = engine.execute("Status").unwrap().lines.join("\n");
+        assert!(status.contains("cue 1"), "{status}");
+
+        engine.execute("Go Sequence 1").unwrap();
+        engine.tick(start);
+        assert_eq!(
+            engine.render().slot(1, 1),
+            Some(153),
+            "Go moves to cue 2, which is now the only cue"
+        );
+        let status = engine.execute("Status").unwrap().lines.join("\n");
+        assert!(status.contains("cue 2"), "{status}");
+    }
+
+    #[test]
     fn clear_values_hands_a_fixture_back_to_playback() {
         let mut engine = engine();
         let start = engine.clock();
@@ -2138,6 +2197,9 @@ mod tests {
         let error = engine.execute("Executor 2 At 50").unwrap_err();
         assert!(error.message.contains("executor 2"), "{error}");
         assert!(engine.execute("Delete Cue 7 Sequence 1").is_err());
+
+        let error = engine.execute("Store Cue 2000000").unwrap_err();
+        assert!(error.message.contains("outside"), "{error}");
     }
 
     #[test]

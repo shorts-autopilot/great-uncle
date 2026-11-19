@@ -56,14 +56,6 @@ impl Palette {
             .find(|(key, _)| key.eq_ignore_ascii_case(type_key))
             .map(|(_, values)| values)
     }
-
-    /// Number of fixture types and values the palette holds.
-    pub fn counts(&self) -> (usize, usize) {
-        (
-            self.values.len(),
-            self.values.values().map(BTreeMap::len).sum(),
-        )
-    }
 }
 
 /// Pool for one attribute of one fixture type.

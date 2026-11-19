@@ -26,7 +26,7 @@ executor fader. There is no GUI yet.
 ## Quick start
 
 ```bash
-cargo test --workspace            # 121 tests, no hardware needed
+cargo test --workspace            # 124 tests, no hardware needed
 cargo run -p openlight-console    # interactive console
 ```
 

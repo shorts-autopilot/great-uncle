@@ -32,22 +32,10 @@ impl Levels {
         self.fixtures.values().map(BTreeMap::len).sum()
     }
 
-    pub fn fixture_count(&self) -> usize {
-        self.fixtures.len()
-    }
-
-    pub fn fixture(&self, number: u16) -> Option<&BTreeMap<String, f64>> {
-        self.fixtures.get(&number)
-    }
-
     pub fn fixtures(&self) -> impl Iterator<Item = (u16, &BTreeMap<String, f64>)> {
         self.fixtures
             .iter()
             .map(|(number, attributes)| (*number, attributes))
-    }
-
-    pub fn fixture_numbers(&self) -> impl Iterator<Item = u16> + '_ {
-        self.fixtures.keys().copied()
     }
 
     /// Case-insensitive attribute lookup.
@@ -67,10 +55,6 @@ impl Levels {
             .find(|name| name.eq_ignore_ascii_case(attribute))
             .cloned();
         attributes.insert(key.unwrap_or_else(|| attribute.to_string()), level);
-    }
-
-    pub fn remove(&mut self, fixture: u16) {
-        self.fixtures.remove(&fixture);
     }
 
     pub fn clear(&mut self) {
@@ -184,18 +168,6 @@ impl Levels {
             }
         }
         result
-    }
-
-    /// Every attribute name in use, useful for error messages and listings.
-    pub fn attributes(&self) -> Vec<String> {
-        let mut attributes: Vec<String> = self
-            .fixtures
-            .values()
-            .flat_map(|map| map.keys().cloned())
-            .collect();
-        attributes.sort();
-        attributes.dedup();
-        attributes
     }
 }
 

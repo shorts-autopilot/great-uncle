@@ -56,6 +56,9 @@ Three consequences, worth knowing before programming:
 3. **Playback is not saved.** Cue data and fader positions are part of the show;
    "which cue is running" is not. Loading a show starts idle.
 
+`Sheet` prints the current **output**, not just the programmer, so it shows what
+playback is doing. A programmer value still wins there until it is cleared.
+
 Across several running playbacks, intensity merges highest-takes-precedence
 (HTP) and every other attribute latest-takes-precedence (LTP), in target order
 (sequences before executors, each by number). A single executor is the common
@@ -121,9 +124,11 @@ With no target, `Go`/`Back`/`Pause`/`Release` use executor 1, or the first
 sequence when no executor is assigned.
 
 - **Fade and delay** come from the cue being entered. A zero fade is instant.
-- **Pause** freezes the interpolated output; `Go` on a paused playback resumes
-  the remaining fade time instead of advancing.
+- **Pause** freezes the interpolated output and remembers the delay and fade
+  time still to come; `Go` resumes both instead of advancing.
 - **Back** starts the previous cue with that cue's own fade.
+- **Go and Back follow the running cue's number**, so deleting an adjacent cue
+  while a playback runs cannot make it skip a cue.
 - **Release** is a hard stop; there is no release fade yet.
 - **The master fader scales intensity only** (the `Dimmer` attribute). Colours
   and positions keep their programmed values, so pulling a fader down dims a
@@ -193,7 +198,7 @@ Version 2 adds three optional sections:
 
 ## Evidence
 
-`cargo test --workspace` runs **121 tests**: 11 in `dmx`, 110 in `engine`. No
+`cargo test --workspace` runs **124 tests**: 11 in `dmx`, 113 in `engine`. No
 hardware and no sleeping is required for the timing tests.
 
 New coverage in this phase:
@@ -203,11 +208,13 @@ New coverage in this phase:
 - **palettes** — pool derivation from GDTF features and from attribute names,
   capture of a whole colour system, per-type resolve, actionable errors.
 - **playback** — tracking accumulation, fades between tracking states, delays,
-  pause/resume, executor scaling, release, fractional cue numbers.
+  pause/resume (including a paused delay), executor scaling, release,
+  fractional cue numbers.
 - **engine** — store and apply palettes, store and update cues, tracked cue 2,
   Go/Back/Pause/Release, executor fader, programmer-vs-playback precedence,
-  `Clear Values`, `New Show`, object listings, save/load of a show containing
-  palettes, cues and an executor, and every error path.
+  the sheet following playback, advancing after a cue was deleted, `Clear
+  Values`, `New Show`, object listings, save/load of a show containing palettes,
+  cues and an executor, and every error path.
 - **show** — version 1 upgrade, version 2 validation for the new sections.
 
 The milestone script is `examples/phase2-demo.txt`:
@@ -244,8 +251,9 @@ Deliberate for this phase:
 - **No update/merge semantics.** Storing over a palette or cue replaces it.
 - **No move-in-black**, no parameter timing per attribute (fade and delay are
   per cue and apply to every attribute).
-- **Release is instant**, and deleting a cue does not stop a playback that is
-  already past it.
+- **Release is instant**, and deleting the cue a playback is currently on does
+  not change the output it is already showing; the next `Go` uses the updated
+  list.
 - **No groups, worlds or filters**, so fixture selection is still an explicit
   fixture list.
 - **Playback state is not saved.** Loading a show always starts idle; only cue
