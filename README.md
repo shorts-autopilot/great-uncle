@@ -19,7 +19,7 @@ profiles that you supply.
 | 2 | Palettes, cues, sequences, executor faders | done — see [`docs/PHASE2.md`](docs/PHASE2.md) |
 | 3 | Groups, worlds, filters, masters, effects | done — see [`docs/PHASE3.md`](docs/PHASE3.md) |
 | 4 | Timecode, move-in-black, undo, first UI shell | done — see [`docs/PHASE4.md`](docs/PHASE4.md) |
-| 5+ | Desktop GUI, richer timecode, tracking | not started |
+| 5+ | triggers, desk state, timing, GUI, … | designed — see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 
 It is a console with a command line, a full-screen terminal shell, a script
 runner and four output transports. You can program, store palettes and cues, run
@@ -142,6 +142,8 @@ docs/             per-phase design notes
   masters, effects, show format v3, limitations.
 - [`docs/PHASE4.md`](docs/PHASE4.md) — undo/redo, move-in-black, timecode, the
   terminal UI shell, show format v4, limitations.
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — the ranked work after Phase 4, with a
+  design in [`docs/design/`](docs/design/) for every item.
 - [`spec/matrix.md`](spec/matrix.md) — the Phase 0 feature matrix this work is
   measured against, with per-row status.
 - [`spec/SCHEMA.md`](spec/SCHEMA.md) — how the crawled specification is stored.
