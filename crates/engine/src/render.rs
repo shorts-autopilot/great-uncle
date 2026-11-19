@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 use dmx::DMX_SLOTS;
 
 use crate::effect::EffectOutput;
-use crate::levels::Levels;
+use crate::levels::{is_intensity, Levels};
 use crate::show::{Fixture, Show};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -58,11 +58,6 @@ impl OutputFrame {
     fn ensure(&mut self, universe: u16) -> &mut [u8; DMX_SLOTS] {
         self.universes.entry(universe).or_insert([0; DMX_SLOTS])
     }
-}
-
-/// Attributes a master is allowed to scale.
-pub fn is_intensity(attribute: &str) -> bool {
-    attribute.eq_ignore_ascii_case("Dimmer") || attribute.eq_ignore_ascii_case("Intensity")
 }
 
 /// Combined master for one fixture: the grand master times the lowest group

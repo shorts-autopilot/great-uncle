@@ -3,6 +3,9 @@
 //! Every command goes through [`engine::Engine::execute`], the same path the
 //! GUI and scripting surfaces will use. `Wait <seconds>` is handled here, by
 //! the script runner, so a script can give a fade real time to run.
+//!
+//! `--ui` opens the terminal shell (see [`ui`]); without it the console is a
+//! line-oriented REPL.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -16,8 +19,10 @@ use dmx::virtual_port::{VirtualState, VirtualTransport};
 use dmx::DmxTransport;
 use engine::{Engine, Runtime, RuntimeConfig, Show, TransportBinding};
 
+mod ui;
+
 const USAGE: &str = "\
-openlight — DMX lighting console (Phase 3)
+openlight — DMX lighting console (Phase 4)
 
 Usage: openlight [options]
 
@@ -32,16 +37,19 @@ Options:
   --frames <n>         run for n output frames, then exit
   --fps <n>            frame rate (default 30)
   --engine-hz <n>      engine tick rate (default 60)
+  --ui                 open the full-screen terminal shell
   --trace              print the last virtual frame as bytes
   --help               show this text
 
 Examples:
-  openlight
+  openlight --ui
   openlight --gdtf examples/gdtf/openlight-demo-wash.gdtf \\
             --output 1=virtual --script examples/phase1-demo.txt
   openlight --output 1=virtual --script examples/phase2-demo.txt \\
             --frames 90 --trace
   openlight --output 1=virtual --script examples/phase3-demo.txt \\
+            --frames 120 --trace
+  openlight --output 1=virtual --script examples/phase4-demo.txt \\
             --frames 120 --trace
   openlight --output 1=generic:/dev/ttyUSB0 --script examples/phase2-demo.txt --frames 90
 ";
@@ -77,6 +85,7 @@ struct Options {
     engine_hz: f64,
     script: Option<PathBuf>,
     trace: bool,
+    ui: bool,
 }
 
 impl Options {
@@ -90,6 +99,7 @@ impl Options {
             engine_hz: 60.0,
             script: None,
             trace: false,
+            ui: false,
         };
 
         let mut index = 0;
@@ -132,6 +142,7 @@ impl Options {
                         .map_err(|_| "--engine-hz needs a number".to_string())?
                 }
                 "--trace" => options.trace = true,
+                "--ui" => options.ui = true,
                 "--help" | "-h" => return Ok(None),
                 other => return Err(format!("unknown option `{other}`")),
             }
@@ -229,7 +240,11 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
     if let Some(frames) = options.frames {
         wait_for_frames(&runtime, frames)?;
     } else if options.script.is_none() {
-        repl(&runtime)?;
+        if options.ui {
+            ui::run(&runtime)?;
+        } else {
+            repl(&runtime)?;
+        }
     }
 
     {

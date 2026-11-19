@@ -16,6 +16,8 @@
 //! * [`playback`] — cues, sequences, executors and running fades.
 //! * [`pools`] — groups, worlds and filters.
 //! * [`effect`] — stored waveforms and the running effect layer.
+//! * [`timecode`] — timecode shows, positions and the running player.
+//! * [`history`] — undo and redo over show snapshots.
 //! * [`render`] — programmer, playback, effects and masters to DMX universes.
 //! * [`output`] — 60 Hz engine tick + 30 Hz frame output thread.
 
@@ -24,6 +26,7 @@ pub mod effect;
 pub mod engine;
 pub mod fixture_type;
 pub mod gdtf;
+pub mod history;
 pub mod levels;
 pub mod output;
 pub mod palette;
@@ -33,6 +36,7 @@ pub mod pools;
 pub mod registry;
 pub mod render;
 pub mod show;
+pub mod timecode;
 
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -47,3 +51,4 @@ pub use palette::Palette;
 pub use playback::{Cue, Executor, Playback, Sequence, Target};
 pub use pools::{Filter, Group, World};
 pub use show::{Fixture, Show, Universe};
+pub use timecode::{TimecodeEvent, TimecodePlayer, TimecodeShow};

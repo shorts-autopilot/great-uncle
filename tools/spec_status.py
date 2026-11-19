@@ -10,7 +10,8 @@ Every Phase 1 row must be classified, and the script fails if a row appears or
 disappears, so the matrix and the implementation cannot drift silently. Later
 phases are classified only for the chapters each phase implements (Phase 2:
 presets, cues and sequences, executors; Phase 3: groups, worlds and filters,
-masters, phasers); the remaining rows stay `not-started`.
+masters, phasers; Phase 4: timecode, move in black, undo and the UI shell); the
+remaining rows stay `not-started`.
 
 Statuses mean:
   implemented   the feature works and is covered by tests;
@@ -135,7 +136,7 @@ PHASE2 = {
         [
             ("implemented", "1 2 10 11 15 17 19"),
             ("in-progress", "7"),  # text listing, no sequence sheet window
-            ("not-started", "3 4 5 6 8 9 12 13 14 16 18"),
+            ("not-started", "3 4 5 6 8 9 12 13 14 18"),
         ],
     ),
     **expand(
@@ -183,7 +184,27 @@ PHASE3 = {
     **expand("GENERATOR", [("not-started", "1")]),
 }
 
-STATUS = {**PHASE1, **PHASE2, **PHASE3}
+# Phase 4 — timecode, move in black, undo and the first UI shell (docs/PHASE4.md).
+# Undo has no matrix row of its own; it is a console behaviour, not a chapter.
+PHASE4 = {
+    **expand(
+        "TIMECODE",
+        [
+            ("implemented", "1 9"),  # the pool and creating a show
+            ("in-progress", "2 7 8 10"),  # text viewer, cue events only, fps only
+            ("not-started", "3 4 5 6 11"),
+        ],
+    ),
+    **expand("CUE_SEQUENCE", [("implemented", "16")]),  # move in black
+    **expand("OPERATE_FIXTURES", [("in-progress", "3")]),  # text fixture sheet
+    **expand("WORKSPACE", [("in-progress", "2")]),  # the terminal UI shell
+    **expand(
+        "COMMAND_SYNTAX_KEYWORDS",
+        [("implemented", "322")],  # the Timecode keyword
+    ),
+}
+
+STATUS = {**PHASE1, **PHASE2, **PHASE3, **PHASE4}
 
 
 def main(argv: list[str]) -> int:

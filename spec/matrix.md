@@ -230,7 +230,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
 | `CX-WORKSPACE-0001` | Workspace | 2 | 1 | not-started |
-| `CX-WORKSPACE-0002` | User Interface | 1 | 1 | not-started |
+| `CX-WORKSPACE-0002` | User Interface | 1 | 1 | in-progress |
 | `CX-WORKSPACE-0003` | Configuration of Displays | 5 | 1 | not-started |
 | `CX-WORKSPACE-0004` | Desk Lock | 1 | 1 | not-started |
 | `CX-WORKSPACE-0005` | User-Defined Area | 1 | 1 | not-started |
@@ -587,7 +587,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0319` | Temp | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0320` | Thru | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0321` | Time | 3 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0322` | Timecode | 5 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0322` | Timecode | 5 | 2 | implemented |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0323` | TimecodeSlot | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0324` | Timer | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0325` | Toggle | 4 | 2 | not-started |
@@ -801,7 +801,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 |---|---|---|---|---|
 | `CX-OPERATE_FIXTURES-0001` | Operate Fixtures | 2 | 2 | not-started |
 | `CX-OPERATE_FIXTURES-0002` | Select Fixtures | 4 | 2 | not-started |
-| `CX-OPERATE_FIXTURES-0003` | Fixture Sheet | 1 | 2 | not-started |
+| `CX-OPERATE_FIXTURES-0003` | Fixture Sheet | 1 | 2 | in-progress |
 | `CX-OPERATE_FIXTURES-0004` | Fixture Sheet Settings | 1 | 2 | not-started |
 | `CX-OPERATE_FIXTURES-0005` | Fixture Sheet Modes | 7 | 2 | not-started |
 | `CX-OPERATE_FIXTURES-0006` | Parent Child Fixture Behavior | 3 | 2 | not-started |
@@ -994,7 +994,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-CUE_SEQUENCE-0013` | Cue Recipes | 1 | 2 | not-started |
 | `CX-CUE_SEQUENCE-0014` | Store Settings and Store Preferences | 11 | 2 | not-started |
 | `CX-CUE_SEQUENCE-0015` | Play Back Cues | 4 | 2 | implemented |
-| `CX-CUE_SEQUENCE-0016` | Move In Black | 5 | 2 | not-started |
+| `CX-CUE_SEQUENCE-0016` | Move In Black | 5 | 2 | implemented |
 | `CX-CUE_SEQUENCE-0017` | Cue Timing | 11 | 2 | implemented |
 | `CX-CUE_SEQUENCE-0018` | Renumber Cues | 1 | 2 | not-started |
 | `CX-CUE_SEQUENCE-0019` | Delete Cues | 1 | 2 | implemented |
@@ -1124,16 +1124,16 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-TIMECODE-0001` | Timecode Show | 1 | 3 | not-started |
-| `CX-TIMECODE-0002` | Timecode Viewer | 19 | 3 | not-started |
+| `CX-TIMECODE-0001` | Timecode Show | 1 | 3 | implemented |
+| `CX-TIMECODE-0002` | Timecode Viewer | 19 | 3 | in-progress |
 | `CX-TIMECODE-0003` | Track Groups | 1 | 3 | not-started |
 | `CX-TIMECODE-0004` | Markers | 2 | 3 | not-started |
 | `CX-TIMECODE-0005` | Tracks | 3 | 3 | not-started |
 | `CX-TIMECODE-0006` | Time Ranges | 1 | 3 | not-started |
-| `CX-TIMECODE-0007` | Events | 1 | 3 | not-started |
-| `CX-TIMECODE-0008` | Timecode Slots | 9 | 3 | not-started |
-| `CX-TIMECODE-0009` | Create a Timecode Show | 8 | 3 | not-started |
-| `CX-TIMECODE-0010` | Timecode Settings | 9 | 3 | not-started |
+| `CX-TIMECODE-0007` | Events | 1 | 3 | in-progress |
+| `CX-TIMECODE-0008` | Timecode Slots | 9 | 3 | in-progress |
+| `CX-TIMECODE-0009` | Create a Timecode Show | 8 | 3 | implemented |
+| `CX-TIMECODE-0010` | Timecode Settings | 9 | 3 | in-progress |
 | `CX-TIMECODE-0011` | External Connections | 3 | 3 | not-started |
 
 ## Layouts

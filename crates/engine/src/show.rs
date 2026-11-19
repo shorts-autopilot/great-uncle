@@ -5,9 +5,9 @@
 //! versioned and every document is validated on load and before save.
 //!
 //! Version 2 adds palettes, sequences and executors. Version 3 adds groups,
-//! worlds, filters, effects and the grand and rate masters. Older files still
-//! load: new sections default to empty (or to a full master) and the show is
-//! upgraded on read.
+//! worlds, filters, effects and the grand and rate masters. Version 4 adds
+//! timecode shows. Older files still load: new sections default to empty (or to
+//! a full master) and the show is upgraded on read.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -23,11 +23,12 @@ use crate::palette::Palette;
 use crate::patch::{self, PatchRange};
 use crate::playback::{format_cue_number, Executor, Sequence, MAX_CUE_NUMBER, MAX_TIME};
 use crate::pools::{Filter, Group, World, MAX_GROUP_FIXTURES, MAX_POOL_OBJECTS};
+use crate::timecode::{self, TimecodeShow, MAX_FPS, MAX_TIMECODES, MAX_TIMECODE_EVENTS, MIN_FPS};
 
 pub const SHOW_FORMAT: &str = "openlight-show";
-pub const SHOW_VERSION: u32 = 3;
+pub const SHOW_VERSION: u32 = 4;
 /// Older documents that still load, oldest first.
-pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3];
+pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3, 4];
 /// Fastest rate master accepted, as a factor (400%).
 pub const MAX_RATE_MASTER: f64 = 4.0;
 pub const MAX_UNIVERSE_SIZE: u16 = 512;
@@ -64,6 +65,8 @@ pub struct Show {
     pub filters: Vec<Filter>,
     #[serde(default)]
     pub effects: Vec<Effect>,
+    #[serde(default)]
+    pub timecodes: Vec<TimecodeShow>,
     /// Scales every intensity at the output, 0..=1.
     #[serde(default = "full_master")]
     pub grand_master: f64,
@@ -131,6 +134,7 @@ impl Show {
             worlds: Vec::new(),
             filters: Vec::new(),
             effects: Vec::new(),
+            timecodes: Vec::new(),
             grand_master: 1.0,
             rate_master: 1.0,
         }
@@ -191,6 +195,12 @@ impl Show {
 
     pub fn effect(&self, number: u16) -> Option<&Effect> {
         self.effects.iter().find(|effect| effect.number == number)
+    }
+
+    pub fn timecode(&self, number: u16) -> Option<&TimecodeShow> {
+        self.timecodes
+            .iter()
+            .find(|timecode| timecode.number == number)
     }
 
     pub fn find_type(&self, key: &str) -> Option<&FixtureType> {
@@ -412,6 +422,7 @@ impl Show {
         self.validate_worlds(&mut problems);
         self.validate_filters(&mut problems);
         self.validate_effects(&mut problems);
+        self.validate_timecodes(&mut problems);
 
         for (label, value, max, note) in [
             ("grand master", self.grand_master, 1.0, ""),
@@ -737,6 +748,81 @@ impl Show {
         }
     }
 
+    fn validate_timecodes(&self, problems: &mut Vec<String>) {
+        if self.timecodes.len() > MAX_TIMECODES {
+            problems.push(format!(
+                "{} timecode shows, the limit is {MAX_TIMECODES}",
+                self.timecodes.len()
+            ));
+        }
+        let mut numbers = BTreeSet::new();
+        for timecode in &self.timecodes {
+            if timecode.number == 0 {
+                problems.push("timecode number 0 is not allowed".into());
+            }
+            if !numbers.insert(timecode.number) {
+                problems.push(format!("timecode {}: number used twice", timecode.number));
+            }
+            if !(MIN_FPS..=MAX_FPS).contains(&timecode.fps) {
+                problems.push(format!(
+                    "timecode {}: {} fps is outside {MIN_FPS}..={MAX_FPS}",
+                    timecode.number, timecode.fps
+                ));
+            }
+            if timecode.events.len() > MAX_TIMECODE_EVENTS {
+                problems.push(format!(
+                    "timecode {}: {} events, the limit is {MAX_TIMECODE_EVENTS}",
+                    timecode.number,
+                    timecode.events.len()
+                ));
+            }
+            let fps = timecode.frame_rate();
+            let mut seen = BTreeSet::new();
+            let mut previous = None;
+            for event in &timecode.events {
+                let frames = match timecode::parse(&event.at, fps) {
+                    Ok(frames) => frames,
+                    Err(error) => {
+                        problems.push(format!("timecode {}: {error}", timecode.number));
+                        continue;
+                    }
+                };
+                if !seen.insert(frames) {
+                    problems.push(format!(
+                        "timecode {}: two events at {}",
+                        timecode.number, event.at
+                    ));
+                }
+                if let Some(previous) = previous {
+                    if frames < previous {
+                        problems.push(format!(
+                            "timecode {}: event {} is not in ascending order",
+                            timecode.number, event.at
+                        ));
+                    }
+                }
+                previous = Some(frames);
+                match self.sequence(event.sequence) {
+                    None => problems.push(format!(
+                        "timecode {}: event {} references sequence {} which is not in the show",
+                        timecode.number, event.at, event.sequence
+                    )),
+                    Some(sequence) => {
+                        if sequence.cue_index(event.cue).is_none() {
+                            problems.push(format!(
+                                "timecode {}: event {} references cue {} which sequence {} does not have",
+                                timecode.number,
+                                event.at,
+                                format_cue_number(event.cue),
+                                sequence.number
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Write the show atomically: full document first, then rename over the target.
     pub fn save(&self, path: &Path) -> Result<(), ShowError> {
         let problems = self.validate();
@@ -910,7 +996,7 @@ mod tests {
             .read_to_string(&mut text)
             .unwrap();
         assert!(text.contains("\"format\": \"openlight-show\""));
-        assert!(text.contains("\"version\": 3"));
+        assert!(text.contains("\"version\": 4"));
         assert!(text.contains("OpenLight Demo Wash"), "types are embedded");
         let _ = fs::remove_file(&path);
     }
@@ -1025,6 +1111,7 @@ mod tests {
         assert!(show.worlds.is_empty());
         assert!(show.filters.is_empty());
         assert!(show.effects.is_empty());
+        assert!(show.timecodes.is_empty());
         assert_eq!(show.grand_master, 1.0);
         assert_eq!(show.rate_master, 1.0);
         assert!(show.validate().is_empty());
@@ -1043,6 +1130,7 @@ mod tests {
                 "worlds",
                 "filters",
                 "effects",
+                "timecodes",
                 "grand_master",
                 "rate_master",
             ] {
@@ -1055,9 +1143,111 @@ mod tests {
         assert_eq!(show.version, SHOW_VERSION);
         assert!(show.groups.is_empty());
         assert!(show.effects.is_empty());
+        assert!(show.timecodes.is_empty());
         assert_eq!(show.grand_master, 1.0);
         assert_eq!(show.rate_master, 1.0);
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn version_three_shows_load_and_are_upgraded() {
+        let path = temp_path("v3");
+        let mut value = serde_json::to_value(demo_show()).unwrap();
+        value["version"] = 3.into();
+        value.as_object_mut().unwrap().remove("timecodes");
+        fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+
+        let show = Show::load(&path).unwrap();
+        assert_eq!(show.version, SHOW_VERSION);
+        assert!(show.timecodes.is_empty());
+        assert!(show.validate().is_empty());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn timecode_events_are_validated() {
+        use crate::timecode::{TimecodeEvent, TimecodeShow};
+
+        let mut show = demo_show();
+        show.timecodes.push(TimecodeShow {
+            number: 0,
+            name: String::new(),
+            fps: 0,
+            events: vec![
+                TimecodeEvent {
+                    at: "00:00:02:00".into(),
+                    sequence: 9,
+                    cue: 1.0,
+                },
+                TimecodeEvent {
+                    at: "00:00:02:00".into(),
+                    sequence: 9,
+                    cue: 1.0,
+                },
+                TimecodeEvent {
+                    at: "00:00:01:00".into(),
+                    sequence: 9,
+                    cue: 1.0,
+                },
+                TimecodeEvent {
+                    at: "nope".into(),
+                    sequence: 9,
+                    cue: 1.0,
+                },
+            ],
+        });
+        let problems = show.validate();
+        for expected in [
+            "timecode number 0",
+            "0 fps",
+            "two events at 00:00:02:00",
+            "not in ascending order",
+            "is not a timecode",
+            "sequence 9 which is not in the show",
+        ] {
+            assert!(
+                problems.iter().any(|problem| problem.contains(expected)),
+                "missing `{expected}` in {problems:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn timecode_events_must_name_a_stored_cue() {
+        use crate::levels::Levels;
+        use crate::playback::{Cue, Sequence};
+        use crate::timecode::{TimecodeEvent, TimecodeShow};
+
+        let mut show = demo_show();
+        show.sequences.push(Sequence {
+            number: 1,
+            name: "Main".into(),
+            cues: vec![Cue {
+                number: 1.0,
+                name: String::new(),
+                fade: 0.0,
+                delay: 0.0,
+                mib: false,
+                levels: Levels::new(),
+            }],
+        });
+        show.timecodes.push(TimecodeShow {
+            number: 1,
+            name: "Song".into(),
+            fps: 25,
+            events: vec![TimecodeEvent {
+                at: "00:00:00:00".into(),
+                sequence: 1,
+                cue: 2.0,
+            }],
+        });
+        let problems = show.validate();
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("cue 2 which sequence 1 does not have")),
+            "{problems:#?}"
+        );
     }
 
     #[test]
@@ -1136,6 +1326,7 @@ mod tests {
                     name: String::new(),
                     fade: -1.0,
                     delay: 0.0,
+                    mib: false,
                     levels: Levels::new(),
                 },
                 Cue {
@@ -1143,6 +1334,7 @@ mod tests {
                     name: String::new(),
                     fade: 0.0,
                     delay: 0.0,
+                    mib: false,
                     levels: Levels::new(),
                 },
                 Cue {
@@ -1150,6 +1342,7 @@ mod tests {
                     name: String::new(),
                     fade: 0.0,
                     delay: 0.0,
+                    mib: false,
                     levels: Levels::new(),
                 },
             ],

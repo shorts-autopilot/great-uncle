@@ -11,6 +11,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::fixture_type::DIMMER;
 
+/// Attributes an intensity master may scale. Everything else (colour, position)
+/// passes through untouched.
+pub fn is_intensity(attribute: &str) -> bool {
+    attribute.eq_ignore_ascii_case("Dimmer") || attribute.eq_ignore_ascii_case("Intensity")
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Levels {
@@ -59,6 +65,17 @@ impl Levels {
 
     pub fn clear(&mut self) {
         self.fixtures.clear();
+    }
+
+    /// True when every intensity attribute of `fixture` is zero or missing,
+    /// which is what move-in-black needs to know before a cue starts.
+    pub fn is_dark(&self, fixture: u16) -> bool {
+        let Some(attributes) = self.fixtures.get(&fixture) else {
+            return true;
+        };
+        !attributes
+            .iter()
+            .any(|(attribute, level)| is_intensity(attribute) && *level > 0.0)
     }
 
     /// Replace every value of `other` on top of this state.

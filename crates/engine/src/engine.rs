@@ -14,6 +14,7 @@ use crate::command::{self, Command, CommandError, Level, LevelSource, PlaybackRe
 use crate::effect::{Effect, Effects, Waveform, MAX_RATE_HZ, MAX_SPREAD_DEGREES};
 use crate::fixture_type::{FixtureType, DIMMER};
 use crate::gdtf;
+use crate::history::History;
 use crate::levels::Levels;
 use crate::output::{lock, OutputStatus};
 use crate::palette::{self, Palette};
@@ -24,6 +25,7 @@ use crate::playback::{
 use crate::pools::{Filter, Group, World};
 use crate::render::{self, OutputFrame, Stage};
 use crate::show::{Fixture, Show, MAX_RATE_MASTER};
+use crate::timecode::{self, TimecodeEvent, TimecodePlayer, TimecodeShow, MAX_FPS, MIN_FPS};
 
 /// Everything `Store Effect` carries before defaults are applied.
 struct EffectSpec {
@@ -67,6 +69,12 @@ pub struct Engine {
     pub world: Option<u16>,
     /// Active filter: limits the features commands may touch.
     pub filter: Option<u16>,
+    /// Timecode playhead. Not part of the show file.
+    pub timecode: TimecodePlayer,
+    /// Show snapshots for `Undo` and `Redo`.
+    history: History,
+    /// The statement being dispatched, recorded as its undo label.
+    label: String,
     /// The instant the latest [`Engine::tick`] saw. Commands that start a fade
     /// use it, so a test can drive time explicitly.
     clock: Instant,
@@ -89,6 +97,9 @@ impl Engine {
             effects: Effects::default(),
             world: None,
             filter: None,
+            timecode: TimecodePlayer::default(),
+            history: History::default(),
+            label: String::new(),
             clock: Instant::now(),
         }
     }
@@ -103,9 +114,19 @@ impl Engine {
     pub fn tick(&mut self, now: Instant) -> bool {
         let now = if now > self.clock { now } else { self.clock };
         self.clock = now;
-        // A running effect changes the output on every tick, even when no cue
-        // is moving, so the output thread has to re-render continuously.
-        let changed = self.playback.refresh(&self.show, now) || self.effects.is_running();
+        // Timecode events start cues before the playback is sampled, so a cue
+        // that begins on this frame is already in the output.
+        let fired = self.timecode_events(now);
+        for event in &fired {
+            self.fire_timecode_event(event, now);
+        }
+        let advanced = self.playback.refresh(&self.show, now);
+        // A running effect or timecode changes the output on every tick, even
+        // when no cue is moving, so the sender keeps re-rendering.
+        let changed = advanced
+            || !fired.is_empty()
+            || self.effects.is_running()
+            || self.timecode.is_running();
         if changed {
             self.revision += 1;
         }
@@ -128,6 +149,7 @@ impl Engine {
             if tokens.is_empty() {
                 continue;
             }
+            self.label = statement.trim().to_string();
             let parsed = command::parse(&tokens)?;
             outcome.lines.extend(self.dispatch(parsed)?.lines);
         }
@@ -164,7 +186,11 @@ impl Engine {
             } => self.patch(fixture, universe, address, type_key, mode),
             Command::Unpatch { fixtures } => self.unpatch(fixtures),
             Command::ImportGdtf { path } => self.import_gdtf(&path),
-            Command::New { name } => self.new_show(name),
+            Command::New { name } => {
+                let outcome = self.new_show(name)?;
+                self.history.clear();
+                Ok(outcome)
+            }
             Command::StorePalette {
                 feature,
                 number,
@@ -178,7 +204,8 @@ impl Engine {
                 name,
                 fade,
                 delay,
-            } => self.store_cue(sequence, number, name, fade, delay),
+                mib,
+            } => self.store_cue(sequence, number, name, fade, delay, mib),
             Command::DeleteCue { sequence, number } => self.delete_cue(sequence, number),
             Command::ListSequences { only } => Ok(self.sequence_list(only)),
             Command::AssignExecutor { executor, sequence } => {
@@ -235,6 +262,24 @@ impl Engine {
             Command::ListEffects { only } => Ok(self.effect_list(only)),
             Command::EffectOn { effect, fixtures } => self.effect_on(effect, fixtures),
             Command::EffectOff { effect } => self.effect_off(effect),
+            Command::StoreTimecode { number, name, fps } => self.store_timecode(number, name, fps),
+            Command::DeleteTimecode { number } => self.delete_timecode(number),
+            Command::AddTimecodeEvent {
+                timecode,
+                at,
+                sequence,
+                cue,
+            } => self.add_timecode_event(timecode, at, sequence, cue),
+            Command::RemoveTimecodeEvent { timecode, at } => {
+                self.remove_timecode_event(timecode, at)
+            }
+            Command::StartTimecode { timecode } => self.start_timecode(timecode),
+            Command::PauseTimecode { timecode } => self.pause_timecode(timecode),
+            Command::StopTimecode { timecode } => self.stop_timecode(timecode),
+            Command::LocateTimecode { timecode, at } => self.locate_timecode(timecode, &at),
+            Command::ListTimecodes { only } => Ok(self.timecode_list(only)),
+            Command::Undo => self.history_step(true),
+            Command::Redo => self.history_step(false),
             Command::Go { target } => self.playback_go(target),
             Command::Back { target } => self.playback_back(target),
             Command::Pause { target } => self.playback_pause(target),
@@ -463,6 +508,7 @@ impl Engine {
         self.effects.stop_all();
         self.world = None;
         self.filter = None;
+        self.timecode.stop();
         self.revision += 1;
         Ok(CommandOutcome::message(message))
     }
@@ -706,6 +752,8 @@ impl Engine {
         self.effects.stop_all();
         self.world = None;
         self.filter = None;
+        self.timecode.stop();
+        self.history.clear();
         self.revision += 1;
         Ok(CommandOutcome::message(message))
     }
@@ -849,6 +897,12 @@ impl Engine {
         } else {
             lines.push("Effects: idle".to_string());
         }
+        lines.push(format!(
+            "Undo: {} | Redo: {}",
+            count(self.history.undo_depth(), "step"),
+            count(self.history.redo_depth(), "step")
+        ));
+        lines.push(format!("Timecode: {}", self.timecode_status()));
         if self.playback.is_running() {
             for (target, run) in self.playback.runs() {
                 let state = if run.is_paused() {
@@ -1116,6 +1170,7 @@ impl Engine {
         name: Option<String>,
         fade: Option<f64>,
         delay: Option<f64>,
+        mib: Option<bool>,
     ) -> Result<CommandOutcome, CommandError> {
         if sequence_number == 0 {
             return Err(CommandError::new("sequence number 0 is not allowed"));
@@ -1185,6 +1240,10 @@ impl Engine {
                     .unwrap_or(0.0)
             });
             created = existing.is_none();
+            let existing_mib = existing
+                .and_then(|index| sequence.cues.get(index))
+                .map(|cue| cue.mib)
+                .unwrap_or(false);
             match existing {
                 Some(index) => {
                     let cue = &mut sequence.cues[index];
@@ -1193,6 +1252,9 @@ impl Engine {
                     }
                     cue.fade = fade;
                     cue.delay = delay;
+                    if let Some(mib) = mib {
+                        cue.mib = mib;
+                    }
                     cue.levels = delta;
                 }
                 None => sequence.cues.insert(
@@ -1202,13 +1264,15 @@ impl Engine {
                         name: cue_name.clone(),
                         fade,
                         delay,
+                        mib: mib.unwrap_or(false),
                         levels: delta,
                     },
                 ),
             }
             show.sequences.sort_by_key(|sequence| sequence.number);
+            let mib_label = if mib.unwrap_or(existing_mib) { ", mib" } else { "" };
             Ok(format!(
-                "{} cue {}{name_label} in sequence {sequence_number} (fade {}s, delay {}s, {values} tracked values)",
+                "{} cue {}{name_label} in sequence {sequence_number} (fade {}s, delay {}s{mib_label}, {values} tracked values)",
                 if created { "Stored" } else { "Updated" },
                 format_cue_number(number),
                 fade,
@@ -1278,16 +1342,17 @@ impl Engine {
                         return CommandOutcome::with_lines(lines);
                     }
                     lines.push(format!(
-                        "{:<6} {:<20} {:>6} {:>6} {}",
-                        "Cue", "Name", "Fade", "Delay", "Values"
+                        "{:<6} {:<20} {:>6} {:>6} {:<4} {}",
+                        "Cue", "Name", "Fade", "Delay", "Mib", "Values"
                     ));
                     for cue in &sequence.cues {
                         lines.push(format!(
-                            "{:<6} {:<20} {:>5.1}s {:>5.1}s {}{}",
+                            "{:<6} {:<20} {:>5.1}s {:>5.1}s {:<4} {}{}",
                             format_cue_number(cue.number),
                             truncate(&cue.name, 20),
                             cue.fade,
                             cue.delay,
+                            if cue.mib { "yes" } else { "-" },
                             cue.levels.len(),
                             if cue.levels.is_empty() {
                                 " (empty)"
@@ -2441,6 +2506,453 @@ impl Engine {
         missing
     }
 
+    /// Everything the timecode player and its active show are doing.
+    pub fn timecode_status(&self) -> String {
+        let Some(number) = self.timecode.active() else {
+            return "idle".to_string();
+        };
+        let Some(timecode) = self.show.timecode(number) else {
+            return "idle".to_string();
+        };
+        let position = self.timecode.position_at(timecode, self.clock);
+        let state = if self.timecode.is_running() {
+            "running"
+        } else if self.timecode.is_paused() {
+            "paused"
+        } else {
+            "stopped"
+        };
+        format!(
+            "timecode {number} {state} {} ({} fps)",
+            timecode::format(position, timecode.frame_rate()),
+            timecode.frame_rate()
+        )
+    }
+
+    fn store_timecode(
+        &mut self,
+        number: u16,
+        name: Option<String>,
+        fps: Option<u8>,
+    ) -> Result<CommandOutcome, CommandError> {
+        if number == 0 {
+            return Err(CommandError::new("timecode number 0 is not allowed"));
+        }
+        if let Some(fps) = fps {
+            if !(MIN_FPS..=MAX_FPS).contains(&fps) {
+                return Err(CommandError::new(format!(
+                    "frame rate {fps} is outside {MIN_FPS}..={MAX_FPS}"
+                )));
+            }
+        }
+        if let Some(name) = &name {
+            if name.trim().is_empty() {
+                return Err(CommandError::new("timecode name is empty"));
+            }
+        }
+        let existed = self.show.timecode(number).is_some();
+        let previous_fps = self.show.timecode(number).map(TimecodeShow::frame_rate);
+        let mut message = self.mutate(|show| {
+            match show
+                .timecodes
+                .iter_mut()
+                .find(|timecode| timecode.number == number)
+            {
+                Some(timecode) => {
+                    if let Some(name) = &name {
+                        timecode.name = name.clone();
+                    }
+                    if let Some(fps) = fps {
+                        timecode.fps = fps;
+                    }
+                }
+                None => {
+                    let mut timecode = TimecodeShow::new(number);
+                    if let Some(name) = &name {
+                        timecode.name = name.clone();
+                    }
+                    if let Some(fps) = fps {
+                        timecode.fps = fps;
+                    }
+                    show.timecodes.push(timecode);
+                    show.timecodes.sort_by_key(|timecode| timecode.number);
+                }
+            }
+            let timecode = show
+                .timecode(number)
+                .ok_or_else(|| CommandError::new(format!("timecode {number} does not exist")))?;
+            Ok(format!(
+                "{} {} ({} fps, {})",
+                if existed { "Updated" } else { "Stored" },
+                timecode.display_name(),
+                timecode.frame_rate(),
+                count(timecode.events.len(), "event")
+            ))
+        })?;
+
+        // Frame counts mean different times when the rate changes, so a player
+        // on this show stops instead of firing events at the wrong moment.
+        let current_fps = self.show.timecode(number).map(TimecodeShow::frame_rate);
+        if previous_fps != current_fps && self.timecode.active() == Some(number) {
+            self.timecode.stop();
+            message.push_str("; the player was stopped because the frame rate changed");
+        }
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn delete_timecode(&mut self, number: u16) -> Result<CommandOutcome, CommandError> {
+        if self.show.timecode(number).is_none() {
+            return Err(CommandError::with_hint(
+                format!("timecode {number} does not exist"),
+                "`Timecode` lists the timecode shows",
+            ));
+        }
+        let message = self.mutate(|show| {
+            show.timecodes.retain(|timecode| timecode.number != number);
+            Ok(format!("Deleted timecode {number}"))
+        })?;
+        if self.timecode.active() == Some(number) {
+            self.timecode.stop();
+        }
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn add_timecode_event(
+        &mut self,
+        number: u16,
+        at: String,
+        sequence_number: u16,
+        cue: f64,
+    ) -> Result<CommandOutcome, CommandError> {
+        let Some(timecode) = self.show.timecode(number).cloned() else {
+            return Err(CommandError::with_hint(
+                format!("timecode {number} does not exist"),
+                "store one first: `Store Timecode 1 \"Song\"`",
+            ));
+        };
+        let frames = timecode::parse(&at, timecode.frame_rate()).map_err(CommandError::new)?;
+        let Some(sequence) = self.show.sequence(sequence_number) else {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence_number} does not exist"),
+                "store a cue first: `Store Cue 1`",
+            ));
+        };
+        if sequence.cue_index(cue).is_none() {
+            return Err(CommandError::with_hint(
+                format!(
+                    "sequence {sequence_number} has no cue {}",
+                    format_cue_number(cue)
+                ),
+                format!("`Sequence {sequence_number}` lists its cues"),
+            ));
+        }
+
+        let message = self.mutate(|show| {
+            let Some(timecode) = show
+                .timecodes
+                .iter_mut()
+                .find(|timecode| timecode.number == number)
+            else {
+                return Err(CommandError::new(format!(
+                    "timecode {number} does not exist"
+                )));
+            };
+            let fps = timecode.frame_rate();
+            if timecode
+                .events
+                .iter()
+                .any(|event| timecode::parse(&event.at, fps).ok() == Some(frames))
+            {
+                return Err(CommandError::new(format!(
+                    "timecode {number} already has an event at {at}"
+                )));
+            }
+            timecode.events.push(TimecodeEvent {
+                at: at.clone(),
+                sequence: sequence_number,
+                cue,
+            });
+            timecode
+                .events
+                .sort_by_key(|event| timecode::parse(&event.at, fps).unwrap_or(u64::MAX));
+            Ok(format!(
+                "Added cue {} at {at} to timecode {number} ({})",
+                format_cue_number(cue),
+                count(timecode.events.len(), "event")
+            ))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn remove_timecode_event(
+        &mut self,
+        number: u16,
+        at: String,
+    ) -> Result<CommandOutcome, CommandError> {
+        let Some(timecode) = self.show.timecode(number).cloned() else {
+            return Err(CommandError::with_hint(
+                format!("timecode {number} does not exist"),
+                "`Timecode` lists the timecode shows",
+            ));
+        };
+        let frames = timecode::parse(&at, timecode.frame_rate()).map_err(CommandError::new)?;
+        let message = self.mutate(|show| {
+            let Some(timecode) = show
+                .timecodes
+                .iter_mut()
+                .find(|timecode| timecode.number == number)
+            else {
+                return Err(CommandError::new(format!(
+                    "timecode {number} does not exist"
+                )));
+            };
+            let fps = timecode.frame_rate();
+            let before = timecode.events.len();
+            timecode
+                .events
+                .retain(|event| timecode::parse(&event.at, fps).ok() != Some(frames));
+            if timecode.events.len() == before {
+                return Err(CommandError::new(format!(
+                    "timecode {number} has no event at {at}"
+                )));
+            }
+            Ok(format!("Removed the event at {at} from timecode {number}"))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn start_timecode(&mut self, number: u16) -> Result<CommandOutcome, CommandError> {
+        let Some(timecode) = self.show.timecode(number) else {
+            return Err(CommandError::with_hint(
+                format!("timecode {number} does not exist"),
+                "store one first: `Store Timecode 1 \"Song\"`",
+            ));
+        };
+        let resume = self.timecode.is_paused() && self.timecode.active() == Some(number);
+        let from = if resume { self.timecode.position() } else { 0 };
+        self.timecode.start(number, from, self.clock);
+        self.revision += 1;
+        Ok(CommandOutcome::message(format!(
+            "{} {} at {}",
+            if resume { "Resumed" } else { "Started" },
+            timecode.display_name(),
+            timecode::format(from, timecode.frame_rate())
+        )))
+    }
+
+    fn pause_timecode(&mut self, number: u16) -> Result<CommandOutcome, CommandError> {
+        let Some(timecode) = self.show.timecode(number).cloned() else {
+            return Err(CommandError::with_hint(
+                format!("timecode {number} does not exist"),
+                "`Timecode` lists the timecode shows",
+            ));
+        };
+        if self.timecode.active() != Some(number) || !self.timecode.is_running() {
+            return Ok(CommandOutcome::message(format!(
+                "Timecode {number} is not running"
+            )));
+        }
+        self.timecode.pause(&timecode, self.clock);
+        self.revision += 1;
+        Ok(CommandOutcome::message(format!(
+            "Paused timecode {number} at {}",
+            timecode::format(self.timecode.position(), timecode.frame_rate())
+        )))
+    }
+
+    fn stop_timecode(&mut self, number: u16) -> Result<CommandOutcome, CommandError> {
+        if self.show.timecode(number).is_none() {
+            return Err(CommandError::with_hint(
+                format!("timecode {number} does not exist"),
+                "`Timecode` lists the timecode shows",
+            ));
+        }
+        if self.timecode.active() != Some(number) {
+            return Ok(CommandOutcome::message(format!(
+                "Timecode {number} is not running"
+            )));
+        }
+        self.timecode.stop();
+        self.revision += 1;
+        Ok(CommandOutcome::message(format!(
+            "Stopped timecode {number} at 00:00:00:00"
+        )))
+    }
+
+    fn locate_timecode(&mut self, number: u16, at: &str) -> Result<CommandOutcome, CommandError> {
+        let Some(timecode) = self.show.timecode(number).cloned() else {
+            return Err(CommandError::with_hint(
+                format!("timecode {number} does not exist"),
+                "store one first: `Store Timecode 1 \"Song\"`",
+            ));
+        };
+        let frames = timecode::parse(at, timecode.frame_rate()).map_err(CommandError::new)?;
+        self.timecode.locate(number, frames, self.clock);
+        self.revision += 1;
+        Ok(CommandOutcome::message(format!(
+            "Timecode {number} located to {} — {}",
+            timecode::format(frames, timecode.frame_rate()),
+            self.timecode_status()
+        )))
+    }
+
+    fn timecode_list(&self, only: Option<u16>) -> CommandOutcome {
+        match only {
+            Some(number) => {
+                let Some(timecode) = self.show.timecode(number) else {
+                    return CommandOutcome::message(format!("Timecode {number} does not exist."));
+                };
+                let mut lines = vec![format!(
+                    "{} — {} fps, {} events",
+                    timecode.display_name(),
+                    timecode.frame_rate(),
+                    timecode.events.len()
+                )];
+                if timecode.events.is_empty() {
+                    lines.push(format!(
+                        "No events. Add one with `Timecode {number} Add 00:00:00:00 Sequence 1 Cue 1`."
+                    ));
+                } else {
+                    lines.push(format!("{:<14} {:>8} {:>6}", "Time", "Sequence", "Cue"));
+                    for event in &timecode.events {
+                        lines.push(format!(
+                            "{:<14} {:>8} {:>6}",
+                            event.at,
+                            event.sequence,
+                            format_cue_number(event.cue)
+                        ));
+                    }
+                }
+                if self.timecode.active() == Some(number) {
+                    lines.push(format!("Player: {}", self.timecode_status()));
+                }
+                CommandOutcome::with_lines(lines)
+            }
+            None => {
+                if self.show.timecodes.is_empty() {
+                    return CommandOutcome::message(
+                        "No timecode shows. Store one with `Store Timecode 1 \"Song\"`.",
+                    );
+                }
+                let mut lines = vec![format!(
+                    "{:<4} {:<20} {:>4} {:>7}",
+                    "No.", "Name", "Fps", "Events"
+                )];
+                for timecode in &self.show.timecodes {
+                    lines.push(format!(
+                        "{:<4} {:<20} {:>4} {:>7}",
+                        timecode.number,
+                        truncate(&timecode.name, 20),
+                        timecode.frame_rate(),
+                        timecode.events.len()
+                    ));
+                }
+                if self.timecode.active().is_some() {
+                    lines.push(format!("Player: {}", self.timecode_status()));
+                }
+                CommandOutcome::with_lines(lines)
+            }
+        }
+    }
+
+    fn timecode_events(&mut self, now: Instant) -> Vec<TimecodeEvent> {
+        if !self.timecode.is_running() {
+            return Vec::new();
+        }
+        let Some(number) = self.timecode.active() else {
+            return Vec::new();
+        };
+        let Some(timecode) = self.show.timecode(number) else {
+            self.timecode.stop();
+            return Vec::new();
+        };
+        // Borrowing the show and the player as separate fields keeps the
+        // 60 Hz tick from cloning the event list on every frame.
+        self.timecode.advance(timecode, now)
+    }
+
+    /// Start the cue a timecode event names. Events that point at a cue that has
+    /// since been deleted are skipped rather than stopping the track.
+    fn fire_timecode_event(&mut self, event: &TimecodeEvent, now: Instant) {
+        let Some(index) = self
+            .show
+            .sequence(event.sequence)
+            .and_then(|sequence| sequence.cue_index(event.cue))
+        else {
+            return;
+        };
+        let _ = self.playback.go(
+            &self.show,
+            Target::Sequence(event.sequence),
+            event.sequence,
+            index,
+            now,
+        );
+    }
+
+    fn history_step(&mut self, undo: bool) -> Result<CommandOutcome, CommandError> {
+        let label = if undo {
+            self.history.undo(&mut self.show)
+        } else {
+            self.history.redo(&mut self.show)
+        };
+        let Some(label) = label else {
+            return Ok(CommandOutcome::message(if undo {
+                "Nothing to undo."
+            } else {
+                "Nothing to redo."
+            }));
+        };
+        self.after_history_restore();
+        Ok(CommandOutcome::message(format!(
+            "{} `{}` ({} undo, {} redo)",
+            if undo { "Undid" } else { "Redid" },
+            if label.is_empty() { "change" } else { &label },
+            self.history.undo_depth(),
+            self.history.redo_depth()
+        )))
+    }
+
+    /// Undo can remove or restore any show object, so running state that points
+    /// at something which no longer exists is dropped here rather than left to
+    /// fail at render time.
+    fn after_history_restore(&mut self) {
+        self.selection
+            .retain(|number| self.show.fixture(*number).is_some());
+        if self
+            .world
+            .and_then(|number| self.show.world(number))
+            .is_none()
+        {
+            self.world = None;
+        }
+        if self
+            .filter
+            .and_then(|number| self.show.filter(number))
+            .is_none()
+        {
+            self.filter = None;
+        }
+        self.playback.prune(&self.show);
+        let live: BTreeSet<u16> = self
+            .show
+            .effects
+            .iter()
+            .map(|effect| effect.number)
+            .collect();
+        let stale: Vec<u16> = self
+            .effects
+            .runs()
+            .map(|(number, _)| number)
+            .filter(|number| !live.contains(number))
+            .collect();
+        for number in stale {
+            self.effects.stop(number);
+        }
+        self.playback.refresh(&self.show, self.clock);
+        self.revision += 1;
+    }
+
     /// Apply a change only if the resulting show still validates.
     fn mutate<F>(&mut self, change: F) -> Result<String, CommandError>
     where
@@ -2462,6 +2974,9 @@ impl Engine {
                 problems.join("; ")
             )));
         }
+        if backup != self.show {
+            self.history.record(backup, self.label.clone());
+        }
         self.revision += 1;
         Ok(message)
     }
@@ -2480,8 +2995,13 @@ pub const HELP: &[&str] = &[
     "New [Show] [\"name\"]                    start an empty show",
     "Store Palette Color 1 \"Warm\"           capture the programmer in a pool",
     "Delete Palette Color 1 / Palette        delete or list palettes",
-    "Store Cue 1 [\"name\"] [Fade 2] [Delay 0.5] [Sequence 2]",
+    "Store Cue 1 [\"name\"] [Fade 2] [Delay 0.5] [Mib] [Sequence 2]",
     "Delete Cue 1 [Sequence 2] / Sequence [2]  delete or list cues",
+    "Undo / Redo                            step through show edits",
+    "Store Timecode 1 \"Song\" [Fps 25]       create a timecode show",
+    "Timecode 1 Add 00:00:10:00 Sequence 1 Cue 2",
+    "Timecode 1 Start / Pause / Stop / At 00:00:10:00",
+    "Timecode [1] / Delete Timecode 1       list or delete timecode shows",
     "Assign Executor 1 Sequence 1            bind a cue list to a fader",
     "Executor 1 At 75 | Full | Off           executor master fader",
     "Go | Back | Pause | Release [Executor 1 | Sequence 1]",
@@ -2512,6 +3032,11 @@ pub fn level_value(level: &Level) -> Result<f64, CommandError> {
         }
         Level::Full => Ok(1.0),
     }
+}
+
+/// `1 step`, `2 steps`: keeps reports grammatical without a crate.
+fn count(number: usize, singular: &str) -> String {
+    format!("{number} {singular}{}", if number == 1 { "" } else { "s" })
 }
 
 /// Compact fixture list: `1 Thru 3 + 7`.
@@ -3471,6 +3996,249 @@ mod tests {
             Some(0),
             "dimmer at 0 with no level"
         );
+    }
+
+    #[test]
+    fn undo_and_redo_step_through_show_edits() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 40").unwrap();
+        engine.execute("Store Cue 1 Fade 2").unwrap();
+        assert_eq!(engine.show.sequences.len(), 1);
+
+        let undone = engine.execute("Undo").unwrap();
+        assert!(undone.lines[0].starts_with("Undid"), "{undone:?}");
+        assert!(undone.lines[0].contains("Store Cue 1 Fade 2"));
+        assert!(engine.show.sequences.is_empty(), "the store was undone");
+        assert_eq!(dimmer(&engine, 1), 0.4, "console state is not undone");
+
+        let undone = engine.execute("Undo").unwrap();
+        assert!(undone.lines[0].contains("Fixture 1 At 40"));
+        assert!(engine.show.fixture(1).unwrap().levels.is_empty());
+        assert!(engine.execute("Undo").unwrap().lines[0].contains("Nothing to undo"));
+
+        let redone = engine.execute("Redo").unwrap();
+        assert!(redone.lines[0].starts_with("Redid"), "{redone:?}");
+        assert_eq!(dimmer(&engine, 1), 0.4);
+        engine.execute("Redo").unwrap();
+        assert_eq!(engine.show.sequences.len(), 1);
+        assert!(engine.execute("Redo").unwrap().lines[0].contains("Nothing to redo"));
+    }
+
+    #[test]
+    fn a_new_edit_drops_the_redo_branch() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 20").unwrap();
+        engine.execute("Undo").unwrap();
+        engine.execute("Fixture 1 At 60").unwrap();
+        let redo = engine.execute("Redo").unwrap();
+        assert!(redo.lines[0].contains("Nothing to redo"), "{redo:?}");
+        assert_eq!(dimmer(&engine, 1), 0.6);
+    }
+
+    #[test]
+    fn undo_covers_show_edits_not_selection_or_rejected_commands() {
+        let mut engine = engine();
+        engine.execute("Fixture 1").unwrap();
+        assert!(engine.execute("Undo").unwrap().lines[0].contains("Nothing to undo"));
+        assert_eq!(engine.selection, vec![1]);
+
+        engine.execute("Fixture 1 At 30").unwrap();
+        assert!(engine.execute("Fixture 1 At 101").is_err());
+        engine.execute("Undo").unwrap();
+        assert!(engine.show.fixture(1).unwrap().levels.is_empty());
+        assert!(
+            engine.execute("Undo").unwrap().lines[0].contains("Nothing to undo"),
+            "the rejected command left no step"
+        );
+    }
+
+    #[test]
+    fn move_in_black_pre_positions_a_dark_fixture() {
+        let mut engine = engine();
+        let start = engine.clock();
+        engine.tick(start);
+        engine.execute("Fixture 1 At 0").unwrap();
+        engine.execute("Fixture 1 At ColorAdd_R 0").unwrap();
+        engine.execute("Store Cue 1 Fade 0").unwrap();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Fixture 1 At ColorAdd_R Full").unwrap();
+        engine.execute("Store Cue 2 Fade 1 Mib").unwrap();
+
+        let listing = engine.execute("Sequence 1").unwrap().lines.join("\n");
+        assert!(
+            listing.contains("Mib") && listing.contains("yes"),
+            "{listing}"
+        );
+
+        engine.execute("Clear All").unwrap();
+        engine.execute("Go Sequence 1").unwrap();
+        engine.execute("Go Sequence 1").unwrap();
+        engine.tick(start + Duration::from_millis(500));
+        assert_eq!(
+            engine.render().slot(1, 2),
+            Some(255),
+            "colour is already in place half way through the fade"
+        );
+        assert_eq!(engine.render().slot(1, 1), Some(128), "dimmer still fades");
+    }
+
+    #[test]
+    fn timecode_drives_cues_from_the_engine_clock() {
+        let mut engine = engine();
+        let start = engine.clock();
+        engine.tick(start);
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Fixture 1 At 0").unwrap();
+        engine.execute("Store Cue 2 Fade 0").unwrap();
+        engine.execute("Clear All").unwrap();
+
+        engine.execute("Store Timecode 1 \"Song\"").unwrap();
+        engine
+            .execute("Timecode 1 Add 00:00:00:00 Sequence 1 Cue 1")
+            .unwrap();
+        engine
+            .execute("Timecode 1 Add 00:00:01:00 Sequence 1 Cue 2")
+            .unwrap();
+        engine.execute("Timecode 1 Start").unwrap();
+
+        assert!(engine.tick(start + Duration::from_millis(10)));
+        assert_eq!(
+            engine.render().slot(1, 1),
+            Some(255),
+            "the event at frame zero starts cue 1"
+        );
+        engine.tick(start + Duration::from_secs(2));
+        assert_eq!(
+            engine.render().slot(1, 1),
+            Some(0),
+            "the event at one second starts cue 2"
+        );
+
+        let listing = engine.execute("Timecode 1").unwrap().lines.join("\n");
+        assert!(listing.contains("00:00:01:00"), "{listing}");
+        assert!(listing.contains("running"), "{listing}");
+    }
+
+    #[test]
+    fn timecode_pauses_stops_and_locates() {
+        let mut engine = engine();
+        let start = engine.clock();
+        engine.tick(start);
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Store Timecode 1 \"Song\" Fps 25").unwrap();
+        engine
+            .execute("Timecode 1 Add 00:00:01:00 Sequence 1 Cue 1")
+            .unwrap();
+        engine.execute("Clear All").unwrap();
+        engine.execute("Timecode 1 Start").unwrap();
+        engine.tick(start + Duration::from_millis(500));
+
+        let paused = engine.execute("Timecode 1 Pause").unwrap();
+        assert!(paused.lines[0].contains("00:00:00:12"), "{paused:?}");
+        assert!(!engine.timecode.is_running());
+        engine.tick(start + Duration::from_secs(5));
+        assert_eq!(
+            engine.render().slot(1, 1),
+            Some(0),
+            "a paused track does not fire"
+        );
+
+        engine.execute("Timecode 1 Start").unwrap();
+        engine.tick(start + Duration::from_secs(6));
+        assert_eq!(
+            engine.render().slot(1, 1),
+            Some(255),
+            "resuming keeps the position and passes the event"
+        );
+
+        engine.execute("Timecode 1 Stop").unwrap();
+        let stopped = engine.execute("Timecode 1").unwrap().lines.join("\n");
+        assert!(stopped.contains("stopped 00:00:00:00"), "{stopped}");
+
+        let located = engine.execute("Timecode 1 At 00:00:01:00").unwrap();
+        assert!(located.lines[0].contains("00:00:01:00"), "{located:?}");
+    }
+
+    #[test]
+    fn timecode_commands_report_bad_input() {
+        let mut engine = engine();
+        assert!(
+            engine.execute("Timecode 1").is_ok(),
+            "a listing is a message"
+        );
+        assert!(engine
+            .execute("Timecode 1 Add 00:00:00:00 Sequence 1 Cue 1")
+            .is_err());
+        engine.execute("Store Timecode 1").unwrap();
+        assert!(engine
+            .execute("Timecode 1 Add 00:00:00:00 Sequence 1 Cue 1")
+            .is_err());
+
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        assert!(engine
+            .execute("Timecode 1 Add 00:00:00:00 Sequence 1 Cue 2")
+            .is_err());
+        engine
+            .execute("Timecode 1 Add 00:00:00:00 Sequence 1 Cue 1")
+            .unwrap();
+        assert!(
+            engine
+                .execute("Timecode 1 Add 00:00:00:00 Sequence 1 Cue 1")
+                .is_err(),
+            "duplicate positions are rejected"
+        );
+        assert!(
+            engine
+                .execute("Timecode 1 Add 00:00:00:25 Sequence 1 Cue 1")
+                .is_err(),
+            "25 fps has no frame 25"
+        );
+        assert!(engine.execute("Store Timecode 2 Fps 61").is_err());
+        assert!(engine.execute("Timecode 1 Remove 00:00:09:00").is_err());
+        assert!(engine.execute("Timecode 1 Remove 00:00:00:00").is_ok());
+        assert!(engine.execute("Delete Timecode 1").is_ok());
+        assert!(engine.execute("Timecode 1").is_ok());
+    }
+
+    #[test]
+    fn timecode_shows_survive_save_and_load() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Store Timecode 1 \"Song\" Fps 30").unwrap();
+        engine
+            .execute("Timecode 1 Add 00:00:02:00 Sequence 1 Cue 1")
+            .unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "openlight-phase4-{}.olshow.json",
+            std::process::id()
+        ));
+        engine
+            .execute(&format!("Save \"{}\"", path.display()))
+            .unwrap();
+
+        let mut other = Engine::empty();
+        other
+            .execute(&format!("Load \"{}\"", path.display()))
+            .unwrap();
+        assert_eq!(other.show.timecodes.len(), 1);
+        assert_eq!(other.show.timecodes[0].fps, 30);
+        assert_eq!(other.show.timecodes[0].events[0].at, "00:00:02:00");
+        assert!(!other.timecode.is_running(), "the player is not saved");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn status_reports_timecode_and_undo_depth() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 30").unwrap();
+        engine.execute("Store Timecode 1").unwrap();
+        let status = engine.execute("Status").unwrap().lines.join("\n");
+        assert!(status.contains("Undo: 2 steps"), "{status}");
+        assert!(status.contains("Timecode: idle"), "{status}");
     }
 
     fn write_demo_gdtf(path: &Path) {

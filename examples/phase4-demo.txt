@@ -1,0 +1,44 @@
+# Phase 4 demo: undo, move-in-black and timecode.
+#
+#   cargo run -p openlight-console -- --output 1=virtual \
+#     --script examples/phase4-demo.txt --frames 120 --trace
+#
+# The script is deterministic: the track has finished, so the final frame is
+# cue 2 at full.
+
+Import Gdtf "examples/gdtf/openlight-demo-wash.gdtf"
+
+Patch Fixture 1 At 1.001 Type "OpenLight Demo Wash"
+Patch Fixture 2 At 1.005 Type "OpenLight Demo Wash"
+
+# Undo and redo cover show edits. The programmer keeps its value, because it is
+# console state, not show data.
+Fixture 1 Thru 2 At 40
+Master Grand At 50
+Undo
+Redo
+Undo
+
+# Cue 1 is black; cue 2 brings the dimmer up with move in black, so the colour
+# is already in place before the fixtures come on.
+Fixture 1 Thru 2 At 0
+Fixture 1 Thru 2 At ColorAdd_R 0
+Store Cue 1 "Dark" Fade 0
+Fixture 1 Thru 2 At Full
+Fixture 1 Thru 2 At ColorAdd_R Full
+Store Cue 2 "Red" Fade 1 Mib
+
+# A timecode show fires the two cues from the engine clock.
+Clear All
+Store Timecode 1 "Song" Fps 25
+Timecode 1 Add 00:00:00:00 Sequence 1 Cue 1
+Timecode 1 Add 00:00:01:00 Sequence 1 Cue 2
+Timecode 1 Start
+Wait 2
+Timecode 1 Pause
+Timecode 1 Stop
+
+Timecode 1
+Sequence 1
+Status
+Save "target/phase4-demo.olshow.json"

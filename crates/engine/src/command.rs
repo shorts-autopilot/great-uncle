@@ -16,7 +16,7 @@
 //! New [Show] ["name"]
 //! Store Palette <Feature> <n> ["name"]    capture the programmer
 //! Delete Palette <Feature> <n> | Palette
-//! Store Cue 1 ["name"] [Fade 2] [Delay 0.5] [Sequence 2]
+//! Store Cue 1 ["name"] [Fade 2] [Delay 0.5] [Mib [On|Off]] [Sequence 2]
 //! Delete Cue 1 [Sequence 2] | Sequence [2]
 //! Assign Executor 1 Sequence 1
 //! Executor 1 At 75 | Full | Off           executor master fader
@@ -33,6 +33,11 @@
 //! Store Effect 1 ["name"] [Attribute Dimmer] [Waveform Sine]
 //!              [Rate 1] [Size 50] [Spread 0]
 //! Delete Effect 1 | Effect
+//! Undo | Redo
+//! Store Timecode 1 ["name"] [Fps 25] | Delete Timecode 1 | Timecode [1]
+//! Timecode 1 Add 00:00:10:00 Sequence 1 Cue 2
+//! Timecode 1 Remove 00:00:10:00 | Timecode 1 At 00:00:10:00
+//! Timecode 1 Start | Pause | Stop
 //! Sheet | Status | Save "show.json" | Load "show.json" | Help
 //! ```
 //!
@@ -129,6 +134,7 @@ pub enum Command {
         name: Option<String>,
         fade: Option<f64>,
         delay: Option<f64>,
+        mib: Option<bool>,
     },
     DeleteCue {
         sequence: u16,
@@ -222,6 +228,42 @@ pub enum Command {
     EffectOff {
         effect: Option<u16>,
     },
+    StoreTimecode {
+        number: u16,
+        name: Option<String>,
+        fps: Option<u8>,
+    },
+    DeleteTimecode {
+        number: u16,
+    },
+    AddTimecodeEvent {
+        timecode: u16,
+        at: String,
+        sequence: u16,
+        cue: f64,
+    },
+    RemoveTimecodeEvent {
+        timecode: u16,
+        at: String,
+    },
+    StartTimecode {
+        timecode: u16,
+    },
+    PauseTimecode {
+        timecode: u16,
+    },
+    StopTimecode {
+        timecode: u16,
+    },
+    LocateTimecode {
+        timecode: u16,
+        at: String,
+    },
+    ListTimecodes {
+        only: Option<u16>,
+    },
+    Undo,
+    Redo,
     Go {
         target: Option<PlaybackRef>,
     },
@@ -349,7 +391,10 @@ pub fn lex(line: &str) -> Result<Vec<Token>, CommandError> {
             }
             digit if digit.is_ascii_digit() => {
                 let start = index;
-                while index < chars.len() && (chars[index].is_ascii_digit() || chars[index] == '.')
+                // `1.001` is a patch address and `00:00:10:00` is a timecode;
+                // both are one token that the parser validates.
+                while index < chars.len()
+                    && (chars[index].is_ascii_digit() || chars[index] == '.' || chars[index] == ':')
                 {
                     index += 1;
                 }
@@ -428,6 +473,15 @@ const RESERVED: &[&str] = &[
     "size",
     "spread",
     "on",
+    "mib",
+    "timecode",
+    "fps",
+    "add",
+    "remove",
+    "start",
+    "stop",
+    "undo",
+    "redo",
 ];
 
 struct Parser<'a> {
@@ -607,6 +661,17 @@ impl Parser<'_> {
         }
         if word.eq_ignore_ascii_case("effect") || word.eq_ignore_ascii_case("effects") {
             return self.effect_command();
+        }
+        if word.eq_ignore_ascii_case("timecode") || word.eq_ignore_ascii_case("timecodes") {
+            return self.timecode_command();
+        }
+        if word.eq_ignore_ascii_case("undo") {
+            self.expect_end()?;
+            return Ok(Command::Undo);
+        }
+        if word.eq_ignore_ascii_case("redo") {
+            self.expect_end()?;
+            return Ok(Command::Redo);
         }
         if word.eq_ignore_ascii_case("sheet") || word.eq_ignore_ascii_case("fixtures") {
             self.expect_end()?;
@@ -1045,7 +1110,103 @@ impl Parser<'_> {
         ))
     }
 
+    fn timecode_command(&mut self) -> Result<Command, CommandError> {
+        if self.at_end() {
+            return Ok(Command::ListTimecodes { only: None });
+        }
+        let number = self.whole_number("timecode number")?;
+        if self.at_end() {
+            return Ok(Command::ListTimecodes { only: Some(number) });
+        }
+        if self.eat_word("add") {
+            let at = self.timecode_token()?;
+            if !self.eat_word("sequence") {
+                return Err(CommandError::with_hint(
+                    "`Timecode <n> Add` needs a sequence",
+                    "`Timecode 1 Add 00:00:10:00 Sequence 1 Cue 2`",
+                ));
+            }
+            let sequence = self.whole_number("sequence number")?;
+            if !self.eat_word("cue") {
+                return Err(CommandError::with_hint(
+                    "`Timecode <n> Add` needs a cue",
+                    "`Timecode 1 Add 00:00:10:00 Sequence 1 Cue 2`",
+                ));
+            }
+            let cue = self.cue_number()?;
+            self.expect_end()?;
+            return Ok(Command::AddTimecodeEvent {
+                timecode: number,
+                at,
+                sequence,
+                cue,
+            });
+        }
+        if self.eat_word("remove") {
+            let at = self.timecode_token()?;
+            self.expect_end()?;
+            return Ok(Command::RemoveTimecodeEvent {
+                timecode: number,
+                at,
+            });
+        }
+        if self.eat_word("start") {
+            self.expect_end()?;
+            return Ok(Command::StartTimecode { timecode: number });
+        }
+        if self.eat_word("pause") {
+            self.expect_end()?;
+            return Ok(Command::PauseTimecode { timecode: number });
+        }
+        if self.eat_word("stop") {
+            self.expect_end()?;
+            return Ok(Command::StopTimecode { timecode: number });
+        }
+        if self.eat_word("at") {
+            let at = self.timecode_token()?;
+            self.expect_end()?;
+            return Ok(Command::LocateTimecode {
+                timecode: number,
+                at,
+            });
+        }
+        Err(CommandError::with_hint(
+            format!(
+                "unexpected {}",
+                self.peek().cloned().unwrap_or(Token::Word(String::new()))
+            ),
+            "use `Timecode 1 Add|Remove <timecode>`, `Start`, `Pause`, `Stop` or `At <timecode>`",
+        ))
+    }
+
+    fn timecode_token(&mut self) -> Result<String, CommandError> {
+        match self.bump() {
+            Some(Token::Number(text)) | Some(Token::Word(text)) => Ok(text),
+            Some(other) => Err(CommandError::with_hint(
+                format!("expected a timecode, found {other}"),
+                "write positions as `HH:MM:SS:FF`, e.g. `00:01:30:00`",
+            )),
+            None => Err(CommandError::with_hint(
+                "expected a timecode",
+                "write positions as `HH:MM:SS:FF`, e.g. `00:01:30:00`",
+            )),
+        }
+    }
+
     fn store(&mut self) -> Result<Command, CommandError> {
+        if self.eat_word("timecode") {
+            let number = self.whole_number("timecode number")?;
+            let name = self.optional_name()?;
+            let mut fps = None;
+            if self.eat_word("fps") {
+                let value = self.whole_number("frame rate")?;
+                fps = Some(u8::try_from(value).map_err(|_| {
+                    CommandError::new(format!("frame rate {value} is outside 1..=60"))
+                })?);
+            }
+            self.expect_end()?;
+            return Ok(Command::StoreTimecode { number, name, fps });
+        }
         if self.eat_word("group") {
             let number = self.whole_number("group number")?;
             let name = self.optional_name()?;
@@ -1130,12 +1291,20 @@ impl Parser<'_> {
             let mut name = self.optional_name()?;
             let mut fade = None;
             let mut delay = None;
+            let mut mib = None;
             let mut sequence = 1;
             loop {
                 if self.eat_word("fade") {
                     fade = Some(self.seconds("fade")?);
                 } else if self.eat_word("delay") {
                     delay = Some(self.seconds("delay")?);
+                } else if self.eat_word("mib") {
+                    if self.eat_word("off") {
+                        mib = Some(false);
+                    } else {
+                        self.eat_word("on");
+                        mib = Some(true);
+                    }
                 } else if self.eat_word("sequence") {
                     sequence = self.whole_number("sequence number")?;
                 } else if self.eat_word("in") {
@@ -1160,6 +1329,7 @@ impl Parser<'_> {
                 name,
                 fade,
                 delay,
+                mib,
             });
         }
         Err(CommandError::with_hint(
@@ -1188,6 +1358,11 @@ impl Parser<'_> {
             let number = self.whole_number("effect number")?;
             self.expect_end()?;
             return Ok(Command::DeleteEffect { number });
+        }
+        if self.eat_word("timecode") {
+            let number = self.whole_number("timecode number")?;
+            self.expect_end()?;
+            return Ok(Command::DeleteTimecode { number });
         }
         if self.eat_word("palette") {
             let feature = self.name_token("palette feature")?;
@@ -1555,6 +1730,7 @@ mod tests {
                 name: None,
                 fade: Some(2.0),
                 delay: Some(0.5),
+                mib: None,
             }
         );
         assert_eq!(
@@ -1565,6 +1741,29 @@ mod tests {
                 name: Some("Look".into()),
                 fade: None,
                 delay: None,
+                mib: None,
+            }
+        );
+        assert_eq!(
+            command("Store Cue 3 Mib Fade 1"),
+            Command::StoreCue {
+                sequence: 1,
+                number: 3.0,
+                name: None,
+                fade: Some(1.0),
+                delay: None,
+                mib: Some(true),
+            }
+        );
+        assert_eq!(
+            command("Store Cue 3 Mib Off"),
+            Command::StoreCue {
+                sequence: 1,
+                number: 3.0,
+                name: None,
+                fade: None,
+                delay: None,
+                mib: Some(false),
             }
         );
         assert_eq!(
@@ -1785,6 +1984,67 @@ mod tests {
         assert!(error("Store Filter 3")
             .message
             .contains("at least one feature"));
+    }
+
+    #[test]
+    fn parses_timecode_and_history_commands() {
+        assert_eq!(command("Timecode"), Command::ListTimecodes { only: None });
+        assert_eq!(
+            command("Timecode 2"),
+            Command::ListTimecodes { only: Some(2) }
+        );
+        assert_eq!(
+            command(r#"Store Timecode 2 "Song" Fps 30"#),
+            Command::StoreTimecode {
+                number: 2,
+                name: Some("Song".into()),
+                fps: Some(30),
+            }
+        );
+        assert_eq!(
+            command("Timecode 2 Add 00:01:30:12 Sequence 3 Cue 4.5"),
+            Command::AddTimecodeEvent {
+                timecode: 2,
+                at: "00:01:30:12".into(),
+                sequence: 3,
+                cue: 4.5,
+            }
+        );
+        assert_eq!(
+            command("Timecode 2 Remove 00:01:30:12"),
+            Command::RemoveTimecodeEvent {
+                timecode: 2,
+                at: "00:01:30:12".into(),
+            }
+        );
+        assert_eq!(
+            command("Timecode 2 At 00:00:05:00"),
+            Command::LocateTimecode {
+                timecode: 2,
+                at: "00:00:05:00".into(),
+            }
+        );
+        assert_eq!(
+            command("Timecode 2 Start"),
+            Command::StartTimecode { timecode: 2 }
+        );
+        assert_eq!(
+            command("Timecode 2 Pause"),
+            Command::PauseTimecode { timecode: 2 }
+        );
+        assert_eq!(
+            command("Timecode 2 Stop"),
+            Command::StopTimecode { timecode: 2 }
+        );
+        assert_eq!(
+            command("Delete Timecode 2"),
+            Command::DeleteTimecode { number: 2 }
+        );
+        assert_eq!(command("Undo"), Command::Undo);
+        assert_eq!(command("Redo"), Command::Redo);
+        assert!(error("Timecode 1 Add 00:00:00:00 Sequence 1")
+            .message
+            .contains("needs a cue"));
     }
 
     #[test]

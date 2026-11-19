@@ -10098,7 +10098,7 @@
    "module": "ui/shell",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "ws_user_interface",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/ws_user_interface.html",
@@ -36536,7 +36536,7 @@
    "module": "cmd",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "keyword_timecode",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/keyword_timecode.html",
@@ -50822,7 +50822,7 @@
    "module": "programmer",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "operate_fixture_sheet",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/operate_fixture_sheet.html",
@@ -56891,7 +56891,7 @@
    "module": "playback",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "cue_mib",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/cue_mib.html",
@@ -60464,7 +60464,7 @@
    "module": "timecode",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "timecode",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/timecode.html",
@@ -60499,7 +60499,7 @@
    "module": "timecode",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "timecode_viewer",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/timecode_viewer.html",
@@ -60980,7 +60980,7 @@
    "module": "timecode",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "timecode_events",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/timecode_events.html",
@@ -61025,7 +61025,7 @@
    "module": "timecode",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "timecode_slots",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/timecode_slots.html",
@@ -61172,7 +61172,7 @@
    "module": "timecode",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "timecode_create",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/timecode_create.html",
@@ -61309,7 +61309,7 @@
    "module": "timecode",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "timecode_settings",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/timecode_settings.html",

@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::levels::Levels;
+use crate::levels::{is_intensity, Levels};
 use crate::show::Show;
 
 /// Longest fade or delay accepted, in seconds (24 hours).
@@ -46,6 +46,11 @@ pub struct Cue {
     /// Delay before the fade starts, in seconds.
     #[serde(default)]
     pub delay: f64,
+    /// Move in black: fixtures that are dark when the cue starts jump to its
+    /// non-intensity values instead of fading them, so colour and position are
+    /// already in place when the dimmer rises.
+    #[serde(default)]
+    pub mib: bool,
     /// Tracked values: only what changes relative to the previous cue.
     #[serde(default)]
     pub levels: Levels,
@@ -230,11 +235,14 @@ impl Playback {
             .get(cue_index)
             .ok_or_else(|| format!("sequence {sequence_number} has no cue at that position"))?;
 
-        let from = match self.runs.get(&target) {
+        let mut from = match self.runs.get(&target) {
             Some(run) => run.levels_at(now),
             None => Levels::new(),
         };
         let to = sequence.state_at(cue_index);
+        if cue.mib {
+            snap_non_intensity(&mut from, &to);
+        }
         self.runs.insert(
             target,
             Run {
@@ -293,6 +301,15 @@ impl Playback {
         self.runs.remove(&target).is_some()
     }
 
+    /// Drop playbacks whose sequence or executor no longer exists, e.g. after
+    /// an undo removed it.
+    pub fn prune(&mut self, show: &Show) {
+        self.runs.retain(|target, _| match target {
+            Target::Sequence(number) => show.sequence(*number).is_some(),
+            Target::Executor(number) => show.executor(*number).is_some(),
+        });
+    }
+
     pub fn clear(&mut self) {
         self.runs.clear();
         self.output = Levels::new();
@@ -319,6 +336,23 @@ impl Playback {
         let changed = output != self.output;
         self.output = output;
         changed
+    }
+}
+
+/// Move-in-black: for every fixture that is dark in `from`, replace the
+/// non-intensity attributes with the target values before the fade is built, so
+/// they are constant for the whole transition. Intensity is left alone and
+/// still fades; a fixture that is already lit is untouched.
+fn snap_non_intensity(from: &mut Levels, to: &Levels) {
+    for (fixture, attributes) in to.fixtures() {
+        if !from.is_dark(fixture) {
+            continue;
+        }
+        for (attribute, level) in attributes {
+            if !is_intensity(attribute) {
+                from.set(fixture, attribute, *level);
+            }
+        }
     }
 }
 
@@ -361,6 +395,7 @@ mod tests {
             name: String::new(),
             fade,
             delay: 0.0,
+            mib: false,
             levels,
         }
     }
@@ -463,6 +498,73 @@ mod tests {
             .unwrap()
             .levels_at(start + Duration::from_millis(1500));
         assert_eq!(moving.get(1, "Dimmer"), Some(0.75));
+    }
+
+    #[test]
+    fn move_in_black_snaps_colour_while_the_fixture_is_dark() {
+        let mut show = demo_show();
+        show.sequences.push(Sequence {
+            number: 1,
+            name: "Main".into(),
+            cues: vec![
+                cue(
+                    1.0,
+                    0.0,
+                    levels(&[(1, "Dimmer", 0.0), (1, "ColorAdd_R", 0.0)]),
+                ),
+                Cue {
+                    mib: true,
+                    ..cue(
+                        2.0,
+                        1.0,
+                        levels(&[(1, "Dimmer", 1.0), (1, "ColorAdd_R", 1.0)]),
+                    )
+                },
+            ],
+        });
+        let start = Instant::now();
+        let mut playback = Playback::new();
+        playback
+            .go(&show, Target::Sequence(1), 1, 0, start)
+            .unwrap();
+        playback
+            .go(&show, Target::Sequence(1), 1, 1, start)
+            .unwrap();
+        let run = playback.run(Target::Sequence(1)).unwrap();
+        let half = run.levels_at(start + Duration::from_millis(500));
+        assert_eq!(half.get(1, "ColorAdd_R"), Some(1.0), "colour is in place");
+        assert_eq!(half.get(1, "Dimmer"), Some(0.5), "intensity still fades");
+    }
+
+    #[test]
+    fn move_in_black_leaves_a_lit_fixture_fading() {
+        let mut show = demo_show();
+        show.sequences.push(Sequence {
+            number: 1,
+            name: "Main".into(),
+            cues: vec![
+                cue(1.0, 0.0, levels(&[(1, "Dimmer", 1.0)])),
+                Cue {
+                    mib: true,
+                    ..cue(
+                        2.0,
+                        1.0,
+                        levels(&[(1, "Dimmer", 1.0), (1, "ColorAdd_R", 1.0)]),
+                    )
+                },
+            ],
+        });
+        let start = Instant::now();
+        let mut playback = Playback::new();
+        playback
+            .go(&show, Target::Sequence(1), 1, 0, start)
+            .unwrap();
+        playback
+            .go(&show, Target::Sequence(1), 1, 1, start)
+            .unwrap();
+        let run = playback.run(Target::Sequence(1)).unwrap();
+        let half = run.levels_at(start + Duration::from_millis(500));
+        assert_eq!(half.get(1, "ColorAdd_R"), Some(0.5));
     }
 
     #[test]

@@ -18,19 +18,22 @@ profiles that you supply.
 | 1 | Engine, show file, command line, DMX output | done — see [`docs/PHASE1.md`](docs/PHASE1.md) |
 | 2 | Palettes, cues, sequences, executor faders | done — see [`docs/PHASE2.md`](docs/PHASE2.md) |
 | 3 | Groups, worlds, filters, masters, effects | done — see [`docs/PHASE3.md`](docs/PHASE3.md) |
-| 4+ | Timecode, move-in-black, undo, UI | not started |
+| 4 | Timecode, move-in-black, undo, first UI shell | done — see [`docs/PHASE4.md`](docs/PHASE4.md) |
+| 5+ | Desktop GUI, richer timecode, tracking | not started |
 
-It is a headless console: a CLI with a REPL, a script runner and four output
-transports. You can program, store palettes and cues, run a cue list from an
-executor fader, address the rig through groups, fence it off with worlds and
-filters, scale it with grand, rate and group masters, and animate it with
-effects. There is no GUI yet.
+It is a console with a command line, a full-screen terminal shell, a script
+runner and four output transports. You can program, store palettes and cues, run
+a cue list from an executor fader, address the rig through groups, fence it off
+with worlds and filters, scale it with grand, rate and group masters, animate it
+with effects, run cues from a timecode show, move fixtures in black and undo any
+show edit. There is no desktop GUI yet.
 
 ## Quick start
 
 ```bash
-cargo test --workspace            # 154 tests, no hardware needed
+cargo test --workspace            # 184 tests, no hardware needed
 cargo run -p openlight-console    # interactive console
+cargo run -p openlight-console -- --ui   # full-screen terminal shell
 ```
 
 Light two fixtures on a virtual universe:
@@ -79,6 +82,22 @@ Universe 1: 120 frames, last frame 513 bytes, start code 0x00, 4 non-zero slots
 
 `BF` is 75% through the grand master on each of the four dimmers.
 
+Run a cue list from a timecode show, with move-in-black and undo:
+
+```bash
+cargo run -p openlight-console -- \
+  --output 1=virtual \
+  --script examples/phase4-demo.txt \
+  --frames 120 --trace
+```
+
+```
+Universe 1: 120 frames, last frame 513 bytes, start code 0x00, 4 non-zero slots
+  00 FF FF 00 00 FF FF 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 …
+```
+
+Both fixtures are at full with red at full: cue 2 of the timecode show has run.
+
 The trace line ends with the first slots of the frame that went out:
 
 ```
@@ -106,7 +125,7 @@ crates/dmx/       DMX512 transports: virtual, generic serial, ENTTEC, uDMX
 crates/engine/    show file, fixture types, GDTF import, commands, levels, palettes,
                   playback, pools (groups/worlds/filters), effects, render,
                   output runtime
-crates/console/   the `openlight` binary: CLI, REPL, script runner
+crates/console/   the `openlight` binary: CLI, REPL, terminal shell, script runner
 examples/         demo show scripts and their synthetic GDTF profile
 tools/            manual crawler (Phase 0), status stamping, demo profile generator
 spec/             the Phase 0 feature specification, statuses and evidence
@@ -121,6 +140,8 @@ docs/             per-phase design notes
   cues, sequences, executor faders, show format v2, limitations.
 - [`docs/PHASE3.md`](docs/PHASE3.md) — groups, worlds and filters, grand/rate/group
   masters, effects, show format v3, limitations.
+- [`docs/PHASE4.md`](docs/PHASE4.md) — undo/redo, move-in-black, timecode, the
+  terminal UI shell, show format v4, limitations.
 - [`spec/matrix.md`](spec/matrix.md) — the Phase 0 feature matrix this work is
   measured against, with per-row status.
 - [`spec/SCHEMA.md`](spec/SCHEMA.md) — how the crawled specification is stored.
