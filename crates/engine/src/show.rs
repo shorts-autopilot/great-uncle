@@ -413,19 +413,17 @@ impl Show {
         self.validate_filters(&mut problems);
         self.validate_effects(&mut problems);
 
-        for (name, value, max) in [
-            ("grand master", self.grand_master, 1.0),
-            ("rate master", self.rate_master, MAX_RATE_MASTER),
+        for (label, value, max, note) in [
+            ("grand master", self.grand_master, 1.0, ""),
+            (
+                "rate master",
+                self.rate_master,
+                MAX_RATE_MASTER,
+                " (a factor)",
+            ),
         ] {
             if !value.is_finite() || !(0.0..=max).contains(&value) {
-                problems.push(format!(
-                    "{name} {value} is outside 0..={max}{}",
-                    if name == "rate master" {
-                        " (a factor)"
-                    } else {
-                        ""
-                    }
-                ));
+                problems.push(format!("{label} {value} is outside 0..={max}{note}"));
             }
         }
 

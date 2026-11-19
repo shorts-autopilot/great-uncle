@@ -13,7 +13,7 @@
 //! write the programmer, so clearing an effect leaves the programmed look
 //! intact.
 //!
-//! **Masters** come last and scale intensity only: the grand master, then the
+//! **Masters** come last and scale intensity only: the grand master times the
 //! lowest master of every group that contains the fixture. Colour and position
 //! are untouched, so pulling a master down dims without changing the look.
 
@@ -81,9 +81,9 @@ pub fn intensity_master(show: &Show, fixture: u16) -> f64 {
 /// effects, then masters. Shared by the renderer and the fixture sheet so both
 /// describe the same output.
 pub struct Stage<'a> {
-    pub show: &'a Show,
-    pub playback: &'a Levels,
-    pub effects: &'a EffectOutput,
+    show: &'a Show,
+    playback: &'a Levels,
+    effects: &'a EffectOutput,
 }
 
 impl<'a> Stage<'a> {

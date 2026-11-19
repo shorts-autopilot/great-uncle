@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::command::{self, Command, CommandError, Level, LevelSource, PlaybackRef};
-use crate::effect::{Effects, Waveform, MAX_RATE_HZ, MAX_SPREAD_DEGREES};
+use crate::effect::{Effect, Effects, Waveform, MAX_RATE_HZ, MAX_SPREAD_DEGREES};
 use crate::fixture_type::{FixtureType, DIMMER};
 use crate::gdtf;
 use crate::levels::Levels;
@@ -1922,11 +1922,14 @@ impl Engine {
                 "import one first: `Import Gdtf \"file.gdtf\"`",
             ));
         }
+        // Store the pool's own spelling, so the filter reads back the same way
+        // the palette pools do however the operator typed it.
+        let mut allowed: Vec<String> = Vec::with_capacity(features.len());
         for feature in &features {
-            if !pools
+            let Some(pool) = pools
                 .iter()
-                .any(|pool| pool.eq_ignore_ascii_case(feature.trim()))
-            {
+                .find(|pool| pool.eq_ignore_ascii_case(feature.trim()))
+            else {
                 return Err(CommandError::with_hint(
                     format!("unknown feature pool `{feature}`"),
                     format!(
@@ -1934,14 +1937,16 @@ impl Engine {
                         pools.iter().cloned().collect::<Vec<_>>().join(", ")
                     ),
                 ));
+            };
+            if allowed.iter().any(|existing| existing == pool) {
+                return Err(CommandError::new(format!(
+                    "feature `{pool}` is listed twice"
+                )));
             }
+            allowed.push(pool.clone());
         }
         let mut created = false;
-        let label = features
-            .iter()
-            .map(|feature| feature.trim().to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
+        let label = allowed.join(", ");
         let message = self.mutate(|show| {
             match show
                 .filters
@@ -1949,7 +1954,7 @@ impl Engine {
                 .position(|filter| filter.number == number)
             {
                 Some(index) => {
-                    show.filters[index].features = features.clone();
+                    show.filters[index].features = allowed.clone();
                     if let Some(name) = &name {
                         show.filters[index].name = name.clone();
                     }
@@ -1957,7 +1962,7 @@ impl Engine {
                 None => {
                     created = true;
                     let mut filter = Filter::new(number);
-                    filter.features = features.clone();
+                    filter.features = allowed.clone();
                     if let Some(name) = &name {
                         filter.name = name.clone();
                     }
@@ -2179,7 +2184,7 @@ impl Engine {
 
         let mut created = false;
         let message = self.mutate(|show| {
-            let effect = crate::effect::Effect {
+            let effect = Effect {
                 number,
                 name: name.clone().unwrap_or_default(),
                 attribute: attribute.clone(),
@@ -2290,7 +2295,7 @@ impl Engine {
     }
 
     fn effect_list(&self, only: Option<u16>) -> CommandOutcome {
-        let effects: Vec<&crate::effect::Effect> = match only {
+        let effects: Vec<&Effect> = match only {
             Some(number) => self.show.effect(number).into_iter().collect(),
             None => self.show.effects.iter().collect(),
         };
@@ -2354,9 +2359,14 @@ impl Engine {
         Ok(list)
     }
 
+    /// The active world, if any.
+    fn active_world(&self) -> Option<&World> {
+        self.world.and_then(|number| self.show.world(number))
+    }
+
     /// Whether the active world, if any, allows a fixture.
     fn world_allows(&self, fixture: u16) -> bool {
-        match self.world.and_then(|number| self.show.world(number)) {
+        match self.active_world() {
             Some(world) => world.allows(fixture),
             None => true,
         }
@@ -2364,7 +2374,7 @@ impl Engine {
 
     /// Refuse a target set that reaches outside the active world.
     fn check_world(&self, fixtures: &[u16]) -> Result<(), CommandError> {
-        let Some(world) = self.world.and_then(|number| self.show.world(number)) else {
+        let Some(world) = self.active_world() else {
             return Ok(());
         };
         let blocked: Vec<u16> = fixtures
@@ -2480,7 +2490,7 @@ pub const HELP: &[&str] = &[
     "World 1 / World All / Store World 1 \"Front\" / World",
     "Filter 1 / Filter All / Store Filter 1 \"Intensity\" Dimmer Color",
     "Master Grand At 75 / Master Rate At 200 / Master Group 1 At 50 / Master",
-    "Store Effect 1 \"Pulse\" [Attribute Dimmer] [Waveform Sine] [Rate 1] [Size 50]",
+    "Store Effect 1 \"Pulse\" [Attribute Dimmer] [Waveform Sine] [Rate 1] [Size 50] [Spread 0]",
     "Effect 1 On [Fixture 1 Thru 4] / Effect 1 Off / Effect Off / Effect",
     "Sheet                                  print the fixture sheet",
     "Status                                 output, show and playback state",
@@ -2489,7 +2499,6 @@ pub const HELP: &[&str] = &[
     "Separate several commands with `;`.",
 ];
 
-/// Compact fixture list: `1 Thru 3 + 7`.
 pub fn level_value(level: &Level) -> Result<f64, CommandError> {
     match level {
         Level::Percent(percent) => {
@@ -2505,6 +2514,7 @@ pub fn level_value(level: &Level) -> Result<f64, CommandError> {
     }
 }
 
+/// Compact fixture list: `1 Thru 3 + 7`.
 fn format_fixture_list(fixtures: &[u16]) -> String {
     let mut numbers = fixtures.to_vec();
     numbers.sort_unstable();
@@ -3279,8 +3289,13 @@ mod tests {
         engine.execute("Fixture 1 At 50").unwrap();
 
         engine
-            .execute("Store Filter 1 \"Intensity\" Dimmer")
+            .execute("Store Filter 1 \"Intensity\" dimmer")
             .unwrap();
+        assert_eq!(
+            engine.show.filter(1).unwrap().features,
+            vec!["Dimmer".to_string()],
+            "a feature is stored in the pool's own spelling"
+        );
         engine.execute("Filter 1").unwrap();
         engine.execute("Fixture 1 At 60").unwrap();
 

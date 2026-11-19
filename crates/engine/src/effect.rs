@@ -111,18 +111,6 @@ pub struct Effect {
 }
 
 impl Effect {
-    pub fn new(number: u16) -> Self {
-        Self {
-            number,
-            name: String::new(),
-            attribute: default_attribute(),
-            waveform: Waveform::default(),
-            rate_hz: 1.0,
-            size: 0.5,
-            spread: 0.0,
-        }
-    }
-
     pub fn display_name(&self) -> String {
         if self.name.trim().is_empty() {
             format!("Effect {}", self.number)
@@ -221,10 +209,6 @@ impl EffectOutput {
             .get(&fixture)
             .and_then(|attributes| attributes.get(&attribute.to_ascii_lowercase()))
             .copied()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.offsets.is_empty()
     }
 }
 
