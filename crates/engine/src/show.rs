@@ -3,6 +3,9 @@
 //! A show is self-contained: fixture types are embedded, so a show opened on
 //! another machine never depends on a local fixture library. The format is
 //! versioned and every document is validated on load and before save.
+//!
+//! Version 2 adds palettes, sequences and executors. Version 1 files still
+//! load: the new sections default to empty and the show is upgraded on read.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -13,13 +16,21 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::fixture_type::{FixtureType, Mode};
+use crate::palette::Palette;
 use crate::patch::{self, PatchRange};
+use crate::playback::{Executor, Sequence, MAX_TIME};
 
 pub const SHOW_FORMAT: &str = "openlight-show";
-pub const SHOW_VERSION: u32 = 1;
+pub const SHOW_VERSION: u32 = 2;
+/// Older documents that still load, oldest first.
+pub const READABLE_VERSIONS: &[u32] = &[1, 2];
 pub const MAX_UNIVERSE_SIZE: u16 = 512;
 pub const MAX_UNIVERSE_NUMBER: u16 = 63_999;
 pub const MAX_FIXTURES: usize = 4096;
+pub const MAX_PALETTES: usize = 100_000;
+pub const MAX_SEQUENCES: usize = 4096;
+pub const MAX_CUES: usize = 65_536;
+pub const MAX_EXECUTORS: usize = 4096;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -33,6 +44,12 @@ pub struct Show {
     pub universes: Vec<Universe>,
     #[serde(default)]
     pub fixtures: Vec<Fixture>,
+    #[serde(default)]
+    pub palettes: Vec<Palette>,
+    #[serde(default)]
+    pub sequences: Vec<Sequence>,
+    #[serde(default)]
+    pub executors: Vec<Executor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -83,6 +100,9 @@ impl Show {
                 size: MAX_UNIVERSE_SIZE,
             }],
             fixtures: Vec::new(),
+            palettes: Vec::new(),
+            sequences: Vec::new(),
+            executors: Vec::new(),
         }
     }
 
@@ -101,6 +121,30 @@ impl Show {
         self.universes
             .iter()
             .find(|universe| universe.number == number)
+    }
+
+    pub fn palette(&self, feature: &str, number: u16) -> Option<&Palette> {
+        self.palettes.iter().find(|palette| {
+            palette.number == number && palette.feature.eq_ignore_ascii_case(feature.trim())
+        })
+    }
+
+    pub fn sequence(&self, number: u16) -> Option<&Sequence> {
+        self.sequences
+            .iter()
+            .find(|sequence| sequence.number == number)
+    }
+
+    pub fn sequence_index(&self, number: u16) -> Option<usize> {
+        self.sequences
+            .iter()
+            .position(|sequence| sequence.number == number)
+    }
+
+    pub fn executor(&self, number: u16) -> Option<&Executor> {
+        self.executors
+            .iter()
+            .find(|executor| executor.number == number)
     }
 
     pub fn find_type(&self, key: &str) -> Option<&FixtureType> {
@@ -315,7 +359,176 @@ impl Show {
             ));
         }
 
+        self.validate_palettes(&mut problems);
+        self.validate_sequences(&mut problems);
+        self.validate_executors(&mut problems);
+
         problems
+    }
+
+    fn validate_palettes(&self, problems: &mut Vec<String>) {
+        if self.palettes.len() > MAX_PALETTES {
+            problems.push(format!(
+                "{} palettes, the limit is {MAX_PALETTES}",
+                self.palettes.len()
+            ));
+        }
+        let mut keys = BTreeSet::new();
+        for palette in &self.palettes {
+            if palette.feature.trim().is_empty() {
+                problems.push(format!("palette {}: feature pool is empty", palette.number));
+            }
+            if palette.number == 0 {
+                problems.push(format!(
+                    "palette {} ({}): number 0 is not allowed",
+                    palette.label(),
+                    palette.feature
+                ));
+            }
+            if !keys.insert((palette.feature.to_ascii_lowercase(), palette.number)) {
+                problems.push(format!("palette {}: defined twice", palette.label()));
+            }
+            for (type_key, values) in &palette.values {
+                if self.find_type(type_key).is_none() {
+                    problems.push(format!(
+                        "palette {}: fixture type `{type_key}` is not in the show",
+                        palette.label()
+                    ));
+                }
+                if values.is_empty() {
+                    problems.push(format!(
+                        "palette {}, type `{type_key}`: no values",
+                        palette.label()
+                    ));
+                }
+                for (attribute, level) in values {
+                    if attribute.trim().is_empty() {
+                        problems.push(format!(
+                            "palette {}: value without an attribute",
+                            palette.label()
+                        ));
+                    }
+                    if !level.is_finite() || !(0.0..=1.0).contains(level) {
+                        problems.push(format!(
+                            "palette {}, attribute `{attribute}`: level {level} is outside 0..=1",
+                            palette.label()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    fn validate_sequences(&self, problems: &mut Vec<String>) {
+        if self.sequences.len() > MAX_SEQUENCES {
+            problems.push(format!(
+                "{} sequences, the limit is {MAX_SEQUENCES}",
+                self.sequences.len()
+            ));
+        }
+        let mut numbers = BTreeSet::new();
+        for sequence in &self.sequences {
+            if sequence.number == 0 {
+                problems.push("sequence number 0 is not allowed".into());
+            }
+            if !numbers.insert(sequence.number) {
+                problems.push(format!("sequence {}: number used twice", sequence.number));
+            }
+            if sequence.cues.len() > MAX_CUES {
+                problems.push(format!(
+                    "sequence {}: {} cues, the limit is {MAX_CUES}",
+                    sequence.number,
+                    sequence.cues.len()
+                ));
+            }
+            let mut cue_numbers: Vec<f64> = Vec::new();
+            for cue in &sequence.cues {
+                if !cue.number.is_finite() || cue.number < 0.0 {
+                    problems.push(format!(
+                        "sequence {}: cue number {} is not a finite positive number",
+                        sequence.number, cue.number
+                    ));
+                }
+                if cue_numbers
+                    .iter()
+                    .any(|number| (*number - cue.number).abs() < 1e-9)
+                {
+                    problems.push(format!(
+                        "sequence {}: cue {} is defined twice",
+                        sequence.number,
+                        crate::playback::format_cue_number(cue.number)
+                    ));
+                }
+                cue_numbers.push(cue.number);
+                for (name, value) in [("fade", cue.fade), ("delay", cue.delay)] {
+                    if !value.is_finite() || !(0.0..=MAX_TIME).contains(&value) {
+                        problems.push(format!(
+                            "sequence {} cue {}: {name} {value} is outside 0..={MAX_TIME} seconds",
+                            sequence.number,
+                            crate::playback::format_cue_number(cue.number)
+                        ));
+                    }
+                }
+                for (fixture, attributes) in cue.levels.fixtures() {
+                    for (attribute, level) in attributes {
+                        if attribute.trim().is_empty() {
+                            problems.push(format!(
+                                "sequence {} cue {}: value without an attribute",
+                                sequence.number,
+                                crate::playback::format_cue_number(cue.number)
+                            ));
+                        }
+                        if !level.is_finite() || !(0.0..=1.0).contains(level) {
+                            problems.push(format!(
+                                "sequence {} cue {}: fixture {fixture} `{attribute}` is {level}, expected 0..=1",
+                                sequence.number,
+                                crate::playback::format_cue_number(cue.number)
+                            ));
+                        }
+                    }
+                }
+            }
+            for pair in sequence.cues.windows(2) {
+                if pair[0].number > pair[1].number {
+                    problems.push(format!(
+                        "sequence {}: cue {} comes after cue {} and is not in ascending order",
+                        sequence.number,
+                        crate::playback::format_cue_number(pair[1].number),
+                        crate::playback::format_cue_number(pair[0].number)
+                    ));
+                }
+            }
+        }
+    }
+
+    fn validate_executors(&self, problems: &mut Vec<String>) {
+        if self.executors.len() > MAX_EXECUTORS {
+            problems.push(format!(
+                "{} executors, the limit is {MAX_EXECUTORS}",
+                self.executors.len()
+            ));
+        }
+        let mut numbers = BTreeSet::new();
+        for executor in &self.executors {
+            if executor.number == 0 {
+                problems.push("executor number 0 is not allowed".into());
+            }
+            if !numbers.insert(executor.number) {
+                problems.push(format!("executor {}: number used twice", executor.number));
+            }
+            if self.sequence(executor.sequence).is_none() {
+                problems.push(format!(
+                    "executor {}: sequence {} is not in the show",
+                    executor.number, executor.sequence
+                ));
+            }
+            if !executor.fader.is_finite() || !(0.0..=1.0).contains(&executor.fader) {
+                problems.push(format!(
+                    "executor {}: fader {} is outside 0..=1",
+                    executor.number, executor.fader
+                ));
+            }
+        }
     }
 
     /// Write the show atomically: full document first, then rename over the target.
@@ -393,7 +606,7 @@ impl Show {
             .get("version")
             .and_then(|value| value.as_u64())
             .unwrap_or_default() as u32;
-        if version != SHOW_VERSION {
+        if !READABLE_VERSIONS.contains(&version) {
             return Err(ShowError::UnsupportedVersion {
                 path: path.to_path_buf(),
                 found: version,
@@ -401,10 +614,13 @@ impl Show {
             });
         }
 
-        let show: Show = serde_json::from_value(value).map_err(|source| ShowError::Parse {
+        let mut show: Show = serde_json::from_value(value).map_err(|source| ShowError::Parse {
             path: path.to_path_buf(),
             source,
         })?;
+        // Version 1 has no palettes, sequences or executors. They default to
+        // empty, so the document is upgraded in place on read and saved as v2.
+        show.version = SHOW_VERSION;
         let problems = show.validate();
         if !problems.is_empty() {
             return Err(ShowError::Invalid {
@@ -433,7 +649,7 @@ pub enum ShowError {
     #[error("{}: not an OpenLight show (format `{found}`)", path.display())]
     WrongFormat { path: PathBuf, found: String },
     #[error(
-        "{}: show version {found} is not supported (this build reads {supported})",
+        "{}: show version {found} is not supported (this build reads 1..={supported})",
         path.display()
     )]
     UnsupportedVersion {
@@ -487,7 +703,7 @@ mod tests {
             .read_to_string(&mut text)
             .unwrap();
         assert!(text.contains("\"format\": \"openlight-show\""));
-        assert!(text.contains("\"version\": 1"));
+        assert!(text.contains("\"version\": 2"));
         assert!(text.contains("OpenLight Demo Wash"), "types are embedded");
         let _ = fs::remove_file(&path);
     }
@@ -583,6 +799,72 @@ mod tests {
         show.fixtures[0].levels.insert("Dimmer".into(), 2.5);
         let problems = show.validate();
         assert!(problems.iter().any(|p| p.contains("expected 0..=1")));
+    }
+
+    #[test]
+    fn version_one_shows_load_and_are_upgraded() {
+        let path = temp_path("v1");
+        fs::write(
+            &path,
+            r#"{"format":"openlight-show","version":1,"name":"Old","fixture_types":[],"universes":[{"number":1}],"fixtures":[]}"#,
+        )
+        .unwrap();
+        let show = Show::load(&path).unwrap();
+        assert_eq!(show.version, SHOW_VERSION);
+        assert!(show.palettes.is_empty());
+        assert!(show.sequences.is_empty());
+        assert!(show.executors.is_empty());
+        assert!(show.validate().is_empty());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn invalid_palettes_sequences_and_executors_are_reported() {
+        use crate::levels::Levels;
+        use crate::palette::Palette;
+        use crate::playback::{Cue, Executor, Sequence};
+
+        let mut show = demo_show();
+        show.palettes.push(Palette {
+            feature: String::new(),
+            number: 0,
+            name: String::new(),
+            values: BTreeMap::new(),
+        });
+        show.sequences.push(Sequence {
+            number: 1,
+            name: "Main".into(),
+            cues: vec![
+                Cue {
+                    number: 2.0,
+                    name: String::new(),
+                    fade: -1.0,
+                    delay: 0.0,
+                    levels: Levels::new(),
+                },
+                Cue {
+                    number: 1.0,
+                    name: String::new(),
+                    fade: 0.0,
+                    delay: 0.0,
+                    levels: Levels::new(),
+                },
+            ],
+        });
+        show.executors.push(Executor {
+            number: 1,
+            sequence: 9,
+            name: String::new(),
+            fader: 2.0,
+        });
+
+        let problems = show.validate();
+        assert!(problems.iter().any(|p| p.contains("feature pool is empty")));
+        assert!(problems.iter().any(|p| p.contains("number 0")));
+        assert!(problems.iter().any(|p| p.contains("fade -1")));
+        assert!(problems.iter().any(|p| p.contains("ascending order")));
+        assert!(problems.iter().any(|p| p.contains("sequence 9")));
+        assert!(problems.iter().any(|p| p.contains("fader 2")));
     }
 
     #[test]

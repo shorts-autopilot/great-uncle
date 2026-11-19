@@ -5,15 +5,19 @@
 //! [`Engine::mutate`], which rolls back and reports if the result would not
 //! validate, so a show is always safe to render and save.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
-use crate::command::{self, Command, CommandError, Level};
+use crate::command::{self, Command, CommandError, Level, LevelSource, PlaybackRef};
 use crate::fixture_type::DIMMER;
 use crate::gdtf;
+use crate::levels::Levels;
 use crate::output::{lock, OutputStatus};
+use crate::palette::{self, Palette};
 use crate::patch::PatchRange;
+use crate::playback::{format_cue_number, Executor, Playback, Sequence, Target, MAX_TIME};
 use crate::render::{self, OutputFrame};
 use crate::show::{Fixture, Show};
 
@@ -40,6 +44,11 @@ pub struct Engine {
     /// Bumped on every change the output threads must pick up.
     pub revision: u64,
     pub status: Arc<Mutex<OutputStatus>>,
+    /// Running cues and fader masters. Not part of the show file.
+    pub playback: Playback,
+    /// The instant the latest [`Engine::tick`] saw. Commands that start a fade
+    /// use it, so a test can drive time explicitly.
+    clock: Instant,
 }
 
 impl Default for Engine {
@@ -55,7 +64,26 @@ impl Engine {
             selection: Vec::new(),
             revision: 0,
             status: Arc::new(Mutex::new(OutputStatus::default())),
+            playback: Playback::new(),
+            clock: Instant::now(),
         }
+    }
+
+    /// The time an upcoming command will use to start a fade.
+    pub fn clock(&self) -> Instant {
+        self.clock
+    }
+
+    /// Advance playback to `now`. Returns true when the output changed, which
+    /// is what makes the output thread re-render and send.
+    pub fn tick(&mut self, now: Instant) -> bool {
+        let now = if now > self.clock { now } else { self.clock };
+        self.clock = now;
+        let changed = self.playback.refresh(&self.show, now);
+        if changed {
+            self.revision += 1;
+        }
+        changed
     }
 
     pub fn empty() -> Self {
@@ -81,7 +109,7 @@ impl Engine {
     }
 
     pub fn render(&self) -> OutputFrame {
-        render::render(&self.show)
+        render::render(&self.show, self.playback.output())
     }
 
     pub fn help_text(&self) -> Vec<String> {
@@ -91,12 +119,15 @@ impl Engine {
     fn dispatch(&mut self, command: Command) -> Result<CommandOutcome, CommandError> {
         match command {
             Command::Select(fixtures) => self.select(fixtures),
-            Command::SetLevel { fixtures, level } => self.set_level(fixtures, level),
-            Command::Off { fixtures } => self.set_level(fixtures, Level::Percent(0.0)),
-            Command::Clear => {
-                self.selection.clear();
-                Ok(CommandOutcome::message("Selection cleared"))
+            Command::SetLevel {
+                fixtures,
+                attribute,
+                source,
+            } => self.set_level(fixtures, attribute, source),
+            Command::Off { fixtures } => {
+                self.set_level(fixtures, None, LevelSource::Level(Level::Percent(0.0)))
             }
+            Command::Clear { all, values } => self.clear(all, values),
             Command::Patch {
                 fixture,
                 universe,
@@ -106,6 +137,34 @@ impl Engine {
             } => self.patch(fixture, universe, address, type_key, mode),
             Command::Unpatch { fixtures } => self.unpatch(fixtures),
             Command::ImportGdtf { path } => self.import_gdtf(&path),
+            Command::New { name } => self.new_show(name),
+            Command::StorePalette {
+                feature,
+                number,
+                name,
+            } => self.store_palette(&feature, number, name),
+            Command::DeletePalette { feature, number } => self.delete_palette(&feature, number),
+            Command::ListPalettes => Ok(self.palette_list()),
+            Command::StoreCue {
+                sequence,
+                number,
+                name,
+                fade,
+                delay,
+            } => self.store_cue(sequence, number, name, fade, delay),
+            Command::DeleteCue { sequence, number } => self.delete_cue(sequence, number),
+            Command::ListSequences { only } => Ok(self.sequence_list(only)),
+            Command::AssignExecutor { executor, sequence } => {
+                self.assign_executor(executor, sequence)
+            }
+            Command::SetExecutorLevel { executor, level } => {
+                self.set_executor_level(executor, level)
+            }
+            Command::ListExecutors { only } => Ok(self.executor_list(only)),
+            Command::Go { target } => self.playback_go(target),
+            Command::Back { target } => self.playback_back(target),
+            Command::Pause { target } => self.playback_pause(target),
+            Command::Release { target } => self.playback_release(target),
             Command::Sheet => Ok(self.sheet()),
             Command::Status => Ok(self.status_report()),
             Command::Save { path } => self.save(&path),
@@ -135,9 +194,25 @@ impl Engine {
     fn set_level(
         &mut self,
         fixtures: Option<Vec<u16>>,
-        level: Level,
+        attribute: Option<String>,
+        source: LevelSource,
     ) -> Result<CommandOutcome, CommandError> {
         let targets = self.targets(fixtures)?;
+        let level = match source {
+            LevelSource::Level(level) => level,
+            LevelSource::Palette { feature, number } => {
+                if attribute.is_some() {
+                    return Err(CommandError::with_hint(
+                        "a palette cannot be combined with an attribute",
+                        "use `At ColorAdd_R 50` or `At Palette Color 1`, not both",
+                    ));
+                }
+                let outcome = self.apply_palette(&targets, &feature, number)?;
+                self.selection = targets;
+                return Ok(outcome);
+            }
+        };
+
         let value = match level {
             Level::Percent(percent) => {
                 if !(0.0..=100.0).contains(&percent) {
@@ -149,35 +224,167 @@ impl Engine {
             }
             Level::Full => 1.0,
         };
+        let attribute = match attribute {
+            Some(name) => self.resolve_attribute(&targets, &name)?,
+            None => self.dimmer_attribute(&targets)?,
+        };
+
+        for number in &targets {
+            let fixture = self
+                .show
+                .fixture(*number)
+                .ok_or_else(|| CommandError::new(format!("fixture {number} is not patched")))?;
+            let (_, mode) = self.show.mode_for(fixture).map_err(CommandError::new)?;
+            if mode.channel_for(&attribute).is_none() {
+                return Err(CommandError::with_hint(
+                    format!(
+                        "fixture {number} has no `{attribute}` in mode `{}`",
+                        fixture.mode
+                    ),
+                    format!("attributes: {}", attribute_list(mode)),
+                ));
+            }
+        }
+
         let label = format_fixture_list(&targets);
         let percent = (value * 100.0).round() as i64;
+        let canonical = attribute.clone();
 
         let message = self.mutate(|show| {
             for number in &targets {
                 let index = show
                     .fixture_index(*number)
                     .ok_or_else(|| CommandError::new(format!("fixture {number} is not patched")))?;
-                let attribute = {
+                let key = {
                     let fixture = &show.fixtures[index];
                     let (_, mode) = show.mode_for(fixture).map_err(CommandError::new)?;
-                    mode.channels
-                        .iter()
-                        .find(|channel| channel.attribute.eq_ignore_ascii_case(DIMMER))
+                    mode.channel_for(&canonical)
                         .map(|channel| channel.attribute.clone())
                         .ok_or_else(|| {
                             CommandError::new(format!(
-                                "fixture {number} ({}) has no Dimmer channel in mode `{}`",
-                                fixture.name, fixture.mode
+                                "fixture {number} has no `{canonical}` in mode `{}`",
+                                fixture.mode
                             ))
                         })?
                 };
-                show.fixtures[index].levels.insert(attribute, value);
+                show.fixtures[index].levels.insert(key, value);
             }
-            Ok(format!("{label} {DIMMER} at {percent}%"))
+            Ok(format!("{label} {canonical} at {percent}%"))
         })?;
         // The fixtures you just addressed stay selected, so a following `Full`
         // or `Off` applies to the same set.
         self.selection = targets;
+        Ok(CommandOutcome::message(message))
+    }
+
+    /// Canonical Dimmer attribute, refusing fixtures that have none.
+    fn dimmer_attribute(&self, targets: &[u16]) -> Result<String, CommandError> {
+        let Some(number) = targets.first() else {
+            return Ok(DIMMER.to_string());
+        };
+        let fixture = self
+            .show
+            .fixture(*number)
+            .ok_or_else(|| CommandError::new(format!("fixture {number} is not patched")))?;
+        let (_, mode) = self.show.mode_for(fixture).map_err(CommandError::new)?;
+        match mode.channel_for(DIMMER) {
+            Some(channel) => Ok(channel.attribute.clone()),
+            None => Err(CommandError::with_hint(
+                format!(
+                    "fixture {number} ({}) has no Dimmer channel in mode `{}`",
+                    fixture.name, fixture.mode
+                ),
+                format!("attributes: {}", attribute_list(mode)),
+            )),
+        }
+    }
+
+    /// Resolve an attribute or pretty name against the selection.
+    fn resolve_attribute(&self, targets: &[u16], requested: &str) -> Result<String, CommandError> {
+        let mut available: BTreeSet<String> = BTreeSet::new();
+        for number in targets {
+            let Some(fixture) = self.show.fixture(*number) else {
+                continue;
+            };
+            let (fixture_type, mode) = self.show.mode_for(fixture).map_err(CommandError::new)?;
+            for channel in &mode.channels {
+                available.insert(fixture_type.pretty_attribute(&channel.attribute));
+            }
+            if let Some(channel) = mode.channel_for(requested) {
+                return Ok(channel.attribute.clone());
+            }
+            if let Some(channel) = mode.channels.iter().find(|channel| {
+                fixture_type
+                    .pretty_attribute(&channel.attribute)
+                    .eq_ignore_ascii_case(requested)
+            }) {
+                return Ok(channel.attribute.clone());
+            }
+        }
+        Err(CommandError::with_hint(
+            format!("no attribute `{requested}` in the selection"),
+            if available.is_empty() {
+                "patch fixtures first".to_string()
+            } else {
+                format!(
+                    "attributes: {}",
+                    available.into_iter().collect::<Vec<_>>().join(", ")
+                )
+            },
+        ))
+    }
+
+    fn clear(&mut self, all: bool, values: bool) -> Result<CommandOutcome, CommandError> {
+        if !values {
+            self.selection.clear();
+            return Ok(CommandOutcome::message("Selection cleared"));
+        }
+        let targets: Vec<u16> = if all {
+            self.show
+                .fixtures
+                .iter()
+                .map(|fixture| fixture.number)
+                .collect()
+        } else {
+            self.targets(None)?
+        };
+        let label = if all {
+            "all fixtures".to_string()
+        } else {
+            format_fixture_list(&targets)
+        };
+        let mut cleared = 0usize;
+        let message = self.mutate(|show| {
+            for number in &targets {
+                if let Some(index) = show.fixture_index(*number) {
+                    cleared += show.fixtures[index].levels.len();
+                    show.fixtures[index].levels.clear();
+                }
+            }
+            Ok(format!(
+                "Cleared {cleared} programmer value{} on {label}",
+                if cleared == 1 { "" } else { "s" }
+            ))
+        })?;
+        if all {
+            self.selection.clear();
+        }
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn new_show(&mut self, name: Option<String>) -> Result<CommandOutcome, CommandError> {
+        let mut show = Show::new();
+        if let Some(name) = name {
+            if name.trim().is_empty() {
+                return Err(CommandError::new("new show name is empty"));
+            }
+            show.name = name;
+        }
+        let message = format!("New show `{}`", show.name);
+        self.show = show;
+        self.selection.clear();
+        self.playback.clear();
+        self.revision += 1;
         Ok(CommandOutcome::message(message))
     }
 
@@ -302,11 +509,8 @@ impl Engine {
         }
 
         let existed = self.show.fixture_index(number).is_some();
-        let levels: BTreeMap<String, f64> = mode
-            .channels
-            .iter()
-            .map(|channel| (channel.attribute.clone(), 0.0))
-            .collect();
+        // Patching starts dark: a fresh fixture has an empty programmer, not a
+        // map of zeroes, so playback is free to drive it immediately.
         let fixture = Fixture {
             number,
             name: fixture_type.name.clone(),
@@ -314,7 +518,7 @@ impl Engine {
             mode: mode.name.clone(),
             universe,
             address,
-            levels,
+            levels: Default::default(),
         };
         let mode_label = mode.name.clone();
 
@@ -417,6 +621,9 @@ impl Engine {
         );
         self.show = show;
         self.selection.clear();
+        // A loaded show has its own cues; a run from the previous show must not
+        // keep writing the old values over the new rig.
+        self.playback.clear();
         self.revision += 1;
         Ok(CommandOutcome::message(message))
     }
@@ -521,7 +728,789 @@ impl Engine {
                 format_fixture_list(&self.selection)
             }
         ));
+        lines.push(format!(
+            "Palettes: {} | Sequences: {} | Executors: {}",
+            self.show.palettes.len(),
+            self.show.sequences.len(),
+            self.show.executors.len()
+        ));
+        if self.playback.is_running() {
+            for (target, run) in self.playback.runs() {
+                let state = if run.is_paused() {
+                    "paused".to_string()
+                } else if run.done {
+                    "complete".to_string()
+                } else {
+                    format!("{:.0}%", run.progress(self.clock) * 100.0)
+                };
+                lines.push(format!(
+                    "Playback {}: {} ({state})",
+                    target.label(),
+                    self.running_cue_label(target)
+                ));
+            }
+        } else {
+            lines.push("Playback: idle".to_string());
+        }
         CommandOutcome::with_lines(lines)
+    }
+
+    /// Fixtures a store captures: the selection, or every fixture when nothing
+    /// is selected.
+    fn programmer_targets(&self) -> Result<Vec<u16>, CommandError> {
+        if self.selection.is_empty() {
+            let all: Vec<u16> = self
+                .show
+                .fixtures
+                .iter()
+                .map(|fixture| fixture.number)
+                .collect();
+            if all.is_empty() {
+                return Err(CommandError::with_hint(
+                    "nothing to store",
+                    "patch a fixture first: `Patch Fixture 1 At 1.001 Type \"…\"`",
+                ));
+            }
+            Ok(all)
+        } else {
+            self.targets(None)
+        }
+    }
+
+    fn store_palette(
+        &mut self,
+        feature: &str,
+        number: u16,
+        name: Option<String>,
+    ) -> Result<CommandOutcome, CommandError> {
+        if number == 0 {
+            return Err(CommandError::new("palette number 0 is not allowed"));
+        }
+        let targets = self.programmer_targets()?;
+        let (pool, values) =
+            palette::capture(&self.show, &targets, feature).map_err(CommandError::new)?;
+        let value_count: usize = values.values().map(|values| values.len()).sum();
+        let type_count = values.len();
+        let name_label = name
+            .as_ref()
+            .map(|name| format!(" \"{name}\""))
+            .unwrap_or_default();
+        let mut created = false;
+
+        let message = self.mutate(|show| {
+            match show.palettes.iter_mut().find(|palette| {
+                palette.number == number && palette.feature.eq_ignore_ascii_case(&pool)
+            }) {
+                Some(palette) => {
+                    palette.values = values.clone();
+                    if let Some(name) = &name {
+                        palette.name = name.clone();
+                    }
+                }
+                None => {
+                    created = true;
+                    show.palettes.push(Palette {
+                        feature: pool.clone(),
+                        number,
+                        name: name.clone().unwrap_or_default(),
+                        values: values.clone(),
+                    });
+                }
+            }
+            show.palettes.sort_by(|left, right| {
+                left.feature
+                    .to_ascii_lowercase()
+                    .cmp(&right.feature.to_ascii_lowercase())
+                    .then(left.number.cmp(&right.number))
+            });
+            Ok(format!(
+                "{} palette {pool} {number}{name_label} ({type_count} fixture type{}, {value_count} values)",
+                if created { "Stored" } else { "Updated" },
+                if type_count == 1 { "" } else { "s" }
+            ))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn apply_palette(
+        &mut self,
+        targets: &[u16],
+        feature: &str,
+        number: u16,
+    ) -> Result<CommandOutcome, CommandError> {
+        let Some(palette) = self.show.palette(feature, number).cloned() else {
+            let available: Vec<String> = self
+                .show
+                .palettes
+                .iter()
+                .filter(|palette| palette.feature.eq_ignore_ascii_case(feature.trim()))
+                .map(|palette| palette.number.to_string())
+                .collect();
+            return Err(CommandError::with_hint(
+                format!("palette {feature} {number} does not exist"),
+                if available.is_empty() {
+                    format!("store one first: `Store Palette {feature} {number}`")
+                } else {
+                    format!("stored {feature} palettes: {}", available.join(", "))
+                },
+            ));
+        };
+
+        let mut assignments = Vec::new();
+        let mut skipped = Vec::new();
+        for target in targets {
+            let Some(fixture) = self.show.fixture(*target) else {
+                continue;
+            };
+            let values = palette::resolve(&palette, &self.show, fixture);
+            if values.is_empty() {
+                skipped.push(*target);
+            } else {
+                assignments.push((*target, values));
+            }
+        }
+
+        if assignments.is_empty() {
+            return Err(CommandError::with_hint(
+                format!(
+                    "palette {} has no values for the selection",
+                    palette.display_name()
+                ),
+                "palettes store values per fixture type; store this one from a fixture of this type",
+            ));
+        }
+
+        let applied = assignments.len();
+        let value_count: usize = assignments.iter().map(|(_, values)| values.len()).sum();
+        let label = palette.display_name();
+        let message = self.mutate(|show| {
+            for (number, values) in &assignments {
+                let Some(index) = show.fixture_index(*number) else {
+                    continue;
+                };
+                for (attribute, level) in values {
+                    show.fixtures[index]
+                        .levels
+                        .insert(attribute.clone(), *level);
+                }
+            }
+            Ok(format!(
+                "Applied palette {label} to {applied} fixture{} ({value_count} values)",
+                if applied == 1 { "" } else { "s" }
+            ))
+        })?;
+
+        let mut lines = vec![message];
+        if !skipped.is_empty() {
+            lines.push(format!(
+                "Skipped {}: no values stored for that fixture type",
+                format_fixture_list(&skipped)
+            ));
+        }
+        Ok(CommandOutcome::with_lines(lines))
+    }
+
+    fn delete_palette(
+        &mut self,
+        feature: &str,
+        number: u16,
+    ) -> Result<CommandOutcome, CommandError> {
+        if self.show.palette(feature, number).is_none() {
+            return Err(CommandError::with_hint(
+                format!("palette {feature} {number} does not exist"),
+                "`Palette` lists the stored palettes",
+            ));
+        }
+        let message = self.mutate(|show| {
+            show.palettes.retain(|palette| {
+                !(palette.number == number && palette.feature.eq_ignore_ascii_case(feature.trim()))
+            });
+            Ok(format!("Deleted palette {feature} {number}"))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn palette_list(&self) -> CommandOutcome {
+        if self.show.palettes.is_empty() {
+            return CommandOutcome::message(
+                "No palettes stored. Select fixtures and run `Store Palette Color 1 \"Warm\"`.",
+            );
+        }
+        let mut lines = vec![format!(
+            "{:<10} {:<4} {:<20} {}",
+            "Feature", "No.", "Name", "Values"
+        )];
+        for palette in &self.show.palettes {
+            let name = if palette.name.trim().is_empty() {
+                "-".to_string()
+            } else {
+                truncate(&palette.name, 20)
+            };
+            let summary = palette
+                .values
+                .iter()
+                .map(|(type_key, values)| {
+                    let mut parts: Vec<String> = values
+                        .iter()
+                        .map(|(attribute, level)| {
+                            format!("{attribute} {}%", (level * 100.0).round() as i64)
+                        })
+                        .collect();
+                    parts.sort();
+                    format!("{type_key}: {}", parts.join(" "))
+                })
+                .collect::<Vec<_>>()
+                .join(" | ");
+            lines.push(format!(
+                "{:<10} {:<4} {:<20} {summary}",
+                palette.feature, palette.number, name
+            ));
+        }
+        CommandOutcome::with_lines(lines)
+    }
+
+    fn store_cue(
+        &mut self,
+        sequence_number: u16,
+        number: f64,
+        name: Option<String>,
+        fade: Option<f64>,
+        delay: Option<f64>,
+    ) -> Result<CommandOutcome, CommandError> {
+        if sequence_number == 0 {
+            return Err(CommandError::new("sequence number 0 is not allowed"));
+        }
+        if !number.is_finite() || number < 0.0 {
+            return Err(CommandError::new(format!(
+                "cue number {number} is not a finite positive number"
+            )));
+        }
+        for (label, value) in [("fade", fade), ("delay", delay)] {
+            if let Some(value) = value {
+                if !value.is_finite() || !(0.0..=MAX_TIME).contains(&value) {
+                    return Err(CommandError::new(format!(
+                        "{label} {value} is outside 0..={MAX_TIME} seconds"
+                    )));
+                }
+            }
+        }
+
+        let targets = self.programmer_targets()?;
+        let mut captured = Levels::new();
+        for target in &targets {
+            if let Some(fixture) = self.show.fixture(*target) {
+                for (attribute, level) in &fixture.levels {
+                    captured.set(*target, attribute, *level);
+                }
+            }
+        }
+
+        let cue_name = name.clone().unwrap_or_default();
+        let name_label = name
+            .as_ref()
+            .map(|name| format!(" \"{name}\""))
+            .unwrap_or_default();
+        let mut created = false;
+        let mut values = 0usize;
+
+        let message = self.mutate(|show| {
+            let index = match show.sequence_index(sequence_number) {
+                Some(index) => index,
+                None => {
+                    show.sequences.push(Sequence::new(sequence_number));
+                    show.sequences.len() - 1
+                }
+            };
+            let sequence = &mut show.sequences[index];
+            let existing = sequence.cue_index(number);
+            let insertion = existing.unwrap_or_else(|| sequence.insertion_index(number));
+            let previous = sequence.state_before(insertion);
+            let delta = captured.difference(&previous);
+            values = delta.len();
+            let fade = fade.unwrap_or_else(|| {
+                existing
+                    .and_then(|index| sequence.cues.get(index))
+                    .map(|cue| cue.fade)
+                    .unwrap_or(0.0)
+            });
+            let delay = delay.unwrap_or_else(|| {
+                existing
+                    .and_then(|index| sequence.cues.get(index))
+                    .map(|cue| cue.delay)
+                    .unwrap_or(0.0)
+            });
+            created = existing.is_none();
+            match existing {
+                Some(index) => {
+                    let cue = &mut sequence.cues[index];
+                    if name.is_some() {
+                        cue.name = cue_name.clone();
+                    }
+                    cue.fade = fade;
+                    cue.delay = delay;
+                    cue.levels = delta;
+                }
+                None => sequence.cues.insert(
+                    insertion,
+                    crate::playback::Cue {
+                        number,
+                        name: cue_name.clone(),
+                        fade,
+                        delay,
+                        levels: delta,
+                    },
+                ),
+            }
+            show.sequences.sort_by_key(|sequence| sequence.number);
+            Ok(format!(
+                "{} cue {}{name_label} in sequence {sequence_number} (fade {}s, delay {}s, {values} tracked values)",
+                if created { "Stored" } else { "Updated" },
+                format_cue_number(number),
+                fade,
+                delay
+            ))
+        })?;
+
+        let mut lines = vec![message];
+        if values == 0 {
+            lines.push(
+                "The cue stores no values: the programmer is empty or already matches the previous cue."
+                    .to_string(),
+            );
+        }
+        Ok(CommandOutcome::with_lines(lines))
+    }
+
+    fn delete_cue(
+        &mut self,
+        sequence_number: u16,
+        number: f64,
+    ) -> Result<CommandOutcome, CommandError> {
+        let Some(sequence) = self.show.sequence(sequence_number) else {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence_number} does not exist"),
+                "`Sequence` lists the sequences",
+            ));
+        };
+        if sequence.cue_index(number).is_none() {
+            return Err(CommandError::with_hint(
+                format!(
+                    "sequence {sequence_number} has no cue {}",
+                    format_cue_number(number)
+                ),
+                "`Sequence {sequence_number}` lists its cues",
+            ));
+        }
+        let message = self.mutate(|show| {
+            if let Some(index) = show.sequence_index(sequence_number) {
+                let cues = &mut show.sequences[index].cues;
+                if let Some(position) = cues
+                    .iter()
+                    .position(|cue| (cue.number - number).abs() < 1e-9)
+                {
+                    cues.remove(position);
+                }
+            }
+            Ok(format!(
+                "Deleted cue {} from sequence {sequence_number}",
+                format_cue_number(number)
+            ))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn sequence_list(&self, only: Option<u16>) -> CommandOutcome {
+        match only {
+            Some(number) => match self.show.sequence(number) {
+                None => CommandOutcome::message(format!("Sequence {number} does not exist.")),
+                Some(sequence) => {
+                    let mut lines = vec![format!(
+                        "Sequence {} \"{}\"",
+                        sequence.number, sequence.name
+                    )];
+                    if sequence.cues.is_empty() {
+                        lines.push("No cues stored.".to_string());
+                        return CommandOutcome::with_lines(lines);
+                    }
+                    lines.push(format!(
+                        "{:<6} {:<20} {:>6} {:>6} {}",
+                        "Cue", "Name", "Fade", "Delay", "Values"
+                    ));
+                    for cue in &sequence.cues {
+                        lines.push(format!(
+                            "{:<6} {:<20} {:>5.1}s {:>5.1}s {}{}",
+                            format_cue_number(cue.number),
+                            truncate(&cue.name, 20),
+                            cue.fade,
+                            cue.delay,
+                            cue.levels.len(),
+                            if cue.levels.is_empty() {
+                                " (empty)"
+                            } else {
+                                ""
+                            }
+                        ));
+                    }
+                    CommandOutcome::with_lines(lines)
+                }
+            },
+            None => {
+                if self.show.sequences.is_empty() {
+                    return CommandOutcome::message(
+                        "No sequences. Store a cue first: `Store Cue 1`.",
+                    );
+                }
+                let mut lines = vec![format!(
+                    "{:<4} {:<20} {:<6} {}",
+                    "No.", "Name", "Cues", "Last cue"
+                )];
+                for sequence in &self.show.sequences {
+                    let last = sequence
+                        .cues
+                        .last()
+                        .map(|cue| format_cue_number(cue.number))
+                        .unwrap_or_else(|| "-".to_string());
+                    lines.push(format!(
+                        "{:<4} {:<20} {:<6} {}",
+                        sequence.number,
+                        truncate(&sequence.name, 20),
+                        sequence.cues.len(),
+                        last
+                    ));
+                }
+                CommandOutcome::with_lines(lines)
+            }
+        }
+    }
+
+    fn assign_executor(
+        &mut self,
+        number: u16,
+        sequence: u16,
+    ) -> Result<CommandOutcome, CommandError> {
+        if self.show.sequence(sequence).is_none() {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence} does not exist"),
+                "store a cue first: `Store Cue 1`",
+            ));
+        }
+        let existed = self.show.executor(number).is_some();
+        let message = self.mutate(|show| {
+            match show
+                .executors
+                .iter_mut()
+                .find(|executor| executor.number == number)
+            {
+                Some(executor) => executor.sequence = sequence,
+                None => show.executors.push(Executor {
+                    number,
+                    sequence,
+                    name: format!("Executor {number}"),
+                    fader: 1.0,
+                }),
+            }
+            show.executors.sort_by_key(|executor| executor.number);
+            Ok(format!(
+                "{} executor {number} to sequence {sequence}",
+                if existed { "Reassigned" } else { "Assigned" }
+            ))
+        })?;
+        // A reassigned executor must not keep running its old sequence.
+        if self.playback.release(Target::Executor(number)) {
+            self.refresh_playback();
+        }
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn set_executor_level(
+        &mut self,
+        number: u16,
+        level: Level,
+    ) -> Result<CommandOutcome, CommandError> {
+        let value = match level {
+            Level::Percent(percent) => {
+                if !(0.0..=100.0).contains(&percent) {
+                    return Err(CommandError::new(format!(
+                        "level {percent} is outside 0..100"
+                    )));
+                }
+                percent / 100.0
+            }
+            Level::Full => 1.0,
+        };
+        if self.show.executor(number).is_none() {
+            return Err(CommandError::with_hint(
+                format!("executor {number} does not exist"),
+                "assign one first: `Assign Executor 1 Sequence 1`",
+            ));
+        }
+        let percent = (value * 100.0).round() as i64;
+        let message = self.mutate(|show| {
+            if let Some(executor) = show
+                .executors
+                .iter_mut()
+                .find(|executor| executor.number == number)
+            {
+                executor.fader = value;
+            }
+            Ok(format!("Executor {number} fader at {percent}%"))
+        })?;
+        self.refresh_playback();
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn executor_list(&self, only: Option<u16>) -> CommandOutcome {
+        let executors: Vec<&Executor> = match only {
+            Some(number) => match self.show.executor(number) {
+                Some(executor) => vec![executor],
+                None => {
+                    return CommandOutcome::message(format!("Executor {number} does not exist."))
+                }
+            },
+            None => self.show.executors.iter().collect(),
+        };
+        if executors.is_empty() {
+            return CommandOutcome::message(
+                "No executors. Assign one: `Assign Executor 1 Sequence 1`.",
+            );
+        }
+
+        let mut lines = vec![format!(
+            "{:<4} {:<20} {:<8} {:<9} {}",
+            "No.", "Sequence", "Fader", "State", "Cue"
+        )];
+        for executor in executors {
+            let (state, cue) = match self.playback.run(Target::Executor(executor.number)) {
+                Some(run) => {
+                    let state = if run.is_paused() {
+                        "paused".to_string()
+                    } else if run.done {
+                        "complete".to_string()
+                    } else {
+                        format!("{:.0}%", run.progress(self.clock) * 100.0)
+                    };
+                    let cue = self
+                        .show
+                        .sequence(run.sequence)
+                        .and_then(|sequence| sequence.cues.get(run.cue_index))
+                        .map(|cue| format_cue_number(cue.number))
+                        .unwrap_or_else(|| "-".to_string());
+                    (state, cue)
+                }
+                None => ("idle".to_string(), "-".to_string()),
+            };
+            lines.push(format!(
+                "{:<4} {:<20} {:<8} {:<9} {}",
+                executor.number,
+                format!("Sequence {}", executor.sequence),
+                format!("{:.0}%", executor.fader * 100.0),
+                state,
+                cue
+            ));
+        }
+        CommandOutcome::with_lines(lines)
+    }
+
+    fn resolve_target(&self, reference: Option<PlaybackRef>) -> Result<Target, CommandError> {
+        match reference {
+            Some(PlaybackRef::Executor(number)) => {
+                if self.show.executor(number).is_none() {
+                    return Err(CommandError::with_hint(
+                        format!("executor {number} does not exist"),
+                        "assign one: `Assign Executor 1 Sequence 1`",
+                    ));
+                }
+                Ok(Target::Executor(number))
+            }
+            Some(PlaybackRef::Sequence(number)) => {
+                if self.show.sequence(number).is_none() {
+                    return Err(CommandError::with_hint(
+                        format!("sequence {number} does not exist"),
+                        "store a cue first: `Store Cue 1`",
+                    ));
+                }
+                Ok(Target::Sequence(number))
+            }
+            None => {
+                if let Some(executor) = self.show.executors.first() {
+                    Ok(Target::Executor(executor.number))
+                } else if let Some(sequence) = self.show.sequences.first() {
+                    Ok(Target::Sequence(sequence.number))
+                } else {
+                    Err(CommandError::with_hint(
+                        "no playback to run",
+                        "store a cue and assign an executor: `Store Cue 1`, then `Assign Executor 1 Sequence 1`",
+                    ))
+                }
+            }
+        }
+    }
+
+    fn sequence_number_for(&self, target: Target) -> Result<u16, CommandError> {
+        match target {
+            Target::Sequence(number) => Ok(number),
+            Target::Executor(number) => self
+                .show
+                .executor(number)
+                .map(|executor| executor.sequence)
+                .ok_or_else(|| CommandError::new(format!("executor {number} does not exist"))),
+        }
+    }
+
+    fn refresh_playback(&mut self) {
+        self.playback.refresh(&self.show, self.clock);
+        self.revision += 1;
+    }
+
+    fn running_cue_label(&self, target: Target) -> String {
+        let Some(run) = self.playback.run(target) else {
+            return "cue -".to_string();
+        };
+        self.show
+            .sequence(run.sequence)
+            .and_then(|sequence| sequence.cues.get(run.cue_index))
+            .map(|cue| format!("cue {}", format_cue_number(cue.number)))
+            .unwrap_or_else(|| "cue -".to_string())
+    }
+
+    fn playback_go(
+        &mut self,
+        reference: Option<PlaybackRef>,
+    ) -> Result<CommandOutcome, CommandError> {
+        let target = self.resolve_target(reference)?;
+        let sequence_number = self.sequence_number_for(target)?;
+
+        if self
+            .playback
+            .run(target)
+            .map(|run| run.is_paused())
+            .unwrap_or(false)
+        {
+            self.playback.resume(target, self.clock);
+            self.refresh_playback();
+            return Ok(CommandOutcome::message(format!(
+                "Resumed {} at {}",
+                target.label(),
+                self.running_cue_label(target)
+            )));
+        }
+
+        let Some(sequence) = self.show.sequence(sequence_number).cloned() else {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence_number} does not exist"),
+                "store a cue first: `Store Cue 1`",
+            ));
+        };
+        if sequence.cues.is_empty() {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence_number} has no cues"),
+                "store one first: `Store Cue 1`",
+            ));
+        }
+
+        let index = match self.playback.run(target) {
+            Some(run) => run.cue_index + 1,
+            None => 0,
+        };
+        if index >= sequence.cues.len() {
+            let last = sequence
+                .cues
+                .last()
+                .map(|cue| format_cue_number(cue.number))
+                .unwrap_or_default();
+            return Ok(CommandOutcome::message(format!(
+                "{} is at the last cue ({last})",
+                target.label()
+            )));
+        }
+
+        self.playback
+            .go(&self.show, target, sequence_number, index, self.clock)
+            .map_err(CommandError::new)?;
+        self.refresh_playback();
+
+        let cue = &sequence.cues[index];
+        let name = if cue.name.is_empty() {
+            String::new()
+        } else {
+            format!(" \"{}\"", cue.name)
+        };
+        Ok(CommandOutcome::message(format!(
+            "{} → cue {}{name} (fade {}s, delay {}s)",
+            target.label(),
+            format_cue_number(cue.number),
+            cue.fade,
+            cue.delay
+        )))
+    }
+
+    fn playback_back(
+        &mut self,
+        reference: Option<PlaybackRef>,
+    ) -> Result<CommandOutcome, CommandError> {
+        let target = self.resolve_target(reference)?;
+        let sequence_number = self.sequence_number_for(target)?;
+        let Some(cue_index) = self.playback.run(target).map(|run| run.cue_index) else {
+            return Ok(CommandOutcome::message(format!(
+                "{} is not running",
+                target.label()
+            )));
+        };
+        if cue_index == 0 {
+            return Ok(CommandOutcome::message(format!(
+                "{} is at the first cue",
+                target.label()
+            )));
+        }
+        let index = cue_index - 1;
+        self.playback
+            .go(&self.show, target, sequence_number, index, self.clock)
+            .map_err(CommandError::new)?;
+        self.refresh_playback();
+        Ok(CommandOutcome::message(format!(
+            "{} ← {}",
+            target.label(),
+            self.running_cue_label(target)
+        )))
+    }
+
+    fn playback_pause(
+        &mut self,
+        reference: Option<PlaybackRef>,
+    ) -> Result<CommandOutcome, CommandError> {
+        let target = self.resolve_target(reference)?;
+        if self.playback.pause(target, self.clock) {
+            self.refresh_playback();
+            Ok(CommandOutcome::message(format!(
+                "Paused {} at {}",
+                target.label(),
+                self.running_cue_label(target)
+            )))
+        } else {
+            Ok(CommandOutcome::message(format!(
+                "{} is not fading",
+                target.label()
+            )))
+        }
+    }
+
+    fn playback_release(
+        &mut self,
+        reference: Option<PlaybackRef>,
+    ) -> Result<CommandOutcome, CommandError> {
+        let target = self.resolve_target(reference)?;
+        if self.playback.release(target) {
+            self.refresh_playback();
+            Ok(CommandOutcome::message(format!(
+                "Released {}; output returns to the programmer",
+                target.label()
+            )))
+        } else {
+            Ok(CommandOutcome::message(format!(
+                "{} is not running",
+                target.label()
+            )))
+        }
     }
 
     fn targets(&self, fixtures: Option<Vec<u16>>) -> Result<Vec<u16>, CommandError> {
@@ -582,13 +1571,23 @@ impl Engine {
 pub const HELP: &[&str] = &[
     "Fixture 1 Thru 5                       select fixtures",
     "Fixture 1 Thru 5 At 50                 set Dimmer (0 to 100)",
+    "Fixture 1 At ColorAdd_R 40             set any attribute of the mode",
+    "At Palette Color 3                     apply a stored palette",
     "At 50 / Full / Off                     apply to the current selection",
-    "Clear                                  clear the selection",
+    "Clear | Clear Values | Clear All        selection / programmer values",
     "Patch Fixture 1 At 1.001 Type \"<fixture type>\" [Mode \"<mode>\"]",
     "Unpatch Fixture 1 Thru 3",
     "Import Gdtf \"file.gdtf\"                load a GDTF fixture type",
+    "New [Show] [\"name\"]                    start an empty show",
+    "Store Palette Color 1 \"Warm\"           capture the programmer in a pool",
+    "Delete Palette Color 1 / Palette        delete or list palettes",
+    "Store Cue 1 [\"name\"] [Fade 2] [Delay 0.5] [Sequence 2]",
+    "Delete Cue 1 [Sequence 2] / Sequence [2]  delete or list cues",
+    "Assign Executor 1 Sequence 1            bind a cue list to a fader",
+    "Executor 1 At 75 | Full | Off           executor master fader",
+    "Go | Back | Pause | Release [Executor 1 | Sequence 1]",
     "Sheet                                  print the fixture sheet",
-    "Status                                 output and show state",
+    "Status                                 output, show and playback state",
     "Save \"show.json\" / Load \"show.json\"",
     "Help                                   this list",
     "Separate several commands with `;`.",
@@ -631,6 +1630,17 @@ pub fn format_fixture_list(fixtures: &[u16]) -> String {
         .join(" + ")
 }
 
+fn attribute_list(mode: &crate::fixture_type::Mode) -> String {
+    let mut attributes: Vec<String> = mode
+        .channels
+        .iter()
+        .map(|channel| channel.attribute.clone())
+        .collect();
+    attributes.sort();
+    attributes.dedup();
+    attributes.join(", ")
+}
+
 fn truncate(text: &str, width: usize) -> String {
     if text.chars().count() <= width {
         return text.to_string();
@@ -644,6 +1654,8 @@ fn truncate(text: &str, width: usize) -> String {
 mod tests {
     use super::*;
     use crate::test_support::{demo_fixture_type, demo_show};
+    use std::collections::BTreeMap;
+    use std::time::Duration;
 
     fn engine() -> Engine {
         Engine::new(demo_show())
@@ -709,7 +1721,11 @@ mod tests {
         let mut engine = engine();
         engine.execute("Fixture 1").unwrap();
         assert!(engine.execute("At 101").is_err());
-        assert_eq!(dimmer(&engine, 1), 0.0, "rejected command changed nothing");
+        assert!(
+            engine.show.fixture(1).unwrap().levels.is_empty(),
+            "a rejected command changed nothing"
+        );
+        assert_eq!(engine.render().slot(1, 1), Some(0));
     }
 
     #[test]
@@ -743,8 +1759,10 @@ mod tests {
         let fixture = engine.show.fixture(3).unwrap();
         assert_eq!(fixture.address, 101);
         assert_eq!(fixture.name, "Demo Wash");
-        assert_eq!(fixture.levels.len(), 4);
-        assert!(fixture.levels.values().all(|level| *level == 0.0));
+        assert!(
+            fixture.levels.is_empty(),
+            "a fresh fixture has an empty programmer, so playback can drive it"
+        );
     }
 
     #[test]
@@ -905,6 +1923,311 @@ mod tests {
         ] {
             assert!(help.contains(keyword), "help mentions {keyword}");
         }
+    }
+
+    #[test]
+    fn store_palette_captures_and_applies_per_type() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At ColorAdd_R Full").unwrap();
+        let outcome = engine.execute("Store Palette Color 1 \"Red\"").unwrap();
+        assert!(
+            outcome.lines[0].contains("Stored palette Color 1"),
+            "{outcome:?}"
+        );
+        let palette = engine.show.palette("color", 1).unwrap();
+        assert_eq!(palette.name, "Red");
+        assert_eq!(palette.values["OpenLight Demo Wash"]["ColorAdd_R"], 1.0);
+        assert_eq!(
+            palette.values["OpenLight Demo Wash"]["ColorAdd_B"], 0.0,
+            "a colour palette stores the whole colour system"
+        );
+
+        engine
+            .execute(r#"Patch Fixture 2 At 1.010 Type "OpenLight Demo Wash""#)
+            .unwrap();
+        engine.execute("Fixture 2 At Palette Color 1").unwrap();
+        let fixture = engine.show.fixture(2).unwrap();
+        assert_eq!(fixture.levels.get("ColorAdd_R"), Some(&1.0));
+        assert_eq!(fixture.levels.get("ColorAdd_B"), Some(&0.0));
+        assert_eq!(engine.render().slot(1, 11), Some(255));
+    }
+
+    #[test]
+    fn palette_commands_report_missing_objects() {
+        let mut engine = engine();
+        let error = engine.execute("At Palette Color 9").unwrap_err();
+        assert_eq!(error.message, "nothing selected");
+
+        engine.execute("Fixture 1").unwrap();
+        let error = engine.execute("At Palette Color 9").unwrap_err();
+        assert!(error.message.contains("does not exist"), "{error}");
+        assert!(error.hint.unwrap().contains("Store Palette"));
+
+        let error = engine.execute("Store Palette Position 1").unwrap_err();
+        assert!(
+            error.message.contains("nothing in the selection"),
+            "{error}"
+        );
+
+        let error = engine.execute("Fixture 1 At Nonsense 50").unwrap_err();
+        assert!(error.message.contains("no attribute"), "{error}");
+        assert!(error.hint.unwrap().contains("Dimmer"));
+    }
+
+    #[test]
+    fn cues_track_and_play_back_with_fades() {
+        let mut engine = engine();
+        let start = engine.clock();
+        engine.tick(start);
+
+        engine.execute("Fixture 1 At 25").unwrap();
+        engine.execute("Store Cue 1 Fade 1").unwrap();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 2 Fade 1").unwrap();
+
+        let sequence = engine.show.sequence(1).unwrap();
+        assert_eq!(sequence.cues.len(), 2);
+        assert_eq!(
+            sequence.cues[1].levels.len(),
+            1,
+            "cue 2 stores only the tracked change"
+        );
+
+        engine.execute("Clear All").unwrap();
+        engine.execute("Go Sequence 1").unwrap();
+        engine.tick(start + Duration::from_secs(1));
+        assert_eq!(engine.render().slot(1, 1), Some(64), "cue 1 at 25%");
+
+        engine.execute("Go Sequence 1").unwrap();
+        let half = engine.clock() + Duration::from_millis(500);
+        engine.tick(half);
+        assert_eq!(engine.render().slot(1, 1), Some(159), "half way to 100%");
+
+        engine.tick(start + Duration::from_secs(3));
+        assert_eq!(engine.render().slot(1, 1), Some(255));
+    }
+
+    #[test]
+    fn executor_fader_scales_a_running_cue() {
+        let mut engine = engine();
+        let start = engine.clock();
+        engine.tick(start);
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Clear All").unwrap();
+        engine.execute("Assign Executor 1 Sequence 1").unwrap();
+        engine.execute("Executor 1 At 50").unwrap();
+        engine.execute("Go").unwrap();
+        engine.tick(start);
+        assert_eq!(engine.render().slot(1, 1), Some(128));
+
+        engine.execute("Executor 1 Full").unwrap();
+        engine.tick(start);
+        assert_eq!(engine.render().slot(1, 1), Some(255));
+
+        engine.execute("Executor 1 Off").unwrap();
+        engine.tick(start);
+        assert_eq!(engine.render().slot(1, 1), Some(0));
+    }
+
+    #[test]
+    fn back_pause_and_release_drive_the_same_run() {
+        let mut engine = engine();
+        let start = engine.clock();
+        engine.tick(start);
+        engine.execute("Fixture 1 At 20").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 2 Fade 2").unwrap();
+        engine.execute("Clear All").unwrap();
+
+        engine.execute("Go Sequence 1").unwrap();
+        engine.tick(start);
+        assert_eq!(engine.render().slot(1, 1), Some(51));
+
+        engine.execute("Go Sequence 1").unwrap();
+        engine.tick(start + Duration::from_millis(500));
+        let fading = engine.render().slot(1, 1).unwrap();
+        assert!(fading > 51 && fading < 255, "mid fade, got {fading}");
+
+        engine.execute("Pause Sequence 1").unwrap();
+        let paused = engine.render().slot(1, 1);
+        engine.tick(start + Duration::from_secs(1));
+        assert_eq!(engine.render().slot(1, 1), paused, "pause freezes output");
+
+        engine.execute("Go Sequence 1").unwrap();
+        engine.tick(start + Duration::from_secs(5));
+        assert_eq!(engine.render().slot(1, 1), Some(255), "resume finishes");
+
+        let outcome = engine.execute("Back Sequence 1").unwrap();
+        assert!(outcome.lines[0].contains("cue 1"), "{outcome:?}");
+        engine.tick(start + Duration::from_secs(6));
+        assert_eq!(engine.render().slot(1, 1), Some(51));
+
+        assert!(engine.execute("Release Sequence 1").unwrap().lines[0].contains("Released"));
+        engine.tick(start + Duration::from_secs(7));
+        assert_eq!(engine.render().slot(1, 1), Some(0));
+    }
+
+    #[test]
+    fn clear_values_hands_a_fixture_back_to_playback() {
+        let mut engine = engine();
+        let start = engine.clock();
+        engine.tick(start);
+        engine.execute("Fixture 1 At 40").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Clear Values").unwrap();
+        engine.execute("Go Sequence 1").unwrap();
+        engine.tick(start);
+        assert_eq!(engine.render().slot(1, 1), Some(102));
+
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.tick(start);
+        assert_eq!(
+            engine.render().slot(1, 1),
+            Some(255),
+            "the programmer wins while it holds a value"
+        );
+        engine.execute("Clear Values").unwrap();
+        engine.tick(start);
+        assert_eq!(engine.render().slot(1, 1), Some(102));
+    }
+
+    #[test]
+    fn store_cue_uses_the_previous_cue_as_its_baseline() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 30").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Store Cue 1.5 Fade 0.5").unwrap();
+        let sequence = engine.show.sequence(1).unwrap();
+        assert_eq!(sequence.cues.len(), 2);
+        assert_eq!(
+            sequence.cues[1].levels.len(),
+            0,
+            "nothing changed since cue 1"
+        );
+        assert_eq!(sequence.cues[1].fade, 0.5);
+
+        engine.execute("Fixture 1 At 60").unwrap();
+        engine.execute("Store Cue 2 \"Brighter\"").unwrap();
+        let sequence = engine.show.sequence(1).unwrap();
+        assert_eq!(sequence.cues.len(), 3);
+        assert_eq!(sequence.cues[2].name, "Brighter");
+        assert_eq!(
+            sequence.cue(2.0).unwrap().levels.get(1, "Dimmer"),
+            Some(0.6)
+        );
+        assert_eq!(sequence.cue(2.0).unwrap().levels.len(), 1);
+    }
+
+    #[test]
+    fn playback_commands_report_bad_targets_and_ends() {
+        let mut engine = engine();
+        let error = engine.execute("Go").unwrap_err();
+        assert!(error.message.contains("no playback"), "{error}");
+
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Clear All").unwrap();
+        engine.execute("Go Sequence 1").unwrap();
+        let outcome = engine.execute("Go Sequence 1").unwrap();
+        assert!(outcome.lines[0].contains("last cue"), "{outcome:?}");
+
+        let error = engine.execute("Assign Executor 1 Sequence 9").unwrap_err();
+        assert!(error.message.contains("sequence 9"), "{error}");
+        let error = engine.execute("Executor 2 At 50").unwrap_err();
+        assert!(error.message.contains("executor 2"), "{error}");
+        assert!(engine.execute("Delete Cue 7 Sequence 1").is_err());
+    }
+
+    #[test]
+    fn loading_a_show_stops_the_previous_playback() {
+        let mut engine = engine();
+        let start = engine.clock();
+        engine.tick(start);
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Clear All").unwrap();
+        engine.execute("Go Sequence 1").unwrap();
+        assert!(engine.playback.is_running());
+
+        let path = std::env::temp_dir().join(format!(
+            "openlight-phase2-{}-load.olshow.json",
+            std::process::id()
+        ));
+        engine
+            .execute(&format!("Save \"{}\"", path.display()))
+            .unwrap();
+        engine
+            .execute(&format!("Load \"{}\"", path.display()))
+            .unwrap();
+        assert!(!engine.playback.is_running());
+        assert_eq!(engine.render().slot(1, 1), Some(0));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn new_show_resets_the_programmer_and_playback() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Assign Executor 1 Sequence 1").unwrap();
+        let outcome = engine.execute("New Show \"Gig\"").unwrap();
+        assert!(outcome.lines[0].contains("Gig"));
+        assert!(engine.show.fixtures.is_empty());
+        assert!(engine.show.sequences.is_empty());
+        assert!(!engine.playback.is_running());
+        assert!(engine.selection.is_empty());
+    }
+
+    #[test]
+    fn palettes_cues_and_executors_survive_save_and_load() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At ColorAdd_R Full").unwrap();
+        engine.execute("Store Palette Color 1 \"Red\"").unwrap();
+        engine.execute("Store Cue 1 Fade 1.5").unwrap();
+        engine.execute("Assign Executor 1 Sequence 1").unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "openlight-phase2-{}.olshow.json",
+            std::process::id()
+        ));
+        engine
+            .execute(&format!("Save \"{}\"", path.display()))
+            .unwrap();
+
+        let mut other = Engine::empty();
+        other
+            .execute(&format!("Load \"{}\"", path.display()))
+            .unwrap();
+        assert_eq!(other.show, engine.show);
+        assert_eq!(other.show.palettes.len(), 1);
+        assert_eq!(other.show.sequences[0].cues[0].fade, 1.5);
+        assert_eq!(other.show.executors[0].sequence, 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn listings_show_palettes_sequences_and_executors() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Palette Dimmer 1 \"Low\"").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Assign Executor 1 Sequence 1").unwrap();
+
+        let palettes = engine.execute("Palette").unwrap().lines.join("\n");
+        assert!(
+            palettes.contains("Dimmer") && palettes.contains("Low"),
+            "{palettes}"
+        );
+        let sequences = engine.execute("Sequence").unwrap().lines.join("\n");
+        assert!(sequences.contains("Main") || sequences.contains("Sequence 1"));
+        let cues = engine.execute("Sequence 1").unwrap().lines.join("\n");
+        assert!(cues.contains("Cue"), "{cues}");
+        let executors = engine.execute("Executor").unwrap().lines.join("\n");
+        assert!(executors.contains("idle"), "{executors}");
+
+        let status = engine.execute("Status").unwrap().lines.join("\n");
+        assert!(status.contains("Palettes: 1"), "{status}");
     }
 
     fn write_demo_gdtf(path: &Path) {

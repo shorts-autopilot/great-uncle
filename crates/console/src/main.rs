@@ -1,7 +1,8 @@
-//! `openlight` — the Phase 1 command line console.
+//! `openlight` — the command line console.
 //!
 //! Every command goes through [`engine::Engine::execute`], the same path the
-//! GUI and scripting surfaces will use.
+//! GUI and scripting surfaces will use. `Wait <seconds>` is handled here, by
+//! the script runner, so a script can give a fade real time to run.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -16,7 +17,7 @@ use dmx::DmxTransport;
 use engine::{Engine, Runtime, RuntimeConfig, Show, TransportBinding};
 
 const USAGE: &str = "\
-openlight — DMX lighting console (Phase 1)
+openlight — DMX lighting console (Phase 2)
 
 Usage: openlight [options]
 
@@ -26,7 +27,8 @@ Options:
   --output <spec>      bind a universe to an output, e.g. 1=virtual,
                        1=generic:/dev/ttyUSB0, 1=enttec:/dev/ttyUSB0, 1=udmx
                        (repeatable, defaults to 1=virtual)
-  --script <file>      run commands from a file, one per line (# comments)
+  --script <file>      run commands from a file, one per line (# comments);
+                       `Wait <seconds>` pauses the script during a fade
   --frames <n>         run for n output frames, then exit
   --fps <n>            frame rate (default 30)
   --engine-hz <n>      engine tick rate (default 60)
@@ -37,7 +39,9 @@ Examples:
   openlight
   openlight --gdtf examples/gdtf/openlight-demo-wash.gdtf \\
             --output 1=virtual --script examples/phase1-demo.txt
-  openlight --output 1=generic:/dev/ttyUSB0 --script examples/phase1-demo.txt --frames 60 --trace
+  openlight --output 1=virtual --script examples/phase2-demo.txt \\
+            --frames 90 --trace
+  openlight --output 1=generic:/dev/ttyUSB0 --script examples/phase2-demo.txt --frames 90
 ";
 
 fn main() -> ExitCode {
@@ -286,6 +290,13 @@ fn repl(runtime: &Runtime) -> io::Result<()> {
         if trimmed.eq_ignore_ascii_case("exit") || trimmed.eq_ignore_ascii_case("quit") {
             break;
         }
+        if is_wait(trimmed) {
+            match parse_wait(trimmed) {
+                Some(seconds) => std::thread::sleep(Duration::from_secs_f64(seconds)),
+                None => println!("error: `Wait` needs a number of seconds, e.g. `Wait 1.5`"),
+            }
+            continue;
+        }
         match lock(&handle).execute(trimmed) {
             Ok(outcome) => print_outcome(&outcome),
             Err(error) => println!("error: {error}"),
@@ -304,6 +315,20 @@ fn execute_script(runtime: &Runtime, path: &Path) -> Result<(), Box<dyn Error>> 
             continue;
         }
         println!("> {line}");
+        if is_wait(line) {
+            match parse_wait(line) {
+                Some(seconds) => std::thread::sleep(Duration::from_secs_f64(seconds)),
+                None => {
+                    return Err(format!(
+                        "{}:{}: `Wait` needs a number of seconds, e.g. `Wait 1.5`",
+                        path.display(),
+                        line_number + 1
+                    )
+                    .into())
+                }
+            }
+            continue;
+        }
         match lock(&handle).execute(line) {
             Ok(outcome) => print_outcome(&outcome),
             Err(error) => {
@@ -312,6 +337,30 @@ fn execute_script(runtime: &Runtime, path: &Path) -> Result<(), Box<dyn Error>> 
         }
     }
     Ok(())
+}
+
+fn is_wait(line: &str) -> bool {
+    line.split_whitespace()
+        .next()
+        .map(|word| word.eq_ignore_ascii_case("wait"))
+        .unwrap_or(false)
+}
+
+/// `Wait <seconds>` — script-only, bounded so a typo cannot hang a run.
+fn parse_wait(line: &str) -> Option<f64> {
+    let mut words = line.split_whitespace();
+    if !words.next()?.eq_ignore_ascii_case("wait") {
+        return None;
+    }
+    let seconds: f64 = words.next()?.parse().ok()?;
+    if words.next().is_some() {
+        return None;
+    }
+    if seconds.is_finite() && (0.0..=600.0).contains(&seconds) {
+        Some(seconds)
+    } else {
+        None
+    }
 }
 
 fn trace_line(universe: u16, state: &VirtualState) -> String {

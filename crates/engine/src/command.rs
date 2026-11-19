@@ -1,15 +1,26 @@
 //! The command language shared by every input surface.
 //!
-//! Phase 1 grammar:
+//! Grammar (keywords are case-insensitive):
 //!
 //! ```text
-//! Fixture 1 Thru 5 [At 50 | Full | Off]    selection and intensity
-//! 1 Thru 5 At 50                           fixture keyword is optional
-//! At 50 | Full | Off                       apply to the current selection
-//! Clear [All]                              clear the selection
+//! Fixture 1 Thru 5                        select fixtures
+//! Fixture 1 Thru 5 At 50                  set Dimmer (0 to 100)
+//! Fixture 1 At ColorAdd_R 40              set any attribute of the mode
+//! Fixture 1 At Red Full                   pretty attribute names work too
+//! At Palette Color 3                      apply a palette to the selection
+//! Full | Off                              apply to the current selection
+//! Clear | Clear Values | Clear All
 //! Patch Fixture 1 At 1.001 Type "X" [Mode "4ch"]
 //! Unpatch Fixture 1 Thru 3
 //! Import Gdtf "file.gdtf"
+//! New [Show] ["name"]
+//! Store Palette <Feature> <n> ["name"]    capture the programmer
+//! Delete Palette <Feature> <n> | Palette
+//! Store Cue 1 ["name"] [Fade 2] [Delay 0.5] [Sequence 2]
+//! Delete Cue 1 [Sequence 2] | Sequence [2]
+//! Assign Executor 1 Sequence 1
+//! Executor 1 At 75 | Full | Off           executor master fader
+//! Go | Back | Pause | Release [Executor n | Sequence n]
 //! Sheet | Status | Save "show.json" | Load "show.json" | Help
 //! ```
 //!
@@ -45,17 +56,35 @@ pub enum Level {
     Full,
 }
 
+/// Where a level comes from: a literal, or a palette in a feature pool.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LevelSource {
+    Level(Level),
+    Palette { feature: String, number: u16 },
+}
+
+/// Which playback a `Go`, `Back`, `Pause` or `Release` addresses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaybackRef {
+    Sequence(u16),
+    Executor(u16),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     Select(Vec<u16>),
     SetLevel {
         fixtures: Option<Vec<u16>>,
-        level: Level,
+        attribute: Option<String>,
+        source: LevelSource,
     },
     Off {
         fixtures: Option<Vec<u16>>,
     },
-    Clear,
+    Clear {
+        all: bool,
+        values: bool,
+    },
     Patch {
         fixture: u16,
         universe: u16,
@@ -68,6 +97,56 @@ pub enum Command {
     },
     ImportGdtf {
         path: String,
+    },
+    New {
+        name: Option<String>,
+    },
+    StorePalette {
+        feature: String,
+        number: u16,
+        name: Option<String>,
+    },
+    DeletePalette {
+        feature: String,
+        number: u16,
+    },
+    ListPalettes,
+    StoreCue {
+        sequence: u16,
+        number: f64,
+        name: Option<String>,
+        fade: Option<f64>,
+        delay: Option<f64>,
+    },
+    DeleteCue {
+        sequence: u16,
+        number: f64,
+    },
+    ListSequences {
+        only: Option<u16>,
+    },
+    AssignExecutor {
+        executor: u16,
+        sequence: u16,
+    },
+    SetExecutorLevel {
+        executor: u16,
+        level: Level,
+    },
+    ListExecutors {
+        only: Option<u16>,
+    },
+    Go {
+        target: Option<PlaybackRef>,
+    },
+    Back {
+        target: Option<PlaybackRef>,
+    },
+    Pause {
+        target: Option<PlaybackRef>,
+    },
+    Release {
+        target: Option<PlaybackRef>,
     },
     Sheet,
     Status,
@@ -233,6 +312,12 @@ pub fn parse(tokens: &[Token]) -> Result<Command, CommandError> {
     parser.command()
 }
 
+/// Keywords that may never be read as an object name.
+const RESERVED: &[&str] = &[
+    "fade", "delay", "sequence", "in", "at", "full", "off", "palette", "executor", "fixture",
+    "type", "mode", "thru", "values", "all", "show",
+];
+
 struct Parser<'a> {
     tokens: &'a [Token],
     position: usize,
@@ -297,18 +382,20 @@ impl Parser<'_> {
             return self.selection_or_action(fixtures);
         }
         if word.eq_ignore_ascii_case("at") {
-            let level = self.level()?;
+            let (attribute, source) = self.level_source()?;
             self.expect_end()?;
             return Ok(Command::SetLevel {
                 fixtures: None,
-                level,
+                attribute,
+                source,
             });
         }
         if word.eq_ignore_ascii_case("full") {
             self.expect_end()?;
             return Ok(Command::SetLevel {
                 fixtures: None,
-                level: Level::Full,
+                attribute: None,
+                source: LevelSource::Level(Level::Full),
             });
         }
         if word.eq_ignore_ascii_case("off") {
@@ -317,9 +404,16 @@ impl Parser<'_> {
             return Ok(Command::Off { fixtures });
         }
         if word.eq_ignore_ascii_case("clear") {
-            self.eat_word("all");
+            let mut all = false;
+            let mut values = false;
+            if self.eat_word("all") {
+                all = true;
+                values = true;
+            } else if self.eat_word("values") {
+                values = true;
+            }
             self.expect_end()?;
-            return Ok(Command::Clear);
+            return Ok(Command::Clear { all, values });
         }
         if word.eq_ignore_ascii_case("patch") {
             return self.patch();
@@ -335,6 +429,57 @@ impl Parser<'_> {
             let path = self.path_token()?;
             self.expect_end()?;
             return Ok(Command::ImportGdtf { path });
+        }
+        if word.eq_ignore_ascii_case("new") {
+            self.eat_word("show");
+            let name = self.optional_name()?;
+            self.expect_end()?;
+            return Ok(Command::New { name });
+        }
+        if word.eq_ignore_ascii_case("store") {
+            return self.store();
+        }
+        if word.eq_ignore_ascii_case("delete") {
+            return self.delete();
+        }
+        if word.eq_ignore_ascii_case("assign") {
+            return self.assign();
+        }
+        if word.eq_ignore_ascii_case("go") {
+            let target = self.playback_ref()?;
+            self.expect_end()?;
+            return Ok(Command::Go { target });
+        }
+        if word.eq_ignore_ascii_case("back") {
+            let target = self.playback_ref()?;
+            self.expect_end()?;
+            return Ok(Command::Back { target });
+        }
+        if word.eq_ignore_ascii_case("pause") {
+            let target = self.playback_ref()?;
+            self.expect_end()?;
+            return Ok(Command::Pause { target });
+        }
+        if word.eq_ignore_ascii_case("release") {
+            let target = self.playback_ref()?;
+            self.expect_end()?;
+            return Ok(Command::Release { target });
+        }
+        if word.eq_ignore_ascii_case("palette") || word.eq_ignore_ascii_case("palettes") {
+            self.expect_end()?;
+            return Ok(Command::ListPalettes);
+        }
+        if word.eq_ignore_ascii_case("sequence") || word.eq_ignore_ascii_case("sequences") {
+            let only = if matches!(self.peek(), Some(Token::Number(_))) {
+                Some(self.whole_number("sequence number")?)
+            } else {
+                None
+            };
+            self.expect_end()?;
+            return Ok(Command::ListSequences { only });
+        }
+        if word.eq_ignore_ascii_case("executor") || word.eq_ignore_ascii_case("executors") {
+            return self.executor();
         }
         if word.eq_ignore_ascii_case("sheet") || word.eq_ignore_ascii_case("fixtures") {
             self.expect_end()?;
@@ -374,18 +519,20 @@ impl Parser<'_> {
             return Ok(Command::Select(fixtures));
         }
         if self.eat_word("at") {
-            let level = self.level()?;
+            let (attribute, source) = self.level_source()?;
             self.expect_end()?;
             return Ok(Command::SetLevel {
                 fixtures: Some(fixtures),
-                level,
+                attribute,
+                source,
             });
         }
         if self.eat_word("full") {
             self.expect_end()?;
             return Ok(Command::SetLevel {
                 fixtures: Some(fixtures),
-                level: Level::Full,
+                attribute: None,
+                source: LevelSource::Level(Level::Full),
             });
         }
         if self.eat_word("off") {
@@ -462,6 +609,52 @@ impl Parser<'_> {
         }
     }
 
+    /// A positive whole number such as a palette, sequence or executor number.
+    fn whole_number(&mut self, what: &str) -> Result<u16, CommandError> {
+        match self.bump() {
+            Some(Token::Number(raw)) => {
+                if raw.contains('.') {
+                    return Err(CommandError::new(format!(
+                        "{what} `{raw}` must be a whole number"
+                    )));
+                }
+                let number: u32 = raw
+                    .parse()
+                    .map_err(|_| CommandError::new(format!("`{raw}` is not a {what}")))?;
+                if number == 0 || number > u32::from(u16::MAX) {
+                    return Err(CommandError::new(format!(
+                        "{what} {number} is out of range"
+                    )));
+                }
+                Ok(number as u16)
+            }
+            Some(other) => Err(CommandError::new(format!("expected a {what}, got {other}"))),
+            None => Err(CommandError::new(format!("expected a {what}"))),
+        }
+    }
+
+    fn cue_number(&mut self) -> Result<f64, CommandError> {
+        match self.bump() {
+            Some(Token::Number(raw)) => {
+                let number: f64 = raw
+                    .parse()
+                    .map_err(|_| CommandError::new(format!("`{raw}` is not a cue number")))?;
+                if !number.is_finite() || number < 0.0 {
+                    return Err(CommandError::new(format!(
+                        "cue number {raw} is not a finite positive number"
+                    )));
+                }
+                Ok(number)
+            }
+            Some(other) => Err(CommandError::new(format!(
+                "expected a cue number, got {other}"
+            ))),
+            None => Err(CommandError::new(
+                "expected a cue number, e.g. `Store Cue 1`",
+            )),
+        }
+    }
+
     fn level(&mut self) -> Result<Level, CommandError> {
         if self.eat_word("full") {
             return Ok(Level::Full);
@@ -479,12 +672,44 @@ impl Parser<'_> {
             }
             Some(other) => Err(CommandError::with_hint(
                 format!("expected a level, got {other}"),
-                "use a percentage from 0 to 100, or `Full`",
+                "use a percentage from 0 to 100, `Full`, or `Palette <Feature> <n>`",
             )),
             None => Err(CommandError::with_hint(
                 "expected a level",
-                "use a percentage from 0 to 100, or `Full`",
+                "use a percentage from 0 to 100, `Full`, or `Palette <Feature> <n>`",
             )),
+        }
+    }
+
+    /// `[<Attribute>] <level>` or `[<Attribute>] Palette <Feature> <n>`.
+    fn level_source(&mut self) -> Result<(Option<String>, LevelSource), CommandError> {
+        if self.eat_word("palette") {
+            let feature = self.name_token("palette feature")?;
+            let number = self.whole_number("palette number")?;
+            return Ok((None, LevelSource::Palette { feature, number }));
+        }
+        let attribute = self.optional_attribute();
+        if self.eat_word("palette") {
+            let feature = self.name_token("palette feature")?;
+            let number = self.whole_number("palette number")?;
+            return Ok((attribute, LevelSource::Palette { feature, number }));
+        }
+        let level = self.level()?;
+        Ok((attribute, LevelSource::Level(level)))
+    }
+
+    fn optional_attribute(&mut self) -> Option<String> {
+        match self.peek() {
+            Some(Token::Word(word))
+                if !word.eq_ignore_ascii_case("full")
+                    && !word.eq_ignore_ascii_case("palette")
+                    && !word.eq_ignore_ascii_case("off") =>
+            {
+                let word = word.clone();
+                self.position += 1;
+                Some(word)
+            }
+            _ => None,
         }
     }
 
@@ -542,6 +767,199 @@ impl Parser<'_> {
             )));
         }
         Ok((universe, address))
+    }
+
+    fn store(&mut self) -> Result<Command, CommandError> {
+        if self.eat_word("palette") {
+            let feature = self.name_token("palette feature")?;
+            let number = self.whole_number("palette number")?;
+            let name = self.optional_name()?;
+            self.expect_end()?;
+            return Ok(Command::StorePalette {
+                feature,
+                number,
+                name,
+            });
+        }
+        if self.eat_word("cue") {
+            let number = self.cue_number()?;
+            let mut name = self.optional_name()?;
+            let mut fade = None;
+            let mut delay = None;
+            let mut sequence = 1;
+            loop {
+                if self.eat_word("fade") {
+                    fade = Some(self.seconds("fade")?);
+                } else if self.eat_word("delay") {
+                    delay = Some(self.seconds("delay")?);
+                } else if self.eat_word("sequence") {
+                    sequence = self.whole_number("sequence number")?;
+                } else if self.eat_word("in") {
+                    self.eat_word("sequence");
+                    sequence = self.whole_number("sequence number")?;
+                } else if let Some(candidate) = self.optional_name()? {
+                    if name.is_some() {
+                        return Err(CommandError::with_hint(
+                            format!("unexpected name `{candidate}`"),
+                            "quote the cue name once",
+                        ));
+                    }
+                    name = Some(candidate);
+                } else {
+                    break;
+                }
+            }
+            self.expect_end()?;
+            return Ok(Command::StoreCue {
+                sequence,
+                number,
+                name,
+                fade,
+                delay,
+            });
+        }
+        Err(CommandError::with_hint(
+            "`Store` needs an object",
+            "`Store Palette <Feature> <n>` or `Store Cue <n>`",
+        ))
+    }
+
+    fn delete(&mut self) -> Result<Command, CommandError> {
+        if self.eat_word("palette") {
+            let feature = self.name_token("palette feature")?;
+            let number = self.whole_number("palette number")?;
+            self.expect_end()?;
+            return Ok(Command::DeletePalette { feature, number });
+        }
+        if self.eat_word("cue") {
+            let number = self.cue_number()?;
+            let mut sequence = 1;
+            if self.eat_word("sequence") {
+                sequence = self.whole_number("sequence number")?;
+            } else if self.eat_word("in") {
+                self.eat_word("sequence");
+                sequence = self.whole_number("sequence number")?;
+            }
+            self.expect_end()?;
+            return Ok(Command::DeleteCue { sequence, number });
+        }
+        Err(CommandError::with_hint(
+            "`Delete` needs an object",
+            "`Delete Palette <Feature> <n>` or `Delete Cue <n>`",
+        ))
+    }
+
+    fn assign(&mut self) -> Result<Command, CommandError> {
+        if !self.eat_word("executor") {
+            return Err(CommandError::with_hint(
+                "`Assign` needs an executor",
+                "`Assign Executor 1 Sequence 1`",
+            ));
+        }
+        let executor = self.whole_number("executor number")?;
+        self.eat_word("to");
+        if !self.eat_word("sequence") {
+            return Err(CommandError::with_hint(
+                "`Assign` needs an object",
+                "`Assign Executor 1 Sequence 1`",
+            ));
+        }
+        let sequence = self.whole_number("sequence number")?;
+        self.expect_end()?;
+        Ok(Command::AssignExecutor { executor, sequence })
+    }
+
+    fn executor(&mut self) -> Result<Command, CommandError> {
+        if self.at_end() {
+            return Ok(Command::ListExecutors { only: None });
+        }
+        let number = self.whole_number("executor number")?;
+        if self.at_end() {
+            return Ok(Command::ListExecutors { only: Some(number) });
+        }
+        if self.eat_word("at") {
+            let level = self.level()?;
+            self.expect_end()?;
+            return Ok(Command::SetExecutorLevel {
+                executor: number,
+                level,
+            });
+        }
+        if self.eat_word("full") {
+            self.expect_end()?;
+            return Ok(Command::SetExecutorLevel {
+                executor: number,
+                level: Level::Full,
+            });
+        }
+        if self.eat_word("off") {
+            self.expect_end()?;
+            return Ok(Command::SetExecutorLevel {
+                executor: number,
+                level: Level::Percent(0.0),
+            });
+        }
+        Err(CommandError::with_hint(
+            format!(
+                "unexpected {}",
+                self.peek().cloned().unwrap_or(Token::Word(String::new()))
+            ),
+            "use `Executor <n> At <level>` or `Executor <n>` to inspect it",
+        ))
+    }
+
+    fn playback_ref(&mut self) -> Result<Option<PlaybackRef>, CommandError> {
+        if self.eat_word("executor") {
+            return Ok(Some(PlaybackRef::Executor(
+                self.whole_number("executor number")?,
+            )));
+        }
+        if self.eat_word("sequence") {
+            return Ok(Some(PlaybackRef::Sequence(
+                self.whole_number("sequence number")?,
+            )));
+        }
+        Ok(None)
+    }
+
+    fn optional_name(&mut self) -> Result<Option<String>, CommandError> {
+        match self.peek().cloned() {
+            Some(Token::Quoted(name)) => {
+                self.position += 1;
+                Ok(Some(name))
+            }
+            Some(Token::Word(word))
+                if !RESERVED
+                    .iter()
+                    .any(|keyword| word.eq_ignore_ascii_case(keyword)) =>
+            {
+                self.position += 1;
+                Ok(Some(word))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn seconds(&mut self, what: &str) -> Result<f64, CommandError> {
+        match self.bump() {
+            Some(Token::Number(raw)) | Some(Token::Word(raw)) => {
+                let value: f64 = raw
+                    .parse()
+                    .map_err(|_| CommandError::new(format!("`{raw}` is not a {what} time")))?;
+                if !value.is_finite() || value < 0.0 {
+                    return Err(CommandError::new(format!(
+                        "{what} {raw} is not a positive number of seconds"
+                    )));
+                }
+                Ok(value)
+            }
+            Some(other) => Err(CommandError::new(format!(
+                "expected a {what} time in seconds, got {other}"
+            ))),
+            None => Err(CommandError::new(format!(
+                "expected a {what} time in seconds"
+            ))),
+        }
     }
 
     fn path_token(&mut self) -> Result<String, CommandError> {
@@ -630,28 +1048,32 @@ mod tests {
             command("Fixture 1 Thru 5 At 50"),
             Command::SetLevel {
                 fixtures: Some(vec![1, 2, 3, 4, 5]),
-                level: Level::Percent(50.0)
+                attribute: None,
+                source: LevelSource::Level(Level::Percent(50.0))
             }
         );
         assert_eq!(
             command("1 + 3 At Full"),
             Command::SetLevel {
                 fixtures: Some(vec![1, 3]),
-                level: Level::Full
+                attribute: None,
+                source: LevelSource::Level(Level::Full)
             }
         );
         assert_eq!(
             command("Full"),
             Command::SetLevel {
                 fixtures: None,
-                level: Level::Full
+                attribute: None,
+                source: LevelSource::Level(Level::Full)
             }
         );
         assert_eq!(
             command("At 0"),
             Command::SetLevel {
                 fixtures: None,
-                level: Level::Percent(0.0)
+                attribute: None,
+                source: LevelSource::Level(Level::Percent(0.0))
             }
         );
         assert_eq!(command("Off"), Command::Off { fixtures: None });
@@ -684,6 +1106,153 @@ mod tests {
     }
 
     #[test]
+    fn parses_attributes_and_palettes() {
+        assert_eq!(
+            command("Fixture 1 At ColorAdd_R 40"),
+            Command::SetLevel {
+                fixtures: Some(vec![1]),
+                attribute: Some("ColorAdd_R".into()),
+                source: LevelSource::Level(Level::Percent(40.0))
+            }
+        );
+        assert_eq!(
+            command("At Dimmer Full"),
+            Command::SetLevel {
+                fixtures: None,
+                attribute: Some("Dimmer".into()),
+                source: LevelSource::Level(Level::Full)
+            }
+        );
+        assert_eq!(
+            command("Fixture 1 Thru 2 At Palette Color 3"),
+            Command::SetLevel {
+                fixtures: Some(vec![1, 2]),
+                attribute: None,
+                source: LevelSource::Palette {
+                    feature: "Color".into(),
+                    number: 3
+                }
+            }
+        );
+        assert_eq!(
+            command("At Red 25"),
+            Command::SetLevel {
+                fixtures: None,
+                attribute: Some("Red".into()),
+                source: LevelSource::Level(Level::Percent(25.0))
+            }
+        );
+    }
+
+    #[test]
+    fn parses_store_and_delete_objects() {
+        assert_eq!(
+            command(r#"Store Palette Color 2 "Deep Blue""#),
+            Command::StorePalette {
+                feature: "Color".into(),
+                number: 2,
+                name: Some("Deep Blue".into()),
+            }
+        );
+        assert_eq!(
+            command("Store Cue 1.5 Fade 2 Delay 0.5 Sequence 3"),
+            Command::StoreCue {
+                sequence: 3,
+                number: 1.5,
+                name: None,
+                fade: Some(2.0),
+                delay: Some(0.5),
+            }
+        );
+        assert_eq!(
+            command(r#"Store Cue 2 "Look" In Sequence 2"#),
+            Command::StoreCue {
+                sequence: 2,
+                number: 2.0,
+                name: Some("Look".into()),
+                fade: None,
+                delay: None,
+            }
+        );
+        assert_eq!(
+            command("Delete Cue 4 Sequence 2"),
+            Command::DeleteCue {
+                sequence: 2,
+                number: 4.0
+            }
+        );
+        assert_eq!(
+            command("Delete Palette Beam 1"),
+            Command::DeletePalette {
+                feature: "Beam".into(),
+                number: 1
+            }
+        );
+    }
+
+    #[test]
+    fn parses_executors_and_playback_commands() {
+        assert_eq!(
+            command("Assign Executor 2 Sequence 1"),
+            Command::AssignExecutor {
+                executor: 2,
+                sequence: 1
+            }
+        );
+        assert_eq!(
+            command("Executor 2 At 75"),
+            Command::SetExecutorLevel {
+                executor: 2,
+                level: Level::Percent(75.0)
+            }
+        );
+        assert_eq!(
+            command("Executor 2 Full"),
+            Command::SetExecutorLevel {
+                executor: 2,
+                level: Level::Full
+            }
+        );
+        assert_eq!(command("Executor"), Command::ListExecutors { only: None });
+        assert_eq!(
+            command("Go Executor 2"),
+            Command::Go {
+                target: Some(PlaybackRef::Executor(2))
+            }
+        );
+        assert_eq!(
+            command("Go Sequence 1"),
+            Command::Go {
+                target: Some(PlaybackRef::Sequence(1))
+            }
+        );
+        assert_eq!(command("Go"), Command::Go { target: None });
+        assert_eq!(command("Back"), Command::Back { target: None });
+        assert_eq!(command("Pause"), Command::Pause { target: None });
+        assert_eq!(command("Release"), Command::Release { target: None });
+        assert_eq!(
+            command("Clear All"),
+            Command::Clear {
+                all: true,
+                values: true
+            }
+        );
+        assert_eq!(
+            command("Clear Values"),
+            Command::Clear {
+                all: false,
+                values: true
+            }
+        );
+        assert_eq!(
+            command("New Show \"Gig\""),
+            Command::New {
+                name: Some("Gig".into())
+            }
+        );
+    }
+
+    #[test]
     fn parse_errors_have_actionable_hints() {
         let failure = error("Patch Fixture 1 At 1");
         assert!(
@@ -700,6 +1269,11 @@ mod tests {
         assert!(failure.hint.unwrap().contains("Help"));
         let failure = error("Thru 4");
         assert!(failure.hint.unwrap().contains("starts with"));
+        assert!(error("Store Cue 1 Fade -1").message.contains("positive"));
+        assert!(error("Store Palette Color 0")
+            .message
+            .contains("out of range"));
+        assert!(error("Go Executor").message.contains("expected"));
     }
 
     #[test]
@@ -708,7 +1282,8 @@ mod tests {
             command("At 25"),
             Command::SetLevel {
                 fixtures: None,
-                level: Level::Percent(25.0)
+                attribute: None,
+                source: LevelSource::Level(Level::Percent(25.0))
             }
         );
     }

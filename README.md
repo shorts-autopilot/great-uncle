@@ -16,15 +16,17 @@ profiles that you supply.
 |---|---|---|
 | 0 | Manual crawl → feature specification | done — see [`spec/REPORT.md`](spec/REPORT.md) |
 | 1 | Engine, show file, command line, DMX output | done — see [`docs/PHASE1.md`](docs/PHASE1.md) |
-| 2+ | Programming, playback, effects, UI | not started |
+| 2 | Palettes, cues, sequences, executor faders | done — see [`docs/PHASE2.md`](docs/PHASE2.md) |
+| 3+ | Effects, groups and filters, timecode, UI | not started |
 
-Phase 1 is a headless console: a CLI with a REPL, a script runner and four
-output transports. There is no GUI yet.
+It is a headless console: a CLI with a REPL, a script runner and four output
+transports. You can program, store palettes and cues, and run a cue list from an
+executor fader. There is no GUI yet.
 
 ## Quick start
 
 ```bash
-cargo test --workspace            # 83 tests, no hardware needed
+cargo test --workspace            # 121 tests, no hardware needed
 cargo run -p openlight-console    # interactive console
 ```
 
@@ -37,6 +39,24 @@ cargo run -p openlight-console -- \
   --script examples/phase1-demo.txt \
   --frames 20 --trace
 ```
+
+Store a palette and two cues, then run them from a fader at 75%:
+
+```bash
+cargo run -p openlight-console -- \
+  --output 1=virtual \
+  --script examples/phase2-demo.txt \
+  --frames 120 --trace
+```
+
+```
+Executor 1 → cue 2 "High" (fade 1s, delay 0s)
+Universe 1: 120 frames, last frame 513 bytes, start code 0x00, 6 non-zero slots
+  00 BF FF 00 4D BF FF 00 4D …
+```
+
+`BF` is a 100% dimmer through the 75% master fader, `FF` is red and `4D` is the
+30% blue stored in the palette.
 
 The trace line ends with the first slots of the frame that went out:
 
@@ -62,21 +82,27 @@ cargo run -p openlight-console -- --output 1=enttec:/dev/ttyUSB0
 
 ```
 crates/dmx/       DMX512 transports: virtual, generic serial, ENTTEC, uDMX
-crates/engine/    show file, fixture types, GDTF import, commands, render, output runtime
+crates/engine/    show file, fixture types, GDTF import, commands, levels, palettes,
+                  playback, render, output runtime
 crates/console/   the `openlight` binary: CLI, REPL, script runner
-examples/         a demo show script and its synthetic GDTF profile
-tools/            manual crawler (Phase 0) and the demo profile generator
-spec/             the Phase 0 feature specification and evidence
+examples/         demo show scripts and their synthetic GDTF profile
+tools/            manual crawler (Phase 0), status stamping, demo profile generator
+spec/             the Phase 0 feature specification, statuses and evidence
 docs/             per-phase design notes
 ```
 
 ## Documentation
 
-- [`docs/PHASE1.md`](docs/PHASE1.md) — architecture, command reference, output
+- [`docs/PHASE1.md`](docs/PHASE1.md) — engine, show file, command line, output
   transports, test evidence, known limitations.
+- [`docs/PHASE2.md`](docs/PHASE2.md) — programmer vs playback, tracking, palettes,
+  cues, sequences, executor faders, show format v2, limitations.
 - [`spec/matrix.md`](spec/matrix.md) — the Phase 0 feature matrix this work is
-  measured against.
+  measured against, with per-row status.
 - [`spec/SCHEMA.md`](spec/SCHEMA.md) — how the crawled specification is stored.
+
+Row status is maintained by `python3 tools/spec_status.py`; `--check` fails when
+`matrix.json`/`matrix.md` no longer match the recorded statuses.
 
 ## Licence
 

@@ -11,15 +11,21 @@
 //! * [`fixture_type`] — GDTF-derived fixture types, modes and channel functions.
 //! * [`gdtf`] — `.gdtf` archive import.
 //! * [`command`] — lexer and parser for the command line.
-//! * [`render`] — show state to DMX universes.
+//! * [`levels`] — normalised level maps shared by every layer.
+//! * [`palette`] — typed preset pools.
+//! * [`playback`] — cues, sequences, executors and running fades.
+//! * [`render`] — programmer and playback to DMX universes.
 //! * [`output`] — 60 Hz engine tick + 30 Hz frame output thread.
 
 pub mod command;
 pub mod engine;
 pub mod fixture_type;
 pub mod gdtf;
+pub mod levels;
 pub mod output;
+pub mod palette;
 pub mod patch;
+pub mod playback;
 pub mod registry;
 pub mod render;
 pub mod show;
@@ -30,5 +36,8 @@ pub(crate) mod test_support;
 pub use command::CommandError;
 pub use engine::{CommandOutcome, Engine};
 pub use fixture_type::{Channel, ChannelFunction, FixtureType, Mode, DIMMER};
+pub use levels::Levels;
 pub use output::{OutputStatus, Runtime, RuntimeConfig, TransportBinding};
+pub use palette::Palette;
+pub use playback::{Cue, Executor, Playback, Sequence, Target};
 pub use show::{Fixture, Show, Universe};

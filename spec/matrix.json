@@ -7290,7 +7290,7 @@
    "module": "engine/parameters",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "system",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/system.html",
@@ -7321,7 +7321,7 @@
    "module": "engine/parameters",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "system_standalone",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/system_standalone.html",
@@ -8969,7 +8969,7 @@
    "module": "platform",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "onpc",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/onpc.html",
@@ -9135,7 +9135,7 @@
    "module": "platform",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "out-of-scope",
    "source": {
     "ext_id": "onpc_optimize_windows",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/onpc_optimize_windows.html",
@@ -9298,7 +9298,7 @@
    "module": "platform",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "out-of-scope",
    "source": {
     "ext_id": "onpc_optimize_macos",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/onpc_optimize_macos.html",
@@ -9360,7 +9360,7 @@
    "module": "platform",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "out-of-scope",
    "source": {
     "ext_id": "onpc_terminal_app",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/onpc_terminal_app.html",
@@ -9516,7 +9516,7 @@
    "module": "showfile",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "show_file_management",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/show_file_management.html",
@@ -9610,7 +9610,7 @@
    "module": "showfile",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "sfh_load",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/sfh_load.html",
@@ -9686,7 +9686,7 @@
    "module": "showfile",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "sfh_save",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/sfh_save.html",
@@ -9795,7 +9795,7 @@
    "module": "showfile",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "sfh_new",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/sfh_new.html",
@@ -10293,7 +10293,7 @@
    "module": "ui/shell",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "ws_ui_command_line",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/ws_ui_command_line.html",
@@ -10943,7 +10943,7 @@
    "module": "ui/shell",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "out-of-scope",
    "source": {
     "ext_id": "ws_ui_trackpad",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/ws_ui_trackpad.html",
@@ -11019,7 +11019,7 @@
    "module": "ui/shell",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "out-of-scope",
    "source": {
     "ext_id": "ws_gestures",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/ws_gestures.html",
@@ -11344,7 +11344,7 @@
    "module": "ui/shell",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "out-of-scope",
    "source": {
     "ext_id": "ws_onpc_displays",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/ws_onpc_displays.html",
@@ -12142,7 +12142,7 @@
    "module": "ui/shell",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "out-of-scope",
    "source": {
     "ext_id": "ws_command_wing_bar",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/ws_command_wing_bar.html",
@@ -46280,7 +46280,7 @@
    "module": "ui/windows",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "wvm_pool_create",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/wvm_pool_create.html",
@@ -46496,7 +46496,7 @@
    "module": "ui/windows",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "wvm_pool_delete",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/wvm_pool_delete.html",
@@ -48127,7 +48127,7 @@
    "module": "output",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "dmx",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/dmx.html",
@@ -48168,7 +48168,7 @@
    "module": "output",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "dmx_port_config",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/dmx_port_config.html",
@@ -48344,7 +48344,7 @@
    "module": "output",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "out-of-scope",
    "source": {
     "ext_id": "dmx_ethernet",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/dmx_ethernet.html",
@@ -48387,7 +48387,7 @@
    "module": "output",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "out-of-scope",
    "source": {
     "ext_id": "dmx_ethernet_artnet",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/dmx_ethernet_artnet.html",
@@ -48492,7 +48492,7 @@
    "module": "output",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "out-of-scope",
    "source": {
     "ext_id": "dmx_ethernet_sacn",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/dmx_ethernet_sacn.html",
@@ -48588,7 +48588,7 @@
    "module": "output",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "out-of-scope",
    "source": {
     "ext_id": "dmx_ethernet_artnet_transmit",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/dmx_ethernet_artnet_transmit.html",
@@ -49007,7 +49007,7 @@
    "module": "patch",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "patch",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/patch.html",
@@ -49070,7 +49070,7 @@
    "module": "patch",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "patch_what_are_fixtures",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/patch_what_are_fixtures.html",
@@ -49113,7 +49113,7 @@
    "module": "patch",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "patch_add_fixtures",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/patch_add_fixtures.html",
@@ -49390,7 +49390,7 @@
    "module": "patch",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "patch_live",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/patch_live.html",
@@ -49445,7 +49445,7 @@
    "module": "patch",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "patch_dmx_sheet",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/patch_dmx_sheet.html",
@@ -49533,7 +49533,7 @@
    "module": "patch",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "patch_dmx_universe",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/patch_dmx_universe.html",
@@ -49591,7 +49591,7 @@
    "module": "patch",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "patch_remove_fixtures",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/patch_remove_fixtures.html",
@@ -50146,7 +50146,7 @@
    "module": "patch",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "patch_attribute_definitions",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/patch_attribute_definitions.html",
@@ -50294,7 +50294,7 @@
    "module": "patch",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "patch_attribute_feature_group",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/patch_attribute_feature_group.html",
@@ -53672,7 +53672,7 @@
    "module": "ui/windows",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "wvm_pool_label",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/wvm_pool_label.html",
@@ -53958,7 +53958,7 @@
    "module": "pools",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "presets",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/presets.html",
@@ -54182,7 +54182,7 @@
    "module": "pools",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "presets_pools",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/presets_pools.html",
@@ -54250,7 +54250,7 @@
    "module": "pools",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "presets_create",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/presets_create.html",
@@ -54595,7 +54595,7 @@
    "module": "pools",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "presets_use",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/presets_use.html",
@@ -54670,7 +54670,7 @@
    "module": "pools",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "presets_edit",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/presets_edit.html",
@@ -55466,7 +55466,7 @@
    "module": "playback",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "cue_sequence",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/cue_sequence.html",
@@ -55552,7 +55552,7 @@
    "module": "playback",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "cue_tracking",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/cue_tracking.html",
@@ -55888,7 +55888,7 @@
    "module": "playback",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "cue_sequence_sheet",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/cue_sequence_sheet.html",
@@ -56324,7 +56324,7 @@
    "module": "playback",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "cue_store",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/cue_store.html",
@@ -56491,7 +56491,7 @@
    "module": "playback",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "cue_update",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/cue_update.html",
@@ -56799,7 +56799,7 @@
    "module": "playback",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "cue_playback",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/cue_playback.html",
@@ -56979,7 +56979,7 @@
    "module": "playback",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "cue_timing",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/cue_timing.html",
@@ -57200,7 +57200,7 @@
    "module": "playback",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "cue_delete",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/cue_delete.html",
@@ -57232,7 +57232,7 @@
    "module": "playback/exec",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "executor",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/executor.html",
@@ -57309,7 +57309,7 @@
    "module": "playback/exec",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "executor_configurations",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/executor_configurations.html",
@@ -57361,7 +57361,7 @@
    "module": "playback/exec",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "executor_assign",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/executor_assign.html",
@@ -57618,7 +57618,7 @@
    "module": "playback/exec",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "executor_running_playbacks",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/executor_running_playbacks.html",
@@ -77067,7 +77067,7 @@
    "module": "fixturetypes",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "fixture_types",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/fixture_types.html",
@@ -77112,7 +77112,7 @@
    "module": "fixturetypes",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "ft_import",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/ft_import.html",
@@ -77200,7 +77200,7 @@
    "module": "fixturetypes",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "ft_import_gdtf",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/ft_import_gdtf.html",
@@ -77276,7 +77276,7 @@
    "module": "fixturetypes",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "ft_conflicts_in_fixture_types",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/ft_conflicts_in_fixture_types.html",

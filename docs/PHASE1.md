@@ -1,5 +1,9 @@
 # Phase 1 — engine, show file and DMX output
 
+> Phase 2 has since added palettes, cues, sequences and executor faders, and the
+> show format is version 2. This page records Phase 1 as delivered; see
+> [`PHASE2.md`](PHASE2.md) for the current programming and playback model.
+
 Phase 1 builds the part everything else stands on: a show that is always valid,
 one command path for every input surface, and DMX512 that leaves through a
 serial port. It is deliberately headless — no window, no rendering of fixtures,

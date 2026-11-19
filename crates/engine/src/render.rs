@@ -1,13 +1,18 @@
-//! Rendering: show state to one DMX universe frame.
+//! Rendering: show state and playback output to one DMX universe frame.
 //!
-//! Rendering is pure: it reads a validated show and writes 512 slot values per
-//! universe. The output thread decides when to call it and which transports
-//! receive the result.
+//! Rendering is pure: it reads a validated show, the current playback output
+//! and writes 512 slot values per universe. The output thread decides when to
+//! call it and which transports receive the result.
+//!
+//! **Programmer priority.** A value the operator has in the programmer wins
+//! over playback, which is what makes editing while a cue runs predictable.
+//! `Clear Values` hands the attribute back to playback.
 
 use std::collections::BTreeMap;
 
 use dmx::DMX_SLOTS;
 
+use crate::levels::Levels;
 use crate::show::Show;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -45,11 +50,11 @@ impl OutputFrame {
     }
 }
 
-/// Render every universe of a show.
+/// Render every universe of a show, combining the programmer with playback.
 ///
 /// Fixtures without a resolvable type or mode are skipped: validation rejects
 /// them, and a stale show must never take the output thread down.
-pub fn render(show: &Show) -> OutputFrame {
+pub fn render(show: &Show, playback: &Levels) -> OutputFrame {
     let mut frame = OutputFrame::default();
     for universe in &show.universes {
         frame.ensure(universe.number);
@@ -64,12 +69,16 @@ pub fn render(show: &Show) -> OutputFrame {
         };
         let base = usize::from(fixture.address.saturating_sub(1));
         for channel in &mode.channels {
-            let level = fixture
+            let programmer = fixture
                 .levels
                 .iter()
                 .find(|(name, _)| name.eq_ignore_ascii_case(&channel.attribute))
-                .map(|(_, level)| *level)
-                .unwrap_or(0.0);
+                .map(|(_, level)| *level);
+            let level = match (programmer, playback.get(fixture.number, &channel.attribute)) {
+                (Some(value), _) => value,
+                (None, Some(value)) => value,
+                (None, None) => 0.0,
+            };
             let raw = channel.raw_from_level(level);
             let offset = base + usize::from(channel.offset.saturating_sub(1));
             if offset < DMX_SLOTS {
@@ -88,9 +97,13 @@ mod tests {
     use crate::test_support::demo_show;
     use std::collections::BTreeMap;
 
+    fn program(show: &Show) -> OutputFrame {
+        render(show, &Levels::new())
+    }
+
     #[test]
     fn renders_all_slots_of_each_universe() {
-        let frame = render(&demo_show());
+        let frame = program(&demo_show());
         assert_eq!(frame.len(), 1);
         assert_eq!(frame.get(1).unwrap().len(), DMX_SLOTS);
         assert!(frame.get(1).unwrap().iter().all(|slot| *slot == 0));
@@ -107,7 +120,7 @@ mod tests {
             fixture.levels.insert("ColorAdd_G".into(), 0.0);
             fixture.levels.insert("ColorAdd_B".into(), 0.25);
         }
-        let frame = render(&show);
+        let frame = program(&show);
         assert_eq!(frame.slot(1, 5), Some(255), "dimmer at address 5");
         assert_eq!(frame.slot(1, 6), Some(128), "red at address 6");
         assert_eq!(frame.slot(1, 7), Some(0));
@@ -120,7 +133,7 @@ mod tests {
     fn unpatched_slots_stay_zero() {
         let mut show = demo_show();
         show.fixtures[0].levels.insert("Dimmer".into(), 1.0);
-        let frame = render(&show);
+        let frame = program(&show);
         assert_eq!(frame.slot(1, 1), Some(255));
         assert_eq!(frame.slot(1, 2), Some(0));
         assert_eq!(frame.slot(1, 512), Some(0));
@@ -130,8 +143,33 @@ mod tests {
     fn fixtures_with_missing_types_are_skipped_safely() {
         let mut show = demo_show();
         show.fixtures[0].type_key = "Missing".into();
-        let frame = render(&show);
+        let frame = program(&show);
         assert_eq!(frame.slot(1, 1), Some(0));
+    }
+
+    #[test]
+    fn playback_drives_fixtures_with_an_empty_programmer() {
+        let show = demo_show();
+        let mut playback = Levels::new();
+        playback.set(1, "Dimmer", 0.5);
+        playback.set(1, "ColorAdd_B", 1.0);
+        let frame = render(&show, &playback);
+        assert_eq!(frame.slot(1, 1), Some(128));
+        assert_eq!(frame.slot(1, 4), Some(255));
+    }
+
+    #[test]
+    fn programmer_values_win_over_playback() {
+        let mut show = demo_show();
+        show.fixtures[0].levels.insert("Dimmer".into(), 1.0);
+        let mut playback = Levels::new();
+        playback.set(1, "Dimmer", 0.25);
+        let frame = render(&show, &playback);
+        assert_eq!(
+            frame.slot(1, 1),
+            Some(255),
+            "the programmer holds the value until it is cleared"
+        );
     }
 
     #[test]
@@ -151,7 +189,7 @@ mod tests {
             address: 1,
             levels: BTreeMap::from([("Dimmer".into(), 1.0)]),
         });
-        let frame = render(&show);
+        let frame = program(&show);
         assert_eq!(frame.len(), 2);
         assert_eq!(frame.slot(1, 1), Some(0));
         assert_eq!(frame.slot(2, 1), Some(255));

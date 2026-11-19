@@ -2,8 +2,9 @@
 //!
 //! Two threads, both reading only:
 //!
-//! * the **engine tick** re-renders the frame when the engine revision changes
-//!   (60 Hz by default). Fades and per-frame effects will hook in here.
+//! * the **engine tick** advances playback and re-renders when the engine
+//!   revision changes (60 Hz by default). A running fade changes the revision,
+//!   so the sender picks it up on the next frame.
 //! * the **frame sender** pushes the latest frame to every bound transport at
 //!   the configured DMX rate (30 Hz by default, the usual console refresh).
 //!
@@ -193,11 +194,12 @@ fn engine_loop(
             break;
         }
         let rendered = {
-            let engine = lock(&engine);
-            if engine.revision == revision {
-                None
+            let mut state = lock(&engine);
+            let advanced = state.tick(Instant::now());
+            if advanced || state.revision != revision {
+                Some((state.render(), state.revision))
             } else {
-                Some((engine.render(), engine.revision))
+                None
             }
         };
         if let Some((rendered, current_revision)) = rendered {

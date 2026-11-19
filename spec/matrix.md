@@ -160,8 +160,8 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-SYSTEM-0001` | System Overview | 1 | 1 | not-started |
-| `CX-SYSTEM-0002` | Standalone Device | 0 | 1 | not-started |
+| `CX-SYSTEM-0001` | System Overview | 1 | 1 | implemented |
+| `CX-SYSTEM-0002` | Standalone Device | 0 | 1 | implemented |
 | `CX-SYSTEM-0003` | Locally Networked Devices | 0 | 1 | not-started |
 | `CX-SYSTEM-0004` | World Server | 2 | 1 | not-started |
 | `CX-SYSTEM-0005` | Parameters | 3 | 1 | not-started |
@@ -201,13 +201,13 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-ONPC-0001` | grandMA3 onPC | 1 | 1 | not-started |
+| `CX-ONPC-0001` | grandMA3 onPC | 1 | 1 | in-progress |
 | `CX-ONPC-0002` | System Requirements | 1 | 1 | not-started |
 | `CX-ONPC-0003` | Windows™® Installation | 3 | 1 | not-started |
-| `CX-ONPC-0004` | Optimize Windows™® | 5 | 1 | not-started |
+| `CX-ONPC-0004` | Optimize Windows™® | 5 | 1 | out-of-scope |
 | `CX-ONPC-0005` | macOS® Installation | 2 | 1 | not-started |
-| `CX-ONPC-0006` | Optimize macOS® | 3 | 1 | not-started |
-| `CX-ONPC-0007` | onPC Terminal App | 4 | 1 | not-started |
+| `CX-ONPC-0006` | Optimize macOS® | 3 | 1 | out-of-scope |
+| `CX-ONPC-0007` | onPC Terminal App | 4 | 1 | out-of-scope |
 | `CX-ONPC-0008` | onPC Local Settings | 5 | 1 | not-started |
 
 ## Show File Handling
@@ -216,10 +216,10 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-SHOW_FILE_MANAGEMENT-0001` | Show File Handling | 4 | 1 | not-started |
-| `CX-SHOW_FILE_MANAGEMENT-0002` | Load a Show File | 3 | 1 | not-started |
-| `CX-SHOW_FILE_MANAGEMENT-0003` | Save a Show File | 6 | 1 | not-started |
-| `CX-SHOW_FILE_MANAGEMENT-0004` | New Show File | 2 | 1 | not-started |
+| `CX-SHOW_FILE_MANAGEMENT-0001` | Show File Handling | 4 | 1 | implemented |
+| `CX-SHOW_FILE_MANAGEMENT-0002` | Load a Show File | 3 | 1 | implemented |
+| `CX-SHOW_FILE_MANAGEMENT-0003` | Save a Show File | 6 | 1 | implemented |
+| `CX-SHOW_FILE_MANAGEMENT-0004` | New Show File | 2 | 1 | implemented |
 | `CX-SHOW_FILE_MANAGEMENT-0005` | Backup, Demo and Template Show Files | 3 | 1 | not-started |
 | `CX-SHOW_FILE_MANAGEMENT-0006` | Organize Show Files | 7 | 1 | not-started |
 
@@ -234,26 +234,26 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-WORKSPACE-0003` | Configuration of Displays | 5 | 1 | not-started |
 | `CX-WORKSPACE-0004` | Desk Lock | 1 | 1 | not-started |
 | `CX-WORKSPACE-0005` | User-Defined Area | 1 | 1 | not-started |
-| `CX-WORKSPACE-0006` | Command Line | 17 | 1 | not-started |
+| `CX-WORKSPACE-0006` | Command Line | 17 | 1 | implemented |
 | `CX-WORKSPACE-0007` | Control Bar | 2 | 1 | not-started |
 | `CX-WORKSPACE-0008` | Tables in General | 1 | 1 | not-started |
 | `CX-WORKSPACE-0009` | View Bar and View Buttons | 3 | 1 | not-started |
 | `CX-WORKSPACE-0010` | Adjustable Columns | 5 | 1 | not-started |
 | `CX-WORKSPACE-0011` | Temporary Filtering | 2 | 1 | not-started |
-| `CX-WORKSPACE-0012` | Trackpad Window | 4 | 1 | not-started |
-| `CX-WORKSPACE-0013` | Gestures | 3 | 1 | not-started |
+| `CX-WORKSPACE-0012` | Trackpad Window | 4 | 1 | out-of-scope |
+| `CX-WORKSPACE-0013` | Gestures | 3 | 1 | out-of-scope |
 | `CX-WORKSPACE-0014` | Command Area | 1 | 1 | not-started |
 | `CX-WORKSPACE-0015` | Oops Overlay | 5 | 1 | not-started |
 | `CX-WORKSPACE-0016` | Master Controls | 1 | 1 | not-started |
 | `CX-WORKSPACE-0017` | Playback Controls | 1 | 1 | not-started |
-| `CX-WORKSPACE-0018` | Displays in grandMA3 onPC | 1 | 1 | not-started |
+| `CX-WORKSPACE-0018` | Displays in grandMA3 onPC | 1 | 1 | out-of-scope |
 | `CX-WORKSPACE-0019` | Encoder Bar | 2 | 1 | not-started |
 | `CX-WORKSPACE-0020` | Encoder Toolbar | 8 | 1 | not-started |
 | `CX-WORKSPACE-0021` | Default Feature Group Control Bar | 5 | 1 | not-started |
 | `CX-WORKSPACE-0022` | Encoder Bar Pool | 6 | 1 | not-started |
 | `CX-WORKSPACE-0023` | Calculator | 19 | 1 | not-started |
 | `CX-WORKSPACE-0024` | Playback Bar | 1 | 1 | not-started |
-| `CX-WORKSPACE-0025` | command wing Bar | 4 | 1 | not-started |
+| `CX-WORKSPACE-0025` | command wing Bar | 4 | 1 | out-of-scope |
 | `CX-WORKSPACE-0026` | Colors | 1 | 1 | not-started |
 | `CX-WORKSPACE-0027` | System Colors | 3 | 1 | not-started |
 | `CX-WORKSPACE-0028` | Colored Indicators | 1 | 1 | not-started |
@@ -710,12 +710,12 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-WVM-0008` | Menus | 2 | 1 | not-started |
 | `CX-WVM-0009` | Change Menu Locations | 4 | 1 | not-started |
 | `CX-WVM-0010` | Pool Windows | 3 | 1 | not-started |
-| `CX-WVM-0011` | Create Pool Objects | 1 | 1 | not-started |
+| `CX-WVM-0011` | Create Pool Objects | 1 | 1 | in-progress |
 | `CX-WVM-0012` | Move Pool Objects | 1 | 1 | not-started |
 | `CX-WVM-0013` | Insert Pool Objects | 1 | 1 | not-started |
 | `CX-WVM-0014` | Copy Pool Objects | 1 | 1 | not-started |
 | `CX-WVM-0015` | Lock and Unlock Pool Objects | 4 | 1 | not-started |
-| `CX-WVM-0016` | Delete Pool Objects | 1 | 1 | not-started |
+| `CX-WVM-0016` | Delete Pool Objects | 1 | 1 | in-progress |
 
 ## Networking
 
@@ -746,12 +746,12 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-DMX-0001` | DMX In and Out | 1 | 1 | not-started |
-| `CX-DMX-0002` | DMX Port Configuration | 10 | 1 | not-started |
-| `CX-DMX-0003` | Ethernet DMX | 1 | 1 | not-started |
-| `CX-DMX-0004` | Art-Net Menu | 4 | 1 | not-started |
-| `CX-DMX-0005` | sACN (streaming ACN) Menu | 4 | 1 | not-started |
-| `CX-DMX-0006` | Transmit DMX Using Art-Net | 1 | 1 | not-started |
+| `CX-DMX-0001` | DMX In and Out | 1 | 1 | in-progress |
+| `CX-DMX-0002` | DMX Port Configuration | 10 | 1 | implemented |
+| `CX-DMX-0003` | Ethernet DMX | 1 | 1 | out-of-scope |
+| `CX-DMX-0004` | Art-Net Menu | 4 | 1 | out-of-scope |
+| `CX-DMX-0005` | sACN (streaming ACN) Menu | 4 | 1 | out-of-scope |
+| `CX-DMX-0006` | Transmit DMX Using Art-Net | 1 | 1 | out-of-scope |
 
 ## Single User and Multi User Systems
 
@@ -771,24 +771,24 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-PATCH-0001` | Patch and Fixture Setup | 1 | 1 | not-started |
-| `CX-PATCH-0002` | What are Fixtures | 2 | 1 | not-started |
-| `CX-PATCH-0003` | Add Fixtures to the Show | 8 | 1 | not-started |
+| `CX-PATCH-0001` | Patch and Fixture Setup | 1 | 1 | implemented |
+| `CX-PATCH-0002` | What are Fixtures | 2 | 1 | implemented |
+| `CX-PATCH-0003` | Add Fixtures to the Show | 8 | 1 | implemented |
 | `CX-PATCH-0004` | Add Multipatch Fixtures | 2 | 1 | not-started |
 | `CX-PATCH-0005` | My Virtual Rig (MVR) | 2 | 1 | not-started |
-| `CX-PATCH-0006` | Live Patch | 1 | 1 | not-started |
-| `CX-PATCH-0007` | DMX Sheet | 3 | 1 | not-started |
-| `CX-PATCH-0008` | DMX Universes | 2 | 1 | not-started |
-| `CX-PATCH-0009` | Remove Fixtures from the Show | 1 | 1 | not-started |
+| `CX-PATCH-0006` | Live Patch | 1 | 1 | implemented |
+| `CX-PATCH-0007` | DMX Sheet | 3 | 1 | in-progress |
+| `CX-PATCH-0008` | DMX Universes | 2 | 1 | in-progress |
+| `CX-PATCH-0009` | Remove Fixtures from the Show | 1 | 1 | implemented |
 | `CX-PATCH-0010` | Position Fixtures in the 3D Space | 5 | 1 | not-started |
 | `CX-PATCH-0011` | 3D Viewer | 10 | 1 | not-started |
 | `CX-PATCH-0012` | Render Quality | 1 | 1 | not-started |
 | `CX-PATCH-0013` | Camera Pool | 1 | 1 | not-started |
 | `CX-PATCH-0014` | Stages in grandMA3 | 2 | 1 | not-started |
 | `CX-PATCH-0015` | Classes and Layers | 2 | 1 | not-started |
-| `CX-PATCH-0016` | Attribute Definitions | 3 | 1 | not-started |
+| `CX-PATCH-0016` | Attribute Definitions | 3 | 1 | implemented |
 | `CX-PATCH-0017` | Activation Group | 2 | 1 | not-started |
-| `CX-PATCH-0018` | Feature Group | 2 | 1 | not-started |
+| `CX-PATCH-0018` | Feature Group | 2 | 1 | in-progress |
 | `CX-PATCH-0019` | Deactivation Group | 2 | 1 | not-started |
 | `CX-PATCH-0020` | Parameter List | 3 | 1 | not-started |
 | `CX-PATCH-0021` | DMX Curves | 8 | 1 | not-started |
@@ -921,7 +921,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-WVM_POOL_LABEL-0001` | Label Objects | 1 | 1 | not-started |
+| `CX-WVM_POOL_LABEL-0001` | Label Objects | 1 | 1 | in-progress |
 
 ## Groups
 
@@ -941,12 +941,12 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-PRESETS-0001` | Presets | 15 | 2 | not-started |
-| `CX-PRESETS-0002` | Preset Pools | 2 | 2 | not-started |
-| `CX-PRESETS-0003` | Create New Presets | 12 | 2 | not-started |
+| `CX-PRESETS-0001` | Presets | 15 | 2 | implemented |
+| `CX-PRESETS-0002` | Preset Pools | 2 | 2 | implemented |
+| `CX-PRESETS-0003` | Create New Presets | 12 | 2 | implemented |
 | `CX-PRESETS-0004` | Recipe Presets | 7 | 2 | not-started |
-| `CX-PRESETS-0005` | Use Preset | 5 | 2 | not-started |
-| `CX-PRESETS-0006` | Edit or Update Presets | 3 | 2 | not-started |
+| `CX-PRESETS-0005` | Use Preset | 5 | 2 | implemented |
+| `CX-PRESETS-0006` | Edit or Update Presets | 3 | 2 | in-progress |
 
 ## Worlds and Filters
 
@@ -979,25 +979,25 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-CUE_SEQUENCE-0001` | Cues and Sequences | 5 | 2 | not-started |
-| `CX-CUE_SEQUENCE-0002` | What is Tracking | 5 | 2 | not-started |
+| `CX-CUE_SEQUENCE-0001` | Cues and Sequences | 5 | 2 | implemented |
+| `CX-CUE_SEQUENCE-0002` | What is Tracking | 5 | 2 | implemented |
 | `CX-CUE_SEQUENCE-0003` | Cue Only | 2 | 2 | not-started |
 | `CX-CUE_SEQUENCE-0004` | Tracking Distance | 4 | 2 | not-started |
 | `CX-CUE_SEQUENCE-0005` | Tracking Shield | 4 | 2 | not-started |
 | `CX-CUE_SEQUENCE-0006` | Break | 2 | 2 | not-started |
-| `CX-CUE_SEQUENCE-0007` | Sequence Sheet | 7 | 2 | not-started |
+| `CX-CUE_SEQUENCE-0007` | Sequence Sheet | 7 | 2 | in-progress |
 | `CX-CUE_SEQUENCE-0008` | Content Sheet | 2 | 2 | not-started |
 | `CX-CUE_SEQUENCE-0009` | Sequence Settings | 7 | 2 | not-started |
-| `CX-CUE_SEQUENCE-0010` | Store Cues | 12 | 2 | not-started |
-| `CX-CUE_SEQUENCE-0011` | Update Cues | 1 | 2 | not-started |
+| `CX-CUE_SEQUENCE-0010` | Store Cues | 12 | 2 | implemented |
+| `CX-CUE_SEQUENCE-0011` | Update Cues | 1 | 2 | implemented |
 | `CX-CUE_SEQUENCE-0012` | Copy Cues | 4 | 2 | not-started |
 | `CX-CUE_SEQUENCE-0013` | Cue Recipes | 1 | 2 | not-started |
 | `CX-CUE_SEQUENCE-0014` | Store Settings and Store Preferences | 11 | 2 | not-started |
-| `CX-CUE_SEQUENCE-0015` | Play Back Cues | 4 | 2 | not-started |
+| `CX-CUE_SEQUENCE-0015` | Play Back Cues | 4 | 2 | implemented |
 | `CX-CUE_SEQUENCE-0016` | Move In Black | 5 | 2 | not-started |
-| `CX-CUE_SEQUENCE-0017` | Cue Timing | 11 | 2 | not-started |
+| `CX-CUE_SEQUENCE-0017` | Cue Timing | 11 | 2 | implemented |
 | `CX-CUE_SEQUENCE-0018` | Renumber Cues | 1 | 2 | not-started |
-| `CX-CUE_SEQUENCE-0019` | Delete Cues | 1 | 2 | not-started |
+| `CX-CUE_SEQUENCE-0019` | Delete Cues | 1 | 2 | implemented |
 
 ## Executors
 
@@ -1005,10 +1005,10 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-EXECUTOR-0001` | Executors | 4 | 2 | not-started |
-| `CX-EXECUTOR-0002` | Executor Configurations | 2 | 2 | not-started |
-| `CX-EXECUTOR-0003` | Assign Object to an Executor | 16 | 2 | not-started |
-| `CX-EXECUTOR-0004` | Running Playbacks | 2 | 2 | not-started |
+| `CX-EXECUTOR-0001` | Executors | 4 | 2 | implemented |
+| `CX-EXECUTOR-0002` | Executor Configurations | 2 | 2 | in-progress |
+| `CX-EXECUTOR-0003` | Assign Object to an Executor | 16 | 2 | in-progress |
+| `CX-EXECUTOR-0004` | Running Playbacks | 2 | 2 | implemented |
 | `CX-EXECUTOR-0005` | Special Executors | 2 | 2 | not-started |
 
 ## Masters
@@ -1423,10 +1423,10 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-FIXTURE_TYPES-0001` | Fixture Types | 2 | 1 | not-started |
-| `CX-FIXTURE_TYPES-0002` | Import Fixture Types | 4 | 1 | not-started |
-| `CX-FIXTURE_TYPES-0003` | Import GDTF | 3 | 1 | not-started |
-| `CX-FIXTURE_TYPES-0004` | Conflicts in Fixture Types | 2 | 1 | not-started |
+| `CX-FIXTURE_TYPES-0001` | Fixture Types | 2 | 1 | implemented |
+| `CX-FIXTURE_TYPES-0002` | Import Fixture Types | 4 | 1 | implemented |
+| `CX-FIXTURE_TYPES-0003` | Import GDTF | 3 | 1 | implemented |
+| `CX-FIXTURE_TYPES-0004` | Conflicts in Fixture Types | 2 | 1 | in-progress |
 | `CX-FIXTURE_TYPES-0005` | Build Fixture Types | 1 | 1 | not-started |
 | `CX-FIXTURE_TYPES-0006` | Insert Fixture Types | 1 | 1 | not-started |
 | `CX-FIXTURE_TYPES-0007` | Insert Geometries | 1 | 1 | not-started |

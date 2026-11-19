@@ -7,10 +7,10 @@ use crate::show::{Fixture, Show};
 
 /// A synthetic 4 channel wash. Not derived from any vendor fixture profile.
 pub fn demo_fixture_type() -> FixtureType {
-    let attribute = |name: &str, pretty: &str| AttributeDef {
+    let attribute = |name: &str, pretty: &str, feature: &str| AttributeDef {
         name: name.to_string(),
         pretty: pretty.to_string(),
-        feature: "Dimmer".into(),
+        feature: feature.into(),
         unit: "Percent".into(),
     };
     let channel = |offset: u16, name: &str| Channel {
@@ -31,10 +31,10 @@ pub fn demo_fixture_type() -> FixtureType {
         name: "Demo Wash".into(),
         description: "Synthetic four channel wash used by tests and demos.".into(),
         attributes: vec![
-            attribute("Dimmer", "Dimmer"),
-            attribute("ColorAdd_R", "Red"),
-            attribute("ColorAdd_G", "Green"),
-            attribute("ColorAdd_B", "Blue"),
+            attribute("Dimmer", "Dimmer", "Dimmer"),
+            attribute("ColorAdd_R", "Red", "Color.RGB"),
+            attribute("ColorAdd_G", "Green", "Color.RGB"),
+            attribute("ColorAdd_B", "Blue", "Color.RGB"),
         ],
         modes: vec![Mode {
             name: "4ch".into(),
@@ -58,12 +58,8 @@ pub fn demo_show() -> Show {
         mode: "4ch".into(),
         universe: 1,
         address: 1,
-        levels: BTreeMap::from([
-            ("Dimmer".to_string(), 0.0),
-            ("ColorAdd_R".to_string(), 0.0),
-            ("ColorAdd_G".to_string(), 0.0),
-            ("ColorAdd_B".to_string(), 0.0),
-        ]),
+        // The programmer starts empty; unprogrammed attributes render as 0.
+        levels: BTreeMap::new(),
     });
     show
 }

@@ -1,0 +1,36 @@
+# Phase 2 demo: palettes, cues, a sequence and an executor fader.
+# Run it with:
+#   cargo run -p openlight-console -- --output 1=virtual \
+#     --script examples/phase2-demo.txt --frames 120 --trace
+
+Import Gdtf "examples/gdtf/openlight-demo-wash.gdtf"
+
+Patch Fixture 1 At 1.001 Type "OpenLight Demo Wash"
+Patch Fixture 2 At 1.005 Type "OpenLight Demo Wash"
+
+# Capture a colour palette from fixture 1, then use it on fixture 2.
+Fixture 1
+At ColorAdd_R Full
+At ColorAdd_B 30
+Store Palette Color 1 "Deep Blue"
+Fixture 2 At Palette Color 1
+
+# Cue 1 is a low look; cue 2 tracks up to full. Both fade over one second.
+Fixture 1 Thru 2 At 20
+Store Cue 1 "Low" Fade 1
+Fixture 1 Thru 2 At Full
+Store Cue 2 "High" Fade 1
+
+# Hand the rig to playback: the programmer steps out of the way.
+Clear Values
+Assign Executor 1 Sequence 1
+Executor 1 At 75
+
+Go
+Wait 1.5
+Go
+Wait 2
+
+Sequence 1
+Status
+Save "target/phase2-demo.olshow.json"

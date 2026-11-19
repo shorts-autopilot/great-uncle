@@ -193,10 +193,15 @@ mod platform {
                 return Err(self.err());
             }
             std::thread::sleep(hold);
-            if unsafe { libc::ioctl(fd, TIOCCBRK) } < 0 {
-                return Err(self.err());
+            loop {
+                if unsafe { libc::ioctl(fd, TIOCCBRK) } == 0 {
+                    return Ok(());
+                }
+                let error = std::io::Error::last_os_error();
+                if error.kind() != std::io::ErrorKind::Interrupted {
+                    return Err(DmxError::io(&self.path, error));
+                }
             }
-            Ok(())
         }
 
         fn write_all(&mut self, bytes: &[u8]) -> DmxResult<()> {
@@ -223,10 +228,16 @@ mod platform {
         }
 
         fn drain(&mut self) -> DmxResult<()> {
-            if unsafe { libc::tcdrain(self.fd.as_raw_fd()) } < 0 {
-                return Err(self.err());
+            loop {
+                if unsafe { libc::tcdrain(self.fd.as_raw_fd()) } == 0 {
+                    return Ok(());
+                }
+                let error = std::io::Error::last_os_error();
+                // A signal must not cost a frame: tcdrain is restartable.
+                if error.kind() != std::io::ErrorKind::Interrupted {
+                    return Err(DmxError::io(&self.path, error));
+                }
             }
-            Ok(())
         }
 
         fn take_warning(&mut self) -> Option<String> {
