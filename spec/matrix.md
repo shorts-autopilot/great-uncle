@@ -4,13 +4,15 @@ Generated from the grandMA3 v2.2 web manual. 1223 topics, 4881 sections.
 
 Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out-of-scope`.
 
+Scope reasons and chapter dispositions: [`docs/COMPLETENESS.md`](../docs/COMPLETENESS.md).
+
 ## grandMA3 User Manual
 
 `docs` · phase 0 · 1 topics · 1 sections · 0 extracted options
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-HELP-0001` | grandMA3 User Manual | 1 | 0 | not-started |
+| `CX-HELP-0001` | grandMA3 User Manual | 1 | 0 | out-of-scope |
 
 ## New in the Manual
 
@@ -18,7 +20,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-NEWS-0001` | New in the Manual | 1 | 0 | not-started |
+| `CX-NEWS-0001` | New in the Manual | 1 | 0 | out-of-scope |
 
 ## About the Help
 
@@ -26,12 +28,12 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-ABOUT_THE_MANUAL-0001` | About the Help | 5 | 8 | not-started |
-| `CX-ABOUT_THE_MANUAL-0002` | Open the Help in the Console | 7 | 8 | not-started |
-| `CX-ABOUT_THE_MANUAL-0003` | Open the Help in Web Browser | 1 | 8 | not-started |
-| `CX-ABOUT_THE_MANUAL-0004` | Open the Help as PDF | 1 | 8 | not-started |
-| `CX-ABOUT_THE_MANUAL-0005` | Navigate in the Help | 6 | 8 | not-started |
-| `CX-ABOUT_THE_MANUAL-0006` | Videos in the Help | 3 | 8 | not-started |
+| `CX-ABOUT_THE_MANUAL-0001` | About the Help | 5 | 8 | out-of-scope |
+| `CX-ABOUT_THE_MANUAL-0002` | Open the Help in the Console | 7 | 8 | out-of-scope |
+| `CX-ABOUT_THE_MANUAL-0003` | Open the Help in Web Browser | 1 | 8 | out-of-scope |
+| `CX-ABOUT_THE_MANUAL-0004` | Open the Help as PDF | 1 | 8 | out-of-scope |
+| `CX-ABOUT_THE_MANUAL-0005` | Navigate in the Help | 6 | 8 | out-of-scope |
+| `CX-ABOUT_THE_MANUAL-0006` | Videos in the Help | 3 | 8 | out-of-scope |
 
 ## Device Overview
 
@@ -39,120 +41,120 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-DEVICE_OVERVIEW-0001` | Device Overview | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0002` | grandMA3 consoles | 0 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0003` | grandMA3 full-size | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0004` | grandMA3 full-size CRV | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0005` | grandMA3 light | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0006` | grandMA3 light CRV | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0007` | grandMA3 compact XT | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0008` | grandMA3 compact | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0009` | grandMA3 extension | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0010` | grandMA3 replay unit | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0011` | grandMA3 processing units | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0012` | grandMA3 Nodes | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0013` | grandMA3 Nodes DIN-Rail | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0014` | grandMA3 I/O Node | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0015` | grandMA3 I/O Node DIN-Rail | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0016` | grandMA3 onPC command wing XT | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0017` | grandMA3 onPC command wing | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0018` | grandMA3 onPC fader wing | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0019` | grandMA3 onPC rack-unit | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0020` | Screen Allocation | 6 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0021` | Shortcuts | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0022` | Keyboard Shortcuts | 8 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0023` | Framework Shortcuts | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0024` | Keys | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0025` | . [Dot] | 3 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0026` | <<< [GoFastBackward] \| Black | 3 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0027` | >>> [GoFastForward] \| Flash | 3 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0028` | - [Minus] | 3 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0029` | + [Plus] | 3 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0030` | / [Slash] \| * [Asterisk/Multiply] | 3 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0031` | Align | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0032` | Assign | 3 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0033` | At | 6 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0034` | Blind | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0035` | Clear | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0036` | Channel | 4 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0037` | Copy | 4 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0038` | Ctrl | 3 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0039` | Cue | 4 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0040` | Delete | 4 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0041` | Down | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0042` | Edit | 3 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0043` | Esc | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0044` | Fixture | 3 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0045` | Freeze | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0046` | Full | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0047` | Go+ \| Temp | 4 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0048` | Go+ [large] | 3 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0049` | Go- [large] | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0050` | Go- \| Top | 3 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0051` | Goto | 3 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0052` | Group | 4 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0053` | Help | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0054` | Highlt [Highlight] | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0055` | If | 5 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0056` | Learn \| Rate1 | 3 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0057` | List | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0058` | MA | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0059` | Menu | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0060` | Move | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0061` | Next | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0062` | Numeric Keys \| Arrows | 3 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0063` | Off | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0064` | On | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0065` | Oops | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0066` | Page- | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0067` | Page+ | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0068` | Pause [large] | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0069` | Pause \| Fix | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0070` | Please | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0071` | Power | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0072` | Preset | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0073` | Prev [Previous] | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0074` | Prvw [Preview] | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0075` | Select | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0076` | SelFix [SelectFixtures] | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0077` | Sequ [Sequence] | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0078` | Set | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0079` | Stomp | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0080` | Solo | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0081` | Store | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0082` | Thru | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0083` | Time | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0084` | Up | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0085` | Update | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0086` | U1 | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0087` | U2 | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0088` | X1 \| Clone | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0089` | X2 \| Link | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0090` | X3 \| Grid | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0091` | X4 \| Layout | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0092` | X5 \| Step | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0093` | X6 \| TC | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0094` | X7 \| View | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0095` | X8 \| DMX | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0096` | X9 | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0097` | X10 | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0098` | X11 | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0099` | X12 | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0100` | X13 \| Phaser | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0101` | X14 \| Macro | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0102` | X15 \| Page | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0103` | X16 \| Exec | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0104` | Xkeys | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0105` | Control Elements | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0106` | Command Area | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0107` | Master Area | 4 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0108` | Custom Area | 2 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0109` | Dual Encoders | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0110` | Level Wheel | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0111` | Grand Master | 1 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0112` | Executor Elements | 7 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0113` | Connector Pin Assignment | 7 | 0 | not-started |
-| `CX-DEVICE_OVERVIEW-0114` | UPS Battery | 5 | 0 | not-started |
+| `CX-DEVICE_OVERVIEW-0001` | Device Overview | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0002` | grandMA3 consoles | 0 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0003` | grandMA3 full-size | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0004` | grandMA3 full-size CRV | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0005` | grandMA3 light | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0006` | grandMA3 light CRV | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0007` | grandMA3 compact XT | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0008` | grandMA3 compact | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0009` | grandMA3 extension | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0010` | grandMA3 replay unit | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0011` | grandMA3 processing units | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0012` | grandMA3 Nodes | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0013` | grandMA3 Nodes DIN-Rail | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0014` | grandMA3 I/O Node | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0015` | grandMA3 I/O Node DIN-Rail | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0016` | grandMA3 onPC command wing XT | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0017` | grandMA3 onPC command wing | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0018` | grandMA3 onPC fader wing | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0019` | grandMA3 onPC rack-unit | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0020` | Screen Allocation | 6 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0021` | Shortcuts | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0022` | Keyboard Shortcuts | 8 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0023` | Framework Shortcuts | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0024` | Keys | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0025` | . [Dot] | 3 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0026` | <<< [GoFastBackward] \| Black | 3 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0027` | >>> [GoFastForward] \| Flash | 3 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0028` | - [Minus] | 3 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0029` | + [Plus] | 3 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0030` | / [Slash] \| * [Asterisk/Multiply] | 3 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0031` | Align | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0032` | Assign | 3 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0033` | At | 6 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0034` | Blind | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0035` | Clear | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0036` | Channel | 4 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0037` | Copy | 4 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0038` | Ctrl | 3 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0039` | Cue | 4 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0040` | Delete | 4 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0041` | Down | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0042` | Edit | 3 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0043` | Esc | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0044` | Fixture | 3 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0045` | Freeze | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0046` | Full | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0047` | Go+ \| Temp | 4 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0048` | Go+ [large] | 3 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0049` | Go- [large] | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0050` | Go- \| Top | 3 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0051` | Goto | 3 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0052` | Group | 4 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0053` | Help | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0054` | Highlt [Highlight] | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0055` | If | 5 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0056` | Learn \| Rate1 | 3 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0057` | List | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0058` | MA | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0059` | Menu | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0060` | Move | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0061` | Next | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0062` | Numeric Keys \| Arrows | 3 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0063` | Off | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0064` | On | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0065` | Oops | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0066` | Page- | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0067` | Page+ | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0068` | Pause [large] | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0069` | Pause \| Fix | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0070` | Please | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0071` | Power | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0072` | Preset | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0073` | Prev [Previous] | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0074` | Prvw [Preview] | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0075` | Select | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0076` | SelFix [SelectFixtures] | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0077` | Sequ [Sequence] | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0078` | Set | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0079` | Stomp | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0080` | Solo | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0081` | Store | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0082` | Thru | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0083` | Time | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0084` | Up | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0085` | Update | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0086` | U1 | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0087` | U2 | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0088` | X1 \| Clone | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0089` | X2 \| Link | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0090` | X3 \| Grid | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0091` | X4 \| Layout | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0092` | X5 \| Step | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0093` | X6 \| TC | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0094` | X7 \| View | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0095` | X8 \| DMX | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0096` | X9 | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0097` | X10 | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0098` | X11 | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0099` | X12 | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0100` | X13 \| Phaser | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0101` | X14 \| Macro | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0102` | X15 \| Page | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0103` | X16 \| Exec | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0104` | Xkeys | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0105` | Control Elements | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0106` | Command Area | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0107` | Master Area | 4 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0108` | Custom Area | 2 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0109` | Dual Encoders | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0110` | Level Wheel | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0111` | Grand Master | 1 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0112` | Executor Elements | 7 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0113` | Connector Pin Assignment | 7 | 0 | out-of-scope |
+| `CX-DEVICE_OVERVIEW-0114` | UPS Battery | 5 | 0 | out-of-scope |
 
 ## System Overview
 
@@ -162,11 +164,11 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 |---|---|---|---|---|
 | `CX-SYSTEM-0001` | System Overview | 1 | 1 | implemented |
 | `CX-SYSTEM-0002` | Standalone Device | 0 | 1 | implemented |
-| `CX-SYSTEM-0003` | Locally Networked Devices | 0 | 1 | not-started |
-| `CX-SYSTEM-0004` | World Server | 2 | 1 | not-started |
-| `CX-SYSTEM-0005` | Parameters | 3 | 1 | not-started |
-| `CX-SYSTEM-0006` | Calculate Parameters | 1 | 1 | not-started |
-| `CX-SYSTEM-0007` | Expand the Amount of Parameters | 3 | 1 | not-started |
+| `CX-SYSTEM-0003` | Locally Networked Devices | 0 | 1 | out-of-scope |
+| `CX-SYSTEM-0004` | World Server | 2 | 1 | out-of-scope |
+| `CX-SYSTEM-0005` | Parameters | 3 | 1 | out-of-scope |
+| `CX-SYSTEM-0006` | Calculate Parameters | 1 | 1 | out-of-scope |
+| `CX-SYSTEM-0007` | Expand the Amount of Parameters | 3 | 1 | out-of-scope |
 
 ## First Steps
 
@@ -174,26 +176,26 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-FIRST_STEPS-0001` | First Steps | 1 | 0 | not-started |
-| `CX-FIRST_STEPS-0002` | Unpack the Device | 1 | 0 | not-started |
-| `CX-FIRST_STEPS-0003` | Check Scope of Delivery | 18 | 0 | not-started |
-| `CX-FIRST_STEPS-0004` | Position the Device | 1 | 0 | not-started |
-| `CX-FIRST_STEPS-0005` | Connect Power | 2 | 0 | not-started |
-| `CX-FIRST_STEPS-0006` | Connect Desk Light | 1 | 0 | not-started |
-| `CX-FIRST_STEPS-0007` | Connect External Screens | 4 | 0 | not-started |
-| `CX-FIRST_STEPS-0008` | Connect USB Devices | 1 | 0 | not-started |
-| `CX-FIRST_STEPS-0009` | Connect DMX | 1 | 0 | not-started |
-| `CX-FIRST_STEPS-0010` | Connect Audio In | 1 | 0 | not-started |
-| `CX-FIRST_STEPS-0011` | Connect MIDI | 2 | 0 | not-started |
-| `CX-FIRST_STEPS-0012` | Connect Sound Out | 2 | 0 | not-started |
-| `CX-FIRST_STEPS-0013` | Connect LTC | 1 | 0 | not-started |
-| `CX-FIRST_STEPS-0014` | Connect Ethernet | 3 | 0 | not-started |
-| `CX-FIRST_STEPS-0015` | Connect DC Remote In | 1 | 0 | not-started |
-| `CX-FIRST_STEPS-0016` | Connect grandMA3 extension | 1 | 0 | not-started |
-| `CX-FIRST_STEPS-0017` | Connect grandMA3 fader wing | 2 | 0 | not-started |
-| `CX-FIRST_STEPS-0018` | Connect grandMA3 viz-key | 6 | 0 | not-started |
-| `CX-FIRST_STEPS-0019` | Turn on the device for the first time | 6 | 0 | not-started |
-| `CX-FIRST_STEPS-0020` | Shut Down the System | 5 | 0 | not-started |
+| `CX-FIRST_STEPS-0001` | First Steps | 1 | 0 | out-of-scope |
+| `CX-FIRST_STEPS-0002` | Unpack the Device | 1 | 0 | out-of-scope |
+| `CX-FIRST_STEPS-0003` | Check Scope of Delivery | 18 | 0 | out-of-scope |
+| `CX-FIRST_STEPS-0004` | Position the Device | 1 | 0 | out-of-scope |
+| `CX-FIRST_STEPS-0005` | Connect Power | 2 | 0 | out-of-scope |
+| `CX-FIRST_STEPS-0006` | Connect Desk Light | 1 | 0 | out-of-scope |
+| `CX-FIRST_STEPS-0007` | Connect External Screens | 4 | 0 | out-of-scope |
+| `CX-FIRST_STEPS-0008` | Connect USB Devices | 1 | 0 | out-of-scope |
+| `CX-FIRST_STEPS-0009` | Connect DMX | 1 | 0 | out-of-scope |
+| `CX-FIRST_STEPS-0010` | Connect Audio In | 1 | 0 | out-of-scope |
+| `CX-FIRST_STEPS-0011` | Connect MIDI | 2 | 0 | out-of-scope |
+| `CX-FIRST_STEPS-0012` | Connect Sound Out | 2 | 0 | out-of-scope |
+| `CX-FIRST_STEPS-0013` | Connect LTC | 1 | 0 | out-of-scope |
+| `CX-FIRST_STEPS-0014` | Connect Ethernet | 3 | 0 | out-of-scope |
+| `CX-FIRST_STEPS-0015` | Connect DC Remote In | 1 | 0 | out-of-scope |
+| `CX-FIRST_STEPS-0016` | Connect grandMA3 extension | 1 | 0 | out-of-scope |
+| `CX-FIRST_STEPS-0017` | Connect grandMA3 fader wing | 2 | 0 | out-of-scope |
+| `CX-FIRST_STEPS-0018` | Connect grandMA3 viz-key | 6 | 0 | out-of-scope |
+| `CX-FIRST_STEPS-0019` | Turn on the device for the first time | 6 | 0 | out-of-scope |
+| `CX-FIRST_STEPS-0020` | Shut Down the System | 5 | 0 | out-of-scope |
 
 ## grandMA3 onPC
 
@@ -202,13 +204,13 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
 | `CX-ONPC-0001` | grandMA3 onPC | 1 | 1 | in-progress |
-| `CX-ONPC-0002` | System Requirements | 1 | 1 | not-started |
-| `CX-ONPC-0003` | Windows™® Installation | 3 | 1 | not-started |
+| `CX-ONPC-0002` | System Requirements | 1 | 1 | out-of-scope |
+| `CX-ONPC-0003` | Windows™® Installation | 3 | 1 | out-of-scope |
 | `CX-ONPC-0004` | Optimize Windows™® | 5 | 1 | out-of-scope |
-| `CX-ONPC-0005` | macOS® Installation | 2 | 1 | not-started |
+| `CX-ONPC-0005` | macOS® Installation | 2 | 1 | out-of-scope |
 | `CX-ONPC-0006` | Optimize macOS® | 3 | 1 | out-of-scope |
 | `CX-ONPC-0007` | onPC Terminal App | 4 | 1 | out-of-scope |
-| `CX-ONPC-0008` | onPC Local Settings | 5 | 1 | not-started |
+| `CX-ONPC-0008` | onPC Local Settings | 5 | 1 | out-of-scope |
 
 ## Show File Handling
 
@@ -229,10 +231,10 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-WORKSPACE-0001` | Workspace | 2 | 1 | not-started |
+| `CX-WORKSPACE-0001` | Workspace | 2 | 1 | in-progress |
 | `CX-WORKSPACE-0002` | User Interface | 1 | 1 | in-progress |
 | `CX-WORKSPACE-0003` | Configuration of Displays | 5 | 1 | not-started |
-| `CX-WORKSPACE-0004` | Desk Lock | 1 | 1 | not-started |
+| `CX-WORKSPACE-0004` | Desk Lock | 1 | 1 | implemented |
 | `CX-WORKSPACE-0005` | User-Defined Area | 1 | 1 | not-started |
 | `CX-WORKSPACE-0006` | Command Line | 17 | 1 | implemented |
 | `CX-WORKSPACE-0007` | Control Bar | 2 | 1 | not-started |
@@ -242,10 +244,10 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-WORKSPACE-0011` | Temporary Filtering | 2 | 1 | not-started |
 | `CX-WORKSPACE-0012` | Trackpad Window | 4 | 1 | out-of-scope |
 | `CX-WORKSPACE-0013` | Gestures | 3 | 1 | out-of-scope |
-| `CX-WORKSPACE-0014` | Command Area | 1 | 1 | not-started |
+| `CX-WORKSPACE-0014` | Command Area | 1 | 1 | in-progress |
 | `CX-WORKSPACE-0015` | Oops Overlay | 5 | 1 | not-started |
-| `CX-WORKSPACE-0016` | Master Controls | 1 | 1 | not-started |
-| `CX-WORKSPACE-0017` | Playback Controls | 1 | 1 | not-started |
+| `CX-WORKSPACE-0016` | Master Controls | 1 | 1 | in-progress |
+| `CX-WORKSPACE-0017` | Playback Controls | 1 | 1 | in-progress |
 | `CX-WORKSPACE-0018` | Displays in grandMA3 onPC | 1 | 1 | out-of-scope |
 | `CX-WORKSPACE-0019` | Encoder Bar | 2 | 1 | not-started |
 | `CX-WORKSPACE-0020` | Encoder Toolbar | 8 | 1 | not-started |
@@ -266,12 +268,12 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-COMMAND_SYNTAX_KEYWORDS-0001` | Command Syntax and Keywords | 3 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0002` | Syntax Rules | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0001` | Command Syntax and Keywords | 3 | 2 | in-progress |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0002` | Syntax Rules | 4 | 2 | implemented |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0003` | Parent Child Concept | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0004` | General Keywords | 0 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0005` | ; (Semicolon) | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0006` | / (Slash) | 3 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0004` | General Keywords | 0 | 2 | in-progress |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0005` | ; (Semicolon) | 4 | 2 | in-progress |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0006` | / (Slash) | 3 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0007` | . (Dot) | 3 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0008` | = (Equal) | 3 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0009` | #[ ] | 3 | 2 | not-started |
@@ -289,13 +291,13 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0021` | Align | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0022` | AlignTransition | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0023` | Appearance | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0024` | Assign | 5 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0025` | At | 5 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0026` | Attribute | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0024` | Assign | 5 | 2 | in-progress |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0025` | At | 5 | 2 | in-progress |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0026` | Attribute | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0027` | AutoCreate | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0028` | AutoStore | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0029` | Bitmap | 3 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0030` | Black | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0030` | Black | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0031` | Blind | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0032` | Block | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0033` | BPM | 4 | 2 | not-started |
@@ -312,7 +314,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0044` | ChatJoin | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0045` | ChatLeave | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0046` | CleanUp | 5 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0047` | Clear | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0047` | Clear | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0048` | ClearActive | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0049` | ClearAll | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0050` | ClearSelection | 4 | 2 | not-started |
@@ -327,7 +329,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0059` | Console | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0060` | Cook | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0061` | Copy | 5 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0062` | Cue | 6 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0062` | Cue | 6 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0063` | CueAbsolute | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0064` | CopyCrashLog | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0065` | CueDelay | 4 | 2 | not-started |
@@ -348,10 +350,10 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0080` | Deactivate | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0081` | Decimal16 | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0082` | Decimal24 | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0083` | Default | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0084` | Delay | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0083` | Default | 4 | 2 | in-progress |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0084` | Delay | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0085` | DeleteGlobalVariable | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0086` | Delete | 5 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0086` | Delete | 5 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0087` | DeleteOtherVersion | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0088` | DeleteUserVariable | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0089` | Disconnect | 4 | 2 | not-started |
@@ -370,18 +372,18 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0102` | Edit | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0103` | EditSetting | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0104` | Eject | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0105` | Effect | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0105` | Effect | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0106` | EditRecipe | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0107` | EncoderBank | 3 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0108` | EncoderBar | 3 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0109` | EndIf | 1 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0110` | Environment | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0111` | Exchange | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0112` | Executor | 5 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0112` | Executor | 5 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0113` | Export | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0114` | Extension | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0115` | Extract | 5 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0116` | Fade | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0116` | Fade | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0117` | FaderCrossFade | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0118` | FaderCrossFadeA | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0119` | FaderCrossFadeB | 4 | 2 | not-started |
@@ -391,17 +393,17 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0123` | FaderTime | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0124` | FaderTemp | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0125` | FeatureGroup | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0126` | Filter | 5 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0126` | Filter | 5 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0127` | Fix | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0128` | Fixture | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0128` | Fixture | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0129` | FixtureClass | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0130` | FixtureLayer | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0131` | FixtureType | 5 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0132` | Flash | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0132` | Flash | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0133` | Flip | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0134` | Fog | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0135` | Freeze | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0136` | Full | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0136` | Full | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0137` | Gel | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0138` | Generator | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0139` | GetGlobalVariable | 4 | 2 | not-started |
@@ -413,9 +415,9 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0145` | GridPosition | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0146` | GridStore | 3 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0147` | GoboImage | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0148` | Group | 5 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0148` | Group | 5 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0149` | HalfSpeed | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0150` | Help | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0150` | Help | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0151` | HelpLua | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0152` | Hex8 | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0153` | Hex16 | 4 | 2 | not-started |
@@ -430,7 +432,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0162` | IfProgrammer | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0163` | IfOutput | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0164` | Image | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0165` | Import | 5 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0165` | Import | 5 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0166` | Index | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0167` | Insert | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0168` | Integrate | 4 | 2 | not-started |
@@ -453,11 +455,11 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0185` | List | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0186` | ListOwnership | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0187` | ListReference | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0188` | Load | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0188` | Load | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0189` | Loaded | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0190` | ListCrashLog | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0191` | LoadShow | 5 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0192` | Lock | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0192` | Lock | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0193` | LogIn | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0194` | LogOut | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0195` | Lowlight | 4 | 2 | not-started |
@@ -465,7 +467,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0197` | LuaFile | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0198` | Macro | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0199` | MArker | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0200` | Master | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0200` | Master | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0201` | MAtricks | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0202` | Measure | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0203` | Media | 4 | 2 | not-started |
@@ -490,9 +492,9 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0222` | NonDim | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0223` | Normal | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0224` | Note | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0225` | Off | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0225` | Off | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0226` | Offset | 3 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0227` | On | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0227` | On | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0228` | NetworkSpeedTest | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0229` | onPC | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0230` | OSC | 4 | 2 | not-started |
@@ -502,9 +504,9 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0234` | Part | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0235` | Park | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0236` | Paste | 5 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0237` | Patch | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0238` | Pause | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0239` | Percent | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0237` | Patch | 4 | 2 | in-progress |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0238` | Pause | 4 | 2 | in-progress |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0239` | Percent | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0240` | PercentFine | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0241` | Phase | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0242` | Physical | 4 | 2 | not-started |
@@ -530,13 +532,13 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0262` | Reconnect | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0263` | Record | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0264` | Relative | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0265` | Release | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0265` | Release | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0266` | ReloadAllPlugins | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0267` | ReloadUI | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0268` | Remote | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0269` | RemoteHID | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0270` | RemoteCommand | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0271` | Remove | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0271` | Remove | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0272` | RenderQuality | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0273` | Reset | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0274` | Restart | 5 | 2 | not-started |
@@ -556,7 +558,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0288` | Select | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0289` | Selection | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0290` | SelectFixtures | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0291` | Sequence | 5 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0291` | Sequence | 5 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0292` | SendMIDI | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0293` | SendOSC | 3 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0294` | SendMVR | 4 | 2 | not-started |
@@ -570,7 +572,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0302` | Session | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0303` | SoftwareUpdate | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0304` | SoundChannel | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0305` | Solo | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0305` | Solo | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0306` | SpecialExecutor | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0307` | Speed | 3 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0308` | Speed1 | 4 | 2 | not-started |
@@ -580,13 +582,13 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0312` | StationSettings | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0313` | Step | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0314` | Stomp | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0315` | Store | 5 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0315` | Store | 5 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0316` | SwitchTograndMA2Software | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0317` | SwitchTograndMA3Software | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0318` | Swap | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0319` | Temp | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0320` | Thru | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0321` | Time | 3 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0320` | Thru | 4 | 2 | in-progress |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0321` | Time | 3 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0322` | Timecode | 5 | 2 | implemented |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0323` | TimecodeSlot | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0324` | Timer | 5 | 2 | not-started |
@@ -595,12 +597,12 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0327` | Tag | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0328` | TopUp | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0329` | Transition | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0330` | Type | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0330` | Type | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0331` | UIChannel | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0332` | UIGridSelection | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0333` | Unblock | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0334` | Universal | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0335` | Unlock | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0335` | Unlock | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0336` | Unpark | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0337` | Unpress | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0338` | Up | 4 | 2 | not-started |
@@ -615,13 +617,13 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0347` | View | 6 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0348` | ViewButton | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0349` | Width | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0350` | World | 5 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0350` | World | 5 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0351` | Zero | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0352` | Option Keywords | 0 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0353` | /Active | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0354` | /ActiveForSelected | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0355` | /AddNewContent | 5 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0356` | /All | 5 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0356` | /All | 5 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0357` | /AllForSelected | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0358` | /Ask | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0359` | /Async | 4 | 2 | not-started |
@@ -633,7 +635,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0365` | /CreateSecondCue | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0366` | /CueOnly | 6 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0367` | /Date | 5 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0368` | /Default | 5 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0368` | /Default | 5 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0369` | /DiscardChanges | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0370` | /DMX | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0371` | /DMXProtocols | 5 | 2 | not-started |
@@ -641,7 +643,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0373` | /Enumerate | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0374` | /File | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0375` | /ForceGlobal | 5 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0376` | /GDTF | 5 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0376` | /GDTF | 5 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0377` | /Gaps | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0378` | /Global | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0379` | /GridMergeMode | 6 | 2 | not-started |
@@ -666,17 +668,17 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0398` | /NoShowData | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0399` | /NoSubfolders | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0400` | /OriginalContentOnly | 5 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0401` | /Output | 5 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0401` | /Output | 5 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0402` | /OutputStations | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0403` | /Overwrite | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0404` | /PatchOffset | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0405` | /Path | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0406` | /PhaserData | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0407` | /Programmer | 5 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0408` | /Release | 5 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0408` | /Release | 5 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0409` | /Recipe | 6 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0410` | /Remove | 5 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0411` | /Save | 5 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0410` | /Remove | 5 | 2 | in-progress |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0411` | /Save | 5 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0412` | /Screen | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0413` | /ScreenOnly | 6 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0414` | /Selection | 5 | 2 | not-started |
@@ -686,7 +688,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-COMMAND_SYNTAX_KEYWORDS-0418` | /SubTab | 2 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0419` | /Tab | 6 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0420` | /TrackingShield | 6 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0421` | /Type | 5 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0421` | /Type | 5 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0422` | /Universal | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0423` | /Wait | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0424` | /Wrap | 5 | 2 | not-started |
@@ -723,22 +725,22 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-NETWORK-0001` | Networking | 6 | 5 | not-started |
-| `CX-NETWORK-0002` | Interfaces and IP | 5 | 5 | not-started |
-| `CX-NETWORK-0003` | Session | 8 | 5 | not-started |
-| `CX-NETWORK-0004` | Create a Session | 2 | 5 | not-started |
-| `CX-NETWORK-0005` | Join a Session | 5 | 5 | not-started |
-| `CX-NETWORK-0006` | Leave a Session | 3 | 5 | not-started |
-| `CX-NETWORK-0007` | Invite a Station into a Session | 3 | 5 | not-started |
-| `CX-NETWORK-0008` | Dismiss Stations from a Session | 3 | 5 | not-started |
-| `CX-NETWORK-0009` | Create a Custom Key | 7 | 5 | not-started |
-| `CX-NETWORK-0010` | Session Master Selection | 2 | 5 | not-started |
-| `CX-NETWORK-0011` | Web Remote | 3 | 5 | not-started |
-| `CX-NETWORK-0012` | Network Design | 8 | 5 | not-started |
-| `CX-NETWORK-0013` | Protocol Details | 25 | 5 | not-started |
-| `CX-NETWORK-0014` | Wireless Networks WLAN - WiFi | 0 | 5 | not-started |
-| `CX-NETWORK-0015` | Regulations and Standards | 1 | 5 | not-started |
-| `CX-NETWORK-0016` | Station Control | 4 | 5 | not-started |
+| `CX-NETWORK-0001` | Networking | 6 | 5 | out-of-scope |
+| `CX-NETWORK-0002` | Interfaces and IP | 5 | 5 | out-of-scope |
+| `CX-NETWORK-0003` | Session | 8 | 5 | out-of-scope |
+| `CX-NETWORK-0004` | Create a Session | 2 | 5 | out-of-scope |
+| `CX-NETWORK-0005` | Join a Session | 5 | 5 | out-of-scope |
+| `CX-NETWORK-0006` | Leave a Session | 3 | 5 | out-of-scope |
+| `CX-NETWORK-0007` | Invite a Station into a Session | 3 | 5 | out-of-scope |
+| `CX-NETWORK-0008` | Dismiss Stations from a Session | 3 | 5 | out-of-scope |
+| `CX-NETWORK-0009` | Create a Custom Key | 7 | 5 | out-of-scope |
+| `CX-NETWORK-0010` | Session Master Selection | 2 | 5 | out-of-scope |
+| `CX-NETWORK-0011` | Web Remote | 3 | 5 | out-of-scope |
+| `CX-NETWORK-0012` | Network Design | 8 | 5 | out-of-scope |
+| `CX-NETWORK-0013` | Protocol Details | 25 | 5 | out-of-scope |
+| `CX-NETWORK-0014` | Wireless Networks WLAN - WiFi | 0 | 5 | out-of-scope |
+| `CX-NETWORK-0015` | Regulations and Standards | 1 | 5 | out-of-scope |
+| `CX-NETWORK-0016` | Station Control | 4 | 5 | out-of-scope |
 
 ## DMX In and Out
 
@@ -759,11 +761,11 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-USER-0001` | Single User and Multi User Systems | 2 | 5 | not-started |
-| `CX-USER-0002` | Create User | 2 | 5 | not-started |
-| `CX-USER-0003` | User Settings | 6 | 5 | not-started |
-| `CX-USER-0004` | Object Ownership | 1 | 5 | not-started |
-| `CX-USER-0005` | Screen Configuration | 6 | 5 | not-started |
+| `CX-USER-0001` | Single User and Multi User Systems | 2 | 5 | out-of-scope |
+| `CX-USER-0002` | Create User | 2 | 5 | out-of-scope |
+| `CX-USER-0003` | User Settings | 6 | 5 | out-of-scope |
+| `CX-USER-0004` | Object Ownership | 1 | 5 | out-of-scope |
+| `CX-USER-0005` | Screen Configuration | 6 | 5 | out-of-scope |
 
 ## Patch and Fixture Setup
 
@@ -780,12 +782,12 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-PATCH-0007` | DMX Sheet | 3 | 1 | in-progress |
 | `CX-PATCH-0008` | DMX Universes | 2 | 1 | in-progress |
 | `CX-PATCH-0009` | Remove Fixtures from the Show | 1 | 1 | implemented |
-| `CX-PATCH-0010` | Position Fixtures in the 3D Space | 5 | 1 | not-started |
-| `CX-PATCH-0011` | 3D Viewer | 10 | 1 | not-started |
-| `CX-PATCH-0012` | Render Quality | 1 | 1 | not-started |
-| `CX-PATCH-0013` | Camera Pool | 1 | 1 | not-started |
-| `CX-PATCH-0014` | Stages in grandMA3 | 2 | 1 | not-started |
-| `CX-PATCH-0015` | Classes and Layers | 2 | 1 | not-started |
+| `CX-PATCH-0010` | Position Fixtures in the 3D Space | 5 | 1 | out-of-scope |
+| `CX-PATCH-0011` | 3D Viewer | 10 | 1 | out-of-scope |
+| `CX-PATCH-0012` | Render Quality | 1 | 1 | out-of-scope |
+| `CX-PATCH-0013` | Camera Pool | 1 | 1 | out-of-scope |
+| `CX-PATCH-0014` | Stages in grandMA3 | 2 | 1 | out-of-scope |
+| `CX-PATCH-0015` | Classes and Layers | 2 | 1 | out-of-scope |
 | `CX-PATCH-0016` | Attribute Definitions | 3 | 1 | implemented |
 | `CX-PATCH-0017` | Activation Group | 2 | 1 | not-started |
 | `CX-PATCH-0018` | Feature Group | 2 | 1 | in-progress |
@@ -799,13 +801,13 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-OPERATE_FIXTURES-0001` | Operate Fixtures | 2 | 2 | not-started |
-| `CX-OPERATE_FIXTURES-0002` | Select Fixtures | 4 | 2 | not-started |
+| `CX-OPERATE_FIXTURES-0001` | Operate Fixtures | 2 | 2 | in-progress |
+| `CX-OPERATE_FIXTURES-0002` | Select Fixtures | 4 | 2 | implemented |
 | `CX-OPERATE_FIXTURES-0003` | Fixture Sheet | 1 | 2 | in-progress |
 | `CX-OPERATE_FIXTURES-0004` | Fixture Sheet Settings | 1 | 2 | not-started |
 | `CX-OPERATE_FIXTURES-0005` | Fixture Sheet Modes | 7 | 2 | not-started |
 | `CX-OPERATE_FIXTURES-0006` | Parent Child Fixture Behavior | 3 | 2 | not-started |
-| `CX-OPERATE_FIXTURES-0007` | What Is the Programmer | 5 | 2 | not-started |
+| `CX-OPERATE_FIXTURES-0007` | What Is the Programmer | 5 | 2 | implemented |
 | `CX-OPERATE_FIXTURES-0008` | Programmer Layers | 1 | 2 | not-started |
 | `CX-OPERATE_FIXTURES-0009` | Programmer Parts | 1 | 2 | not-started |
 | `CX-OPERATE_FIXTURES-0010` | Clone | 1 | 2 | not-started |
@@ -830,11 +832,11 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-SCRIBBLES-0001` | Scribbles | 1 | 4 | not-started |
-| `CX-SCRIBBLES-0002` | Create Scribbles | 6 | 4 | not-started |
-| `CX-SCRIBBLES-0003` | Edit Scribbles | 2 | 4 | not-started |
-| `CX-SCRIBBLES-0004` | Assign Scribbles | 1 | 4 | not-started |
-| `CX-SCRIBBLES-0005` | Delete Scribbles | 1 | 4 | not-started |
+| `CX-SCRIBBLES-0001` | Scribbles | 1 | 4 | out-of-scope |
+| `CX-SCRIBBLES-0002` | Create Scribbles | 6 | 4 | out-of-scope |
+| `CX-SCRIBBLES-0003` | Edit Scribbles | 2 | 4 | out-of-scope |
+| `CX-SCRIBBLES-0004` | Assign Scribbles | 1 | 4 | out-of-scope |
+| `CX-SCRIBBLES-0005` | Delete Scribbles | 1 | 4 | out-of-scope |
 
 ## Images
 
@@ -842,7 +844,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-IMAGES-0001` | Images | 7 | 7 | not-started |
+| `CX-IMAGES-0001` | Images | 7 | 7 | out-of-scope |
 
 ## Screenshots
 
@@ -850,7 +852,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-SCREENSHOT-0001` | Screenshots | 3 | 5 | not-started |
+| `CX-SCREENSHOT-0001` | Screenshots | 3 | 5 | out-of-scope |
 
 ## Supported File Formats
 
@@ -858,7 +860,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-FILE_FORMATS-0001` | Supported File Formats | 3 | 6 | not-started |
+| `CX-FILE_FORMATS-0001` | Supported File Formats | 3 | 6 | out-of-scope |
 
 ## Videos
 
@@ -866,7 +868,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-VIDEOS-0001` | Videos | 4 | 7 | not-started |
+| `CX-VIDEOS-0001` | Videos | 4 | 7 | out-of-scope |
 
 ## Meshes
 
@@ -874,7 +876,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-MESHES-0001` | Meshes | 2 | 7 | not-started |
+| `CX-MESHES-0001` | Meshes | 2 | 7 | out-of-scope |
 
 ## Gobos
 
@@ -882,7 +884,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-GOBOS-0001` | Gobos | 2 | 7 | not-started |
+| `CX-GOBOS-0001` | Gobos | 2 | 7 | out-of-scope |
 
 ## Symbols
 
@@ -890,9 +892,9 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-SYMBOLS-0001` | Symbols | 2 | 7 | not-started |
-| `CX-SYMBOLS-0002` | Import Symbols | 3 | 7 | not-started |
-| `CX-SYMBOLS-0003` | Delete Symbols | 3 | 7 | not-started |
+| `CX-SYMBOLS-0001` | Symbols | 2 | 7 | out-of-scope |
+| `CX-SYMBOLS-0002` | Import Symbols | 3 | 7 | out-of-scope |
+| `CX-SYMBOLS-0003` | Delete Symbols | 3 | 7 | out-of-scope |
 
 ## Appearances
 
@@ -1060,7 +1062,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-BITMAP-0001` | Bitmap | 8 | 7 | not-started |
+| `CX-BITMAP-0001` | Bitmap | 8 | 7 | out-of-scope |
 
 ## XYZ
 
@@ -1347,11 +1349,11 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-SYSTEM_INFORMATION-0001` | System | 1 | 5 | not-started |
+| `CX-SYSTEM_INFORMATION-0001` | System | 1 | 5 | in-progress |
 | `CX-SYSTEM_INFORMATION-0002` | Date and Time | 6 | 5 | not-started |
 | `CX-SYSTEM_INFORMATION-0003` | Clock | 8 | 5 | not-started |
-| `CX-SYSTEM_INFORMATION-0004` | Desk Lights | 1 | 5 | not-started |
-| `CX-SYSTEM_INFORMATION-0005` | System Information | 3 | 5 | not-started |
+| `CX-SYSTEM_INFORMATION-0004` | Desk Lights | 1 | 5 | out-of-scope |
+| `CX-SYSTEM_INFORMATION-0005` | System Information | 3 | 5 | in-progress |
 | `CX-SYSTEM_INFORMATION-0006` | System Monitor | 1 | 5 | not-started |
 | `CX-SYSTEM_INFORMATION-0007` | Info Window | 6 | 5 | not-started |
 
@@ -1373,8 +1375,8 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-REMOTE_INPUTS-0010` | Open Stage Control | 3 | 5 | not-started |
 | `CX-REMOTE_INPUTS-0011` | zactrack | 2 | 5 | not-started |
 | `CX-REMOTE_INPUTS-0012` | Protocol Viewer | 0 | 5 | not-started |
-| `CX-REMOTE_INPUTS-0013` | PSN (PosiStageNet) | 2 | 5 | not-started |
-| `CX-REMOTE_INPUTS-0014` | MVR-xchange | 6 | 5 | not-started |
+| `CX-REMOTE_INPUTS-0013` | PSN (PosiStageNet) | 2 | 5 | out-of-scope |
+| `CX-REMOTE_INPUTS-0014` | MVR-xchange | 6 | 5 | out-of-scope |
 
 ## Sound
 
@@ -1382,9 +1384,9 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-SOUND-0001` | Sound | 0 | 7 | not-started |
-| `CX-SOUND-0002` | Sound Viewer | 3 | 7 | not-started |
-| `CX-SOUND-0003` | Sounds Pool | 5 | 7 | not-started |
+| `CX-SOUND-0001` | Sound | 0 | 7 | out-of-scope |
+| `CX-SOUND-0002` | Sound Viewer | 3 | 7 | out-of-scope |
+| `CX-SOUND-0003` | Sounds Pool | 5 | 7 | out-of-scope |
 
 ## RDM (Remote Device Management)
 
@@ -1408,14 +1410,14 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-UPDATE-0001` | Update the Software | 5 | 5 | not-started |
-| `CX-UPDATE-0002` | Update grandMA3 Consoles | 3 | 5 | not-started |
-| `CX-UPDATE-0003` | Update grandMA3 Nodes | 1 | 5 | not-started |
-| `CX-UPDATE-0004` | Update grandMA3 onPC Windows Hardware | 3 | 5 | not-started |
-| `CX-UPDATE-0005` | Update grandMA3 viz-key | 3 | 5 | not-started |
-| `CX-UPDATE-0006` | Network Update | 4 | 5 | not-started |
-| `CX-UPDATE-0007` | Delete Update Files | 1 | 5 | not-started |
-| `CX-UPDATE-0008` | Troubleshooting Update Process | 3 | 5 | not-started |
+| `CX-UPDATE-0001` | Update the Software | 5 | 5 | out-of-scope |
+| `CX-UPDATE-0002` | Update grandMA3 Consoles | 3 | 5 | out-of-scope |
+| `CX-UPDATE-0003` | Update grandMA3 Nodes | 1 | 5 | out-of-scope |
+| `CX-UPDATE-0004` | Update grandMA3 onPC Windows Hardware | 3 | 5 | out-of-scope |
+| `CX-UPDATE-0005` | Update grandMA3 viz-key | 3 | 5 | out-of-scope |
+| `CX-UPDATE-0006` | Network Update | 4 | 5 | out-of-scope |
+| `CX-UPDATE-0007` | Delete Update Files | 1 | 5 | out-of-scope |
+| `CX-UPDATE-0008` | Troubleshooting Update Process | 3 | 5 | out-of-scope |
 
 ## Fixture Types
 
@@ -1433,7 +1435,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | `CX-FIXTURE_TYPES-0008` | Insert Models | 1 | 1 | not-started |
 | `CX-FIXTURE_TYPES-0009` | Link Models to Geometries | 2 | 1 | not-started |
 | `CX-FIXTURE_TYPES-0010` | Insert DMX Modes and DMX Channels | 8 | 1 | not-started |
-| `CX-FIXTURE_TYPES-0011` | Environmental Fixture Types | 1 | 1 | not-started |
+| `CX-FIXTURE_TYPES-0011` | Environmental Fixture Types | 1 | 1 | out-of-scope |
 | `CX-FIXTURE_TYPES-0012` | Export Fixture Types | 1 | 1 | not-started |
 
 ## File Management
@@ -1443,8 +1445,8 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
 | `CX-FILE_MANAGEMENT-0001` | File Management | 1 | 5 | not-started |
-| `CX-FILE_MANAGEMENT-0002` | SFTP Connection to a Console | 1 | 5 | not-started |
-| `CX-FILE_MANAGEMENT-0003` | Folder Structure | 12 | 5 | not-started |
+| `CX-FILE_MANAGEMENT-0002` | SFTP Connection to a Console | 1 | 5 | out-of-scope |
+| `CX-FILE_MANAGEMENT-0003` | Folder Structure | 12 | 5 | out-of-scope |
 
 ## Show Creator
 
@@ -1466,10 +1468,10 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-CONTROL_OTHER_MA_DEVICES-0001` | Control other MA Devices | 1 | 5 | not-started |
-| `CX-CONTROL_OTHER_MA_DEVICES-0002` | grandMA3 Nodes | 7 | 5 | not-started |
-| `CX-CONTROL_OTHER_MA_DEVICES-0003` | MA Network Switch | 0 | 5 | not-started |
-| `CX-CONTROL_OTHER_MA_DEVICES-0004` | RemoteHID | 2 | 5 | not-started |
+| `CX-CONTROL_OTHER_MA_DEVICES-0001` | Control other MA Devices | 1 | 5 | out-of-scope |
+| `CX-CONTROL_OTHER_MA_DEVICES-0002` | grandMA3 Nodes | 7 | 5 | out-of-scope |
+| `CX-CONTROL_OTHER_MA_DEVICES-0003` | MA Network Switch | 0 | 5 | out-of-scope |
+| `CX-CONTROL_OTHER_MA_DEVICES-0004` | RemoteHID | 2 | 5 | out-of-scope |
 
 ## Troubleshooting
 
@@ -1477,11 +1479,11 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-TROUBLESHOOTING-0001` | Troubleshooting | 1 | 8 | not-started |
-| `CX-TROUBLESHOOTING-0002` | Clean Start | 2 | 8 | not-started |
-| `CX-TROUBLESHOOTING-0003` | Update Does Not Work | 6 | 8 | not-started |
-| `CX-TROUBLESHOOTING-0004` | Station Does Not Connect | 1 | 8 | not-started |
-| `CX-TROUBLESHOOTING-0005` | Panic Macro | 2 | 8 | not-started |
+| `CX-TROUBLESHOOTING-0001` | Troubleshooting | 1 | 8 | out-of-scope |
+| `CX-TROUBLESHOOTING-0002` | Clean Start | 2 | 8 | out-of-scope |
+| `CX-TROUBLESHOOTING-0003` | Update Does Not Work | 6 | 8 | out-of-scope |
+| `CX-TROUBLESHOOTING-0004` | Station Does Not Connect | 1 | 8 | out-of-scope |
+| `CX-TROUBLESHOOTING-0005` | Panic Macro | 2 | 8 | out-of-scope |
 
 ## Glossary
 
@@ -1489,7 +1491,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-GLOSSARY-0001` | Glossary | 22 | 0 | not-started |
+| `CX-GLOSSARY-0001` | Glossary | 22 | 0 | out-of-scope |
 
 ## grandMA3 List of Trademarks
 
@@ -1497,7 +1499,7 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-KEY_GRANDMA3_LISTOFTRADE-0001` | grandMA3 List of Trademarks | 1 | 0 | not-started |
+| `CX-KEY_GRANDMA3_LISTOFTRADE-0001` | grandMA3 List of Trademarks | 1 | 0 | out-of-scope |
 
 ## grandMA3 Quick Start Guide
 
@@ -1505,25 +1507,25 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-QSG-0001` | grandMA3 Quick Start Guide | 2 | 0 | not-started |
-| `CX-QSG-0002` | 00 - Welcome | 3 | 0 | not-started |
-| `CX-QSG-0003` | 01 - New Show and Setup | 3 | 0 | not-started |
-| `CX-QSG-0004` | 02 - First Patch | 7 | 0 | not-started |
-| `CX-QSG-0005` | 03 - First View Setup | 7 | 0 | not-started |
-| `CX-QSG-0006` | 04 - Control Simple Fixtures | 2 | 0 | not-started |
-| `CX-QSG-0007` | 05 - 3D Fixture Setup | 2 | 0 | not-started |
-| `CX-QSG-0008` | 06 - Groups | 3 | 0 | not-started |
-| `CX-QSG-0009` | 07 - Appearances | 3 | 0 | not-started |
-| `CX-QSG-0010` | 08 - Scribbles | 2 | 0 | not-started |
-| `CX-QSG-0011` | 09 - Macros | 2 | 0 | not-started |
-| `CX-QSG-0012` | 10 - Store Cues and Use Executors | 9 | 0 | not-started |
-| `CX-QSG-0013` | 11 - Add Moving Lights | 4 | 0 | not-started |
-| `CX-QSG-0014` | 12 - Control Moving Lights | 9 | 0 | not-started |
-| `CX-QSG-0015` | 13 - Presets | 2 | 0 | not-started |
-| `CX-QSG-0016` | 14 - Phasers | 7 | 0 | not-started |
-| `CX-QSG-0017` | 15 - Sequence with Multiple Cues | 5 | 0 | not-started |
-| `CX-QSG-0018` | 16 - Network and How to Output DMX | 4 | 0 | not-started |
-| `CX-QSG-0019` | 17 - Recipes | 8 | 0 | not-started |
+| `CX-QSG-0001` | grandMA3 Quick Start Guide | 2 | 0 | out-of-scope |
+| `CX-QSG-0002` | 00 - Welcome | 3 | 0 | out-of-scope |
+| `CX-QSG-0003` | 01 - New Show and Setup | 3 | 0 | out-of-scope |
+| `CX-QSG-0004` | 02 - First Patch | 7 | 0 | out-of-scope |
+| `CX-QSG-0005` | 03 - First View Setup | 7 | 0 | out-of-scope |
+| `CX-QSG-0006` | 04 - Control Simple Fixtures | 2 | 0 | out-of-scope |
+| `CX-QSG-0007` | 05 - 3D Fixture Setup | 2 | 0 | out-of-scope |
+| `CX-QSG-0008` | 06 - Groups | 3 | 0 | out-of-scope |
+| `CX-QSG-0009` | 07 - Appearances | 3 | 0 | out-of-scope |
+| `CX-QSG-0010` | 08 - Scribbles | 2 | 0 | out-of-scope |
+| `CX-QSG-0011` | 09 - Macros | 2 | 0 | out-of-scope |
+| `CX-QSG-0012` | 10 - Store Cues and Use Executors | 9 | 0 | out-of-scope |
+| `CX-QSG-0013` | 11 - Add Moving Lights | 4 | 0 | out-of-scope |
+| `CX-QSG-0014` | 12 - Control Moving Lights | 9 | 0 | out-of-scope |
+| `CX-QSG-0015` | 13 - Presets | 2 | 0 | out-of-scope |
+| `CX-QSG-0016` | 14 - Phasers | 7 | 0 | out-of-scope |
+| `CX-QSG-0017` | 15 - Sequence with Multiple Cues | 5 | 0 | out-of-scope |
+| `CX-QSG-0018` | 16 - Network and How to Output DMX | 4 | 0 | out-of-scope |
+| `CX-QSG-0019` | 17 - Recipes | 8 | 0 | out-of-scope |
 
 ## grandMA3 Quick Manual Consoles
 
@@ -1531,18 +1533,18 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-GRANDMA3_QUICK_MANUAL_CO-0001` | grandMA3 Quick Manual Consoles | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_CO-0002` | Intended Use | 0 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_CO-0003` | Safety | 5 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_CO-0004` | Support | 9 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_CO-0005` | Transport | 1 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_CO-0006` | Limitations | 3 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_CO-0007` | Quick Start | 4 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_CO-0008` | Maintenance | 1 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_CO-0009` | Disposal | 0 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_CO-0010` | Technical Data | 17 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_CO-0011` | Hardware-related Instances | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_CO-0012` | Declaration of Conformity | 1 | 0 | not-started |
+| `CX-GRANDMA3_QUICK_MANUAL_CO-0001` | grandMA3 Quick Manual Consoles | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_CO-0002` | Intended Use | 0 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_CO-0003` | Safety | 5 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_CO-0004` | Support | 9 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_CO-0005` | Transport | 1 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_CO-0006` | Limitations | 3 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_CO-0007` | Quick Start | 4 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_CO-0008` | Maintenance | 1 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_CO-0009` | Disposal | 0 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_CO-0010` | Technical Data | 17 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_CO-0011` | Hardware-related Instances | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_CO-0012` | Declaration of Conformity | 1 | 0 | out-of-scope |
 
 ## grandMA3 Quick Manual Processing Units
 
@@ -1550,18 +1552,18 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-GRANDMA3_QUICK_MANUAL_PR-0001` | grandMA3 Quick Manual Processing Units | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_PR-0002` | Intended Use | 0 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_PR-0003` | Safety | 4 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_PR-0004` | Support | 9 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_PR-0005` | Transport | 1 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_PR-0006` | Limitations | 3 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_PR-0007` | Quick Start | 4 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_PR-0008` | Maintenance | 1 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_PR-0009` | Disposal | 0 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_PR-0010` | Technical Data | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_PR-0011` | Hardware-related Instances | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_PR-0012` | Declaration of Conformity | 1 | 0 | not-started |
+| `CX-GRANDMA3_QUICK_MANUAL_PR-0001` | grandMA3 Quick Manual Processing Units | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_PR-0002` | Intended Use | 0 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_PR-0003` | Safety | 4 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_PR-0004` | Support | 9 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_PR-0005` | Transport | 1 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_PR-0006` | Limitations | 3 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_PR-0007` | Quick Start | 4 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_PR-0008` | Maintenance | 1 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_PR-0009` | Disposal | 0 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_PR-0010` | Technical Data | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_PR-0011` | Hardware-related Instances | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_PR-0012` | Declaration of Conformity | 1 | 0 | out-of-scope |
 
 ## grandMA3 Quick Manual Nodes
 
@@ -1569,18 +1571,18 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0001` | grandMA3 Quick Manual Nodes | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0002` | Intended Use | 0 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0003` | Safety | 4 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0004` | Support | 9 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0005` | Transport | 1 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0006` | Limitations | 3 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0007` | Quick Start | 3 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0008` | Maintenance | 1 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0009` | Disposal | 0 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0010` | Technical Data | 1 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0011` | Hardware-related Instances | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0012` | Declaration of Conformity | 1 | 0 | not-started |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0001` | grandMA3 Quick Manual Nodes | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0002` | Intended Use | 0 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0003` | Safety | 4 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0004` | Support | 9 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0005` | Transport | 1 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0006` | Limitations | 3 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0007` | Quick Start | 3 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0008` | Maintenance | 1 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0009` | Disposal | 0 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0010` | Technical Data | 1 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0011` | Hardware-related Instances | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0012` | Declaration of Conformity | 1 | 0 | out-of-scope |
 
 ## grandMA3 Quick Manual Nodes DIN-Rail
 
@@ -1588,19 +1590,19 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0013` | grandMA3 Quick Manual Nodes DIN-Rail | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0014` | Intended Use | 0 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0015` | Safety | 4 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0016` | Support | 9 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0017` | Transport | 1 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0018` | Limitations | 3 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0019` | Installation | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0020` | Quick Start | 3 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0021` | Maintenance | 1 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0022` | Disposal | 0 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0023` | Technical Data | 10 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0024` | Hardware-related Instances | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_NO-0025` | Declaration of Conformity | 1 | 0 | not-started |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0013` | grandMA3 Quick Manual Nodes DIN-Rail | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0014` | Intended Use | 0 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0015` | Safety | 4 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0016` | Support | 9 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0017` | Transport | 1 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0018` | Limitations | 3 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0019` | Installation | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0020` | Quick Start | 3 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0021` | Maintenance | 1 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0022` | Disposal | 0 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0023` | Technical Data | 10 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0024` | Hardware-related Instances | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_NO-0025` | Declaration of Conformity | 1 | 0 | out-of-scope |
 
 ## grandMA3 Quick Manual onPC Command Wing XT
 
@@ -1608,18 +1610,18 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0001` | grandMA3 Quick Manual onPC Command Wing XT | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0002` | Intended Use | 0 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0003` | Safety | 4 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0004` | Support | 9 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0005` | Transport | 1 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0006` | Limitations | 3 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0007` | Quick Start | 5 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0008` | Maintenance | 1 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0009` | Disposal | 0 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0010` | Technical Data | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0011` | Hardware-related Instances | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0012` | Declaration of Conformity | 1 | 0 | not-started |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0001` | grandMA3 Quick Manual onPC Command Wing XT | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0002` | Intended Use | 0 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0003` | Safety | 4 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0004` | Support | 9 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0005` | Transport | 1 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0006` | Limitations | 3 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0007` | Quick Start | 5 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0008` | Maintenance | 1 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0009` | Disposal | 0 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0010` | Technical Data | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0011` | Hardware-related Instances | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0012` | Declaration of Conformity | 1 | 0 | out-of-scope |
 
 ## grandMA3 Quick Manual onPC Command Wing
 
@@ -1627,18 +1629,18 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0013` | grandMA3 Quick Manual onPC Command Wing | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0014` | Intended Use | 0 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0015` | Safety | 4 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0016` | Support | 9 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0017` | Transport | 1 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0018` | Limitations | 3 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0019` | Quick Start | 3 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0020` | Maintenance | 1 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0021` | Disposal | 0 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0022` | Technical Data | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0023` | Hardware-Related Instances | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0024` | Declaration of Conformity | 1 | 0 | not-started |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0013` | grandMA3 Quick Manual onPC Command Wing | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0014` | Intended Use | 0 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0015` | Safety | 4 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0016` | Support | 9 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0017` | Transport | 1 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0018` | Limitations | 3 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0019` | Quick Start | 3 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0020` | Maintenance | 1 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0021` | Disposal | 0 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0022` | Technical Data | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0023` | Hardware-Related Instances | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0024` | Declaration of Conformity | 1 | 0 | out-of-scope |
 
 ## grandMA3 Quick Manual onPC Fader Wing
 
@@ -1646,18 +1648,18 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0025` | grandMA3 Quick Manual onPC Fader Wing | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0026` | Intended Use | 0 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0027` | Safety | 4 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0028` | Support | 9 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0029` | Transport | 1 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0030` | Limitations | 3 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0031` | Quick Start | 4 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0032` | Maintenance | 1 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0033` | Disposal | 0 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0034` | Technical Data | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0035` | Hardware-related Instances | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0036` | Declaration of Conformity | 1 | 0 | not-started |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0025` | grandMA3 Quick Manual onPC Fader Wing | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0026` | Intended Use | 0 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0027` | Safety | 4 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0028` | Support | 9 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0029` | Transport | 1 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0030` | Limitations | 3 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0031` | Quick Start | 4 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0032` | Maintenance | 1 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0033` | Disposal | 0 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0034` | Technical Data | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0035` | Hardware-related Instances | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0036` | Declaration of Conformity | 1 | 0 | out-of-scope |
 
 ## grandMA3 Quick Manual Viz-Key
 
@@ -1665,18 +1667,18 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-GRANDMA3_QUICK_MANUAL_VI-0001` | grandMA3 Quick Manual Viz-Key | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_VI-0002` | Intended Use | 0 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_VI-0003` | Safety | 4 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_VI-0004` | Support | 9 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_VI-0005` | Transport | 1 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_VI-0006` | Limitations | 3 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_VI-0007` | Quick Start | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_VI-0008` | Maintenance | 1 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_VI-0009` | Disposal | 0 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_VI-0010` | Technical Data | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_VI-0011` | Hardware-related Instances | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_VI-0012` | Declaration of Conformity | 1 | 0 | not-started |
+| `CX-GRANDMA3_QUICK_MANUAL_VI-0001` | grandMA3 Quick Manual Viz-Key | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_VI-0002` | Intended Use | 0 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_VI-0003` | Safety | 4 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_VI-0004` | Support | 9 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_VI-0005` | Transport | 1 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_VI-0006` | Limitations | 3 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_VI-0007` | Quick Start | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_VI-0008` | Maintenance | 1 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_VI-0009` | Disposal | 0 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_VI-0010` | Technical Data | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_VI-0011` | Hardware-related Instances | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_VI-0012` | Declaration of Conformity | 1 | 0 | out-of-scope |
 
 ## grandMA3 Quick Manual onPC Rack-Unit
 
@@ -1684,18 +1686,18 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0037` | grandMA3 Quick Manual onPC Rack-Unit | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0038` | Intended Use | 0 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0039` | Safety | 4 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0040` | Support | 9 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0041` | Transport | 1 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0042` | Limitations | 3 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0043` | Quick Start | 5 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0044` | Maintenance | 1 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0045` | Disposal | 0 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0046` | Technical Data | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0047` | Hardware-related Instances | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_ON-0048` | Declaration of Conformity | 1 | 0 | not-started |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0037` | grandMA3 Quick Manual onPC Rack-Unit | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0038` | Intended Use | 0 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0039` | Safety | 4 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0040` | Support | 9 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0041` | Transport | 1 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0042` | Limitations | 3 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0043` | Quick Start | 5 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0044` | Maintenance | 1 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0045` | Disposal | 0 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0046` | Technical Data | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0047` | Hardware-related Instances | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_ON-0048` | Declaration of Conformity | 1 | 0 | out-of-scope |
 
 ## grandMA3 Quick Manual I/O Nodes
 
@@ -1703,19 +1705,19 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-GRANDMA3_QUICK_MANUAL_I_-0001` | grandMA3 Quick Manual I/O Nodes | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_I_-0002` | Intended Use | 0 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_I_-0003` | Safety | 4 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_I_-0004` | Support | 9 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_I_-0005` | Transport | 1 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_I_-0006` | Limitations | 3 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_I_-0007` | Installation | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_I_-0008` | Quick Start | 7 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_I_-0009` | Maintenance | 1 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_I_-0010` | Disposal | 0 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_I_-0011` | Technical Data | 5 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_I_-0012` | Hardware_related Instances | 2 | 0 | not-started |
-| `CX-GRANDMA3_QUICK_MANUAL_I_-0013` | Declaration of Conformity | 1 | 0 | not-started |
+| `CX-GRANDMA3_QUICK_MANUAL_I_-0001` | grandMA3 Quick Manual I/O Nodes | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_I_-0002` | Intended Use | 0 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_I_-0003` | Safety | 4 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_I_-0004` | Support | 9 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_I_-0005` | Transport | 1 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_I_-0006` | Limitations | 3 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_I_-0007` | Installation | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_I_-0008` | Quick Start | 7 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_I_-0009` | Maintenance | 1 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_I_-0010` | Disposal | 0 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_I_-0011` | Technical Data | 5 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_I_-0012` | Hardware_related Instances | 2 | 0 | out-of-scope |
+| `CX-GRANDMA3_QUICK_MANUAL_I_-0013` | Declaration of Conformity | 1 | 0 | out-of-scope |
 
 ## grandMA3 Release Notes
 
@@ -1723,18 +1725,18 @@ Status vocabulary: `not-started`, `in-progress`, `implemented`, `verified`, `out
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-RELEASE_NOTES-0001` | grandMA3 Release Notes | 2 | 0 | not-started |
-| `CX-RELEASE_NOTES-0002` | Release Notes 2.2 | 33 | 0 | not-started |
-| `CX-RELEASE_NOTES-0003` | Release Notes 2.1 | 28 | 0 | not-started |
-| `CX-RELEASE_NOTES-0004` | Release Notes 2.0 | 51 | 0 | not-started |
-| `CX-RELEASE_NOTES-0005` | Release Notes 1.9 | 59 | 0 | not-started |
-| `CX-RELEASE_NOTES-0006` | Release Notes 1.8 | 40 | 0 | not-started |
-| `CX-RELEASE_NOTES-0007` | Release Notes 1.7 | 39 | 0 | not-started |
-| `CX-RELEASE_NOTES-0008` | Release Notes 1.6 | 41 | 0 | not-started |
-| `CX-RELEASE_NOTES-0009` | Release Notes 1.5 | 42 | 0 | not-started |
-| `CX-RELEASE_NOTES-0010` | Release Notes 1.4 | 41 | 0 | not-started |
-| `CX-RELEASE_NOTES-0011` | Release Notes 1.3 | 16 | 0 | not-started |
-| `CX-RELEASE_NOTES-0012` | Release Notes 1.2 | 25 | 0 | not-started |
-| `CX-RELEASE_NOTES-0013` | Release Notes 1.1 | 34 | 0 | not-started |
-| `CX-RELEASE_NOTES-0014` | Release Notes 1.0 | 9 | 0 | not-started |
+| `CX-RELEASE_NOTES-0001` | grandMA3 Release Notes | 2 | 0 | out-of-scope |
+| `CX-RELEASE_NOTES-0002` | Release Notes 2.2 | 33 | 0 | out-of-scope |
+| `CX-RELEASE_NOTES-0003` | Release Notes 2.1 | 28 | 0 | out-of-scope |
+| `CX-RELEASE_NOTES-0004` | Release Notes 2.0 | 51 | 0 | out-of-scope |
+| `CX-RELEASE_NOTES-0005` | Release Notes 1.9 | 59 | 0 | out-of-scope |
+| `CX-RELEASE_NOTES-0006` | Release Notes 1.8 | 40 | 0 | out-of-scope |
+| `CX-RELEASE_NOTES-0007` | Release Notes 1.7 | 39 | 0 | out-of-scope |
+| `CX-RELEASE_NOTES-0008` | Release Notes 1.6 | 41 | 0 | out-of-scope |
+| `CX-RELEASE_NOTES-0009` | Release Notes 1.5 | 42 | 0 | out-of-scope |
+| `CX-RELEASE_NOTES-0010` | Release Notes 1.4 | 41 | 0 | out-of-scope |
+| `CX-RELEASE_NOTES-0011` | Release Notes 1.3 | 16 | 0 | out-of-scope |
+| `CX-RELEASE_NOTES-0012` | Release Notes 1.2 | 25 | 0 | out-of-scope |
+| `CX-RELEASE_NOTES-0013` | Release Notes 1.1 | 34 | 0 | out-of-scope |
+| `CX-RELEASE_NOTES-0014` | Release Notes 1.0 | 9 | 0 | out-of-scope |
 

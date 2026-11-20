@@ -566,6 +566,8 @@ def render_matrix_md(matrix: dict) -> str:
         "",
         "Status vocabulary: " + ", ".join(f"`{s}`" for s in matrix["meta"]["status_vocabulary"]) + ".",
         "",
+        "Scope reasons and chapter dispositions: [`docs/COMPLETENESS.md`](../docs/COMPLETENESS.md).",
+        "",
     ]
     by_chapter: dict[str, list[dict]] = {}
     for row in matrix["rows"]:

@@ -20,6 +20,9 @@ designs ask for:
 The designs are written to be implemented one at a time. Every one names the
 files it touches, the command grammar it adds, the show/desk format change it
 makes (if any), the tests that prove it, and what it deliberately leaves out.
+The full-manual audit — every row classified, every out-of-scope row with a
+reason — is in [`COMPLETENESS.md`](COMPLETENESS.md); the eighteen designs are
+the build plan for the desk, not the whole manual.
 
 ## The list
 

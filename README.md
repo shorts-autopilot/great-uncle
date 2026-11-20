@@ -162,6 +162,9 @@ docs/             per-phase design notes
   terminal UI shell, show format v4, limitations.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — the ranked work after Phase 4, with a
   design in [`docs/design/`](docs/design/) for every item.
+- [`docs/COMPLETENESS.md`](docs/COMPLETENESS.md) — every Phase 0 manual row
+  classified, every out-of-scope row with a reason, and the chapters that still
+  need designs.
 - [`spec/matrix.md`](spec/matrix.md) — the Phase 0 feature matrix this work is
   measured against, with per-row status.
 - [`spec/SCHEMA.md`](spec/SCHEMA.md) — how the crawled specification is stored.
