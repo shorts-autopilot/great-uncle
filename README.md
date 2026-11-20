@@ -19,7 +19,7 @@ profiles that you supply.
 | 2 | Palettes, cues, sequences, executor faders | done — see [`docs/PHASE2.md`](docs/PHASE2.md) |
 | 3 | Groups, worlds, filters, masters, effects | done — see [`docs/PHASE3.md`](docs/PHASE3.md) |
 | 4 | Timecode, move-in-black, undo, first UI shell | done — see [`docs/PHASE4.md`](docs/PHASE4.md) |
-| 5+ | desk state, output, journal, blackout/lock, cues, timing, home, cue editing, viewing | in progress — 03, 04, 05, 06, 01, 02, 07, 10 and 09 built; see [`docs/PHASE5.md`](docs/PHASE5.md) |
+| 5+ | desk state, output, journal, blackout/lock, cues, timing, home, cue editing, viewing, 16-bit | in progress — 03, 04, 05, 06, 01, 02, 07, 10, 09 and 08 built; see [`docs/PHASE5.md`](docs/PHASE5.md) |
 | 5+ | patch tools, GUI, … | designed — see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 
 It is a console with a command line, a full-screen terminal shell, a script
@@ -54,12 +54,16 @@ without changing any look. A blind desk edits the programmer without sending it:
 `Blind Off` shows the edit in one frame. `Preview Cue 14` renders a stored cue
 without sending it and prints its first non-zero channels in `Sheet`, while
 `Highlight` holds the selected fixtures at full intensity as an output aid that
-can never be stored. There is no desktop GUI yet.
+can never be stored. A profile's fine DMX slot is real precision now: a 16-bit
+attribute renders two bytes, and a channel's named sets are addressable by
+number or exact name (`Fixture 1 Gobo 2`, `Fixture 1 Gobo "Rotate CW"`), with a
+listing that shows every band and where the wheel currently lands. There is no
+desktop GUI yet.
 
 ## Quick start
 
 ```bash
-cargo test --workspace            # 311 tests, no hardware needed
+cargo test --workspace            # 327 tests, no hardware needed
 cargo run -p openlight-console    # interactive console
 cargo run -p openlight-console -- --ui   # full-screen terminal shell
 ```

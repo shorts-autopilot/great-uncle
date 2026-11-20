@@ -4,9 +4,10 @@
 //! engine needs are read: attributes, DMX modes, channel offsets and the channel
 //! functions that describe each attribute's physical range.
 //!
-//! Deliberately not read (yet): wheels, models, physical descriptions, MP
-//! ranges, channel sets and 16-bit functions beyond their low byte. Everything
-//! skipped is reported as an import warning instead of failing the import.
+//! Deliberately not read (yet): wheels, models, physical descriptions and MP
+//! ranges. Channel functions become channel sets and a fine DMX slot becomes
+//! `Channel::fine_offset`; everything skipped is reported as an import warning
+//! instead of failing the import.
 
 use std::fs::File;
 use std::io::Read;
@@ -209,13 +210,26 @@ fn parse_mode(node: Node, manufacturer: &str, fixture: &str, warnings: &mut Vec<
                 ));
             }
 
-            let functions = logical
+            let (functions, fine_delta) = logical
                 .first()
                 .map(|node| parse_functions(*node, &attribute_name, &context, warnings))
-                .unwrap_or_default();
+                .unwrap_or_else(|| (Vec::new(), None));
+            let fine_offset = match fine_delta {
+                Some(delta) => match offset.checked_add(delta) {
+                    Some(slot) => Some(slot),
+                    None => {
+                        warnings.push(format!(
+                            "{context}: fine offset after channel {offset} overflows; imported as 8-bit"
+                        ));
+                        None
+                    }
+                },
+                None => None,
+            };
 
             channels.push(Channel {
                 offset,
+                fine_offset,
                 attribute: attribute_name,
                 default_raw,
                 functions,
@@ -227,12 +241,19 @@ fn parse_mode(node: Node, manufacturer: &str, fixture: &str, warnings: &mut Vec<
     Mode { name, channels }
 }
 
+/// Parse a logical channel's functions.
+///
+/// Returns the functions and the fine channel's offset relative to the coarse
+/// channel, when the profile gives one. `DMXFrom="1/0"` means the low byte is
+/// one slot past this channel. A profile whose functions disagree about the
+/// fine offset is imported as 8-bit with a warning, because there is no safe
+/// way to guess which byte moves.
 fn parse_functions(
     logical: Node,
     attribute_name: &str,
     context: &str,
     warnings: &mut Vec<String>,
-) -> Vec<ChannelFunction> {
+) -> (Vec<ChannelFunction>, Option<u16>) {
     struct Raw {
         name: String,
         from: (u8, u8),
@@ -267,15 +288,21 @@ fn parse_functions(
     }
 
     raw_functions.sort_by_key(|function| (function.from.0, function.from.1));
+
+    let mut fine_delta = raw_functions.first().map_or(0, |raw| raw.from.0);
+    let consistent = raw_functions.iter().all(|raw| {
+        let to_byte = raw.to.map_or(raw.from.0, |(byte, _)| byte);
+        raw.from.0 == fine_delta && to_byte == fine_delta
+    });
+    if !consistent {
+        warnings.push(format!(
+            "{context}: 16-bit channel `{attribute_name}` has inconsistent fine offsets; imported as 8-bit"
+        ));
+        fine_delta = 0;
+    }
+
     let mut functions = Vec::new();
     for (index, raw) in raw_functions.iter().enumerate() {
-        let wide = raw.from.0 != 0 || raw.to.map(|(byte, _)| byte != 0).unwrap_or(false);
-        if wide {
-            warnings.push(format!(
-                "{context}: 16-bit function `{}` treated as 8-bit",
-                raw.name
-            ));
-        }
         let dmx_from = raw.from.1;
         let dmx_to = match raw.to {
             Some((_, value)) => value,
@@ -306,7 +333,10 @@ fn parse_functions(
             ..ChannelFunction::default()
         });
     }
-    functions
+    (
+        functions,
+        (fine_delta != 0).then_some(u16::from(fine_delta)),
+    )
 }
 
 fn attribute(node: Node, name: &str) -> Option<String> {
@@ -478,16 +508,42 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn sixteen_bit_functions_warn_about_loss() {
+    fn sixteen_bit_channels_pair_their_fine_slot() {
         let xml = r#"<GDTF><FixtureType Name="Wide" Manufacturer="OL">
           <DMXModes><DMXMode Name="M"><DMXChannels>
-            <DMXChannel Offset="1"><LogicalChannel Attribute="Pan">
-              <ChannelFunction DMXFrom="0/0" DMXTo="1/255"/>
+            <DMXChannel Offset="3"><LogicalChannel Attribute="Pan">
+              <ChannelFunction DMXFrom="1/0" DMXTo="1/255"/>
             </LogicalChannel></DMXChannel>
           </DMXChannels></DMXMode></DMXModes>
         </FixtureType></GDTF>"#;
         let report = parse_description(xml).unwrap();
-        assert!(report.warnings.iter().any(|w| w.contains("16-bit")));
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        let mode = &report.types[0].modes[0];
+        let channel = &mode.channels[0];
+        assert_eq!(channel.offset, 3);
+        assert_eq!(channel.fine_offset, Some(4));
+        assert_eq!(mode.footprint(), 4, "the fine slot is inside the footprint");
+    }
+
+    #[test]
+    fn a_disagreeing_fine_offset_warns_and_stays_eight_bit() {
+        let xml = r#"<GDTF><FixtureType Name="Wide" Manufacturer="OL">
+          <DMXModes><DMXMode Name="M"><DMXChannels>
+            <DMXChannel Offset="1"><LogicalChannel Attribute="Pan">
+              <ChannelFunction DMXFrom="1/0" DMXTo="0/255"/>
+            </LogicalChannel></DMXChannel>
+          </DMXChannels></DMXMode></DMXModes>
+        </FixtureType></GDTF>"#;
+        let report = parse_description(xml).unwrap();
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("inconsistent fine offsets")),
+            "{:?}",
+            report.warnings
+        );
+        assert_eq!(report.types[0].modes[0].channels[0].fine_offset, None);
     }
 
     #[test]

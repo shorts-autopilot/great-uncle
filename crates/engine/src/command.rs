@@ -7,6 +7,9 @@
 //! Fixture 1 Thru 5 At 50                  set Dimmer (0 to 100)
 //! Fixture 1 At ColorAdd_R 40              set any attribute of the mode
 //! Fixture 1 At Red Full                   pretty attribute names work too
+//! Fixture 1 Gobo 2 | Gobo "Rotate CW"     choose a channel set by index or name
+//! Fixture 1 Gobo                          list the sets and the current one
+//! Group 1 Gobo "Open"                     the same through a group
 //! At Palette Color 3                      apply a palette to the selection
 //! Full | Off                              apply to the current selection
 //! Clear | Clear Values | Clear All
@@ -127,6 +130,15 @@ pub enum PlaybackRef {
     Executor(u16),
 }
 
+/// A channel set after an attribute: `Gobo 2` or `Gobo "Rotate CW"`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SetTarget {
+    /// 1-based, in DMX order.
+    Index(usize),
+    /// Exact, case-insensitive name.
+    Name(String),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     Select(Vec<u16>),
@@ -134,6 +146,13 @@ pub enum Command {
         fixtures: Option<Vec<u16>>,
         attribute: Option<String>,
         source: LevelSource,
+    },
+    /// `Fixture 1 Gobo [2 | "Rotate CW"]`: list a channel's sets, or choose one.
+    SetChannelSet {
+        fixtures: Option<Vec<u16>>,
+        group: Option<u16>,
+        attribute: String,
+        target: Option<SetTarget>,
     },
     Off {
         fixtures: Option<Vec<u16>>,
@@ -467,6 +486,8 @@ impl Command {
             | Command::ListEffects { .. }
             | Command::ListTimecodes { .. }
             | Command::Unlock { .. } => false,
+            // Listing a channel's sets changes nothing.
+            Command::SetChannelSet { target: None, .. } => false,
             // Listing a cue's timing table changes nothing.
             Command::CueTiming {
                 attribute: None,
@@ -1060,13 +1081,73 @@ impl Parser<'_> {
         if self.eat_word("default") {
             return self.default_action(Some(fixtures), None);
         }
+        if matches!(self.peek(), Some(Token::Word(_))) {
+            return self.channel_set_action(Some(fixtures), None);
+        }
         Err(CommandError::with_hint(
             format!(
                 "unexpected {}",
                 self.peek().cloned().unwrap_or(Token::Word(String::new()))
             ),
-            "after a fixture list use `At <level>`, `Full`, `Off`, `Home` or `Default`",
+            "after a fixture list use `At <level>`, `Full`, `Off`, `Home`, `Default` or `Gobo 2`",
         ))
+    }
+
+    /// `[<attribute> [<set>]]`: list a channel's sets, or choose one by index
+    /// or quoted name. A bare number is always a 1-based index; a level needs
+    /// `At`, so the two can never be confused.
+    fn channel_set_action(
+        &mut self,
+        fixtures: Option<Vec<u16>>,
+        group: Option<u16>,
+    ) -> Result<Command, CommandError> {
+        let attribute = self.name_token("attribute")?;
+        if self.at_end() {
+            return Ok(Command::SetChannelSet {
+                fixtures,
+                group,
+                attribute,
+                target: None,
+            });
+        }
+        let target = match self.bump() {
+            Some(Token::Number(raw)) => {
+                if raw.contains('.') {
+                    return Err(CommandError::with_hint(
+                        format!("`{raw}` is not a set index"),
+                        "a level needs `At`: `Fixture 1 At Gobo 40`",
+                    ));
+                }
+                let index: usize = raw
+                    .parse()
+                    .map_err(|_| CommandError::new(format!("`{raw}` is not a set index")))?;
+                if index == 0 {
+                    return Err(CommandError::with_hint(
+                        "set index 0 is not allowed",
+                        "sets are numbered from 1; `Fixture 1 Gobo` lists them",
+                    ));
+                }
+                SetTarget::Index(index)
+            }
+            Some(Token::Quoted(name)) if !name.trim().is_empty() => SetTarget::Name(name),
+            Some(Token::Quoted(_)) => {
+                return Err(CommandError::new("a set name cannot be empty"));
+            }
+            Some(other) => {
+                return Err(CommandError::with_hint(
+                    format!("unexpected {other} after `{attribute}`"),
+                    "use a 1-based set index or a quoted set name",
+                ));
+            }
+            None => unreachable!("at_end was checked above"),
+        };
+        self.expect_end()?;
+        Ok(Command::SetChannelSet {
+            fixtures,
+            group,
+            attribute,
+            target: Some(target),
+        })
     }
 
     /// `Default [<attribute> <level> | <attribute> Off]`: a home override, or
@@ -1371,12 +1452,15 @@ impl Parser<'_> {
         if self.eat_word("default") {
             return self.default_action(None, Some(number));
         }
+        if matches!(self.peek(), Some(Token::Word(_))) {
+            return self.channel_set_action(None, Some(number));
+        }
         Err(CommandError::with_hint(
             format!(
                 "unexpected {}",
                 self.peek().cloned().unwrap_or(Token::Word(String::new()))
             ),
-            "after a group use `At <level>`, `Full`, `Off`, `Home` or `Default`",
+            "after a group use `At <level>`, `Full`, `Off`, `Home`, `Default` or `Gobo 2`",
         ))
     }
 
@@ -3260,6 +3344,7 @@ mod tests {
             "Timecode",
             "Preview",
             "Preview Off",
+            "Fixture 1 Gobo",
         ] {
             assert!(!command(line).mutates(), "{line} must not mutate");
         }
@@ -3287,6 +3372,63 @@ mod tests {
         assert!(command("Lock").mutates());
         assert!(command("Blind").mutates());
         assert!(command("Highlight").mutates());
+    }
+
+    #[test]
+    fn parses_channel_sets() {
+        assert_eq!(
+            command("Fixture 1 Gobo"),
+            Command::SetChannelSet {
+                fixtures: Some(vec![1]),
+                group: None,
+                attribute: "Gobo".into(),
+                target: None
+            }
+        );
+        assert_eq!(
+            command("Fixture 1 Gobo 2"),
+            Command::SetChannelSet {
+                fixtures: Some(vec![1]),
+                group: None,
+                attribute: "Gobo".into(),
+                target: Some(SetTarget::Index(2))
+            }
+        );
+        assert_eq!(
+            command(r#"Fixture 1 Gobo "Rotate CW""#),
+            Command::SetChannelSet {
+                fixtures: Some(vec![1]),
+                group: None,
+                attribute: "Gobo".into(),
+                target: Some(SetTarget::Name("Rotate CW".into()))
+            }
+        );
+        assert_eq!(
+            command(r#"Group 1 Gobo "Open""#),
+            Command::SetChannelSet {
+                fixtures: None,
+                group: Some(1),
+                attribute: "Gobo".into(),
+                target: Some(SetTarget::Name("Open".into()))
+            }
+        );
+        assert!(lex("Fixture 1 Gobo 0")
+            .and_then(|tokens| parse(&tokens))
+            .is_err());
+        assert!(lex("Fixture 1 Gobo 2.5")
+            .and_then(|tokens| parse(&tokens))
+            .is_err());
+        assert!(
+            lex("Fixture 1 Gobo Rotate")
+                .and_then(|tokens| parse(&tokens))
+                .is_err(),
+            "a name with a space needs quotes"
+        );
+        assert!(command("Fixture 1 Gobo 2").mutates());
+        assert!(
+            !command("Fixture 1 Gobo").mutates(),
+            "the listing is a view"
+        );
     }
 
     #[test]

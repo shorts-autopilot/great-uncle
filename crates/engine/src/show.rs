@@ -12,10 +12,12 @@
 //! curves and stagger. Version 8 adds each fixture's home look, the base that
 //! renders when neither the programmer nor playback has a value. Version 9 adds
 //! cue `blocked` and `shield`, the two ways an operator stops tracking from
-//! rippling through the rest of the list. Older files still load: new sections
-//! default to empty, the v5 upgrade hands the values it finds in an old file to
-//! the desk through a [`LoadReport`], and the v8 upgrade reports any fixture
-//! whose profile default is not zero.
+//! rippling through the rest of the list. Version 10 adds a fine DMX offset to
+//! each channel, turning a profile's second byte into real 16-bit precision.
+//! Older files still load: new sections
+//! default to empty, a missing fine offset means 8-bit, the v5 upgrade hands the
+//! values it finds in an old file to the desk through a [`LoadReport`], and the
+//! v8 upgrade reports any fixture whose profile default is not zero.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -33,9 +35,9 @@ use crate::pools::{Filter, Group, World, MAX_GROUP_FIXTURES, MAX_POOL_OBJECTS};
 use crate::timecode::{self, TimecodeShow, MAX_FPS, MAX_TIMECODES, MAX_TIMECODE_EVENTS, MIN_FPS};
 
 pub const SHOW_FORMAT: &str = "openlight-show";
-pub const SHOW_VERSION: u32 = 9;
+pub const SHOW_VERSION: u32 = 10;
 /// Older documents that still load, oldest first.
-pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9];
+pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 /// Fastest rate master accepted, as a factor (400%).
 pub const MAX_RATE_MASTER: f64 = 4.0;
 pub const MAX_UNIVERSE_SIZE: u16 = 512;
@@ -320,7 +322,10 @@ impl Show {
                         mode.name
                     ));
                 }
-                let mut offsets = BTreeSet::new();
+                // Every slot a mode writes — coarse or fine — is owned by
+                // exactly one channel. A collision is a broken profile, so it
+                // is rejected at load rather than silently overwriting a byte.
+                let mut slots: BTreeMap<u16, &str> = BTreeMap::new();
                 for channel in &mode.channels {
                     if channel.offset == 0 || channel.offset > MAX_UNIVERSE_SIZE {
                         problems.push(format!(
@@ -328,11 +333,28 @@ impl Show {
                             mode.name, channel.offset
                         ));
                     }
-                    if !offsets.insert(channel.offset) {
-                        problems.push(format!(
-                            "fixture type `{key}`, mode `{}`: offset {} used by two channels",
-                            mode.name, channel.offset
-                        ));
+                    if let Some(fine) = channel.fine_offset {
+                        if fine == 0 || fine > MAX_UNIVERSE_SIZE {
+                            problems.push(format!(
+                                "fixture type `{key}`, mode `{}`: fine offset {fine} out of range",
+                                mode.name
+                            ));
+                        }
+                        if fine == channel.offset {
+                            problems.push(format!(
+                                "fixture type `{key}`, mode `{}`: `{}` uses slot {} as both coarse and fine",
+                                mode.name, channel.attribute, fine
+                            ));
+                        }
+                    }
+                    let fine = channel.fine_offset.filter(|fine| *fine != channel.offset);
+                    for slot in std::iter::once(channel.offset).chain(fine) {
+                        if let Some(other) = slots.insert(slot, &channel.attribute) {
+                            problems.push(format!(
+                                "fixture type `{key}`, mode `{}`: slot {slot} used by `{other}` and `{}`",
+                                mode.name, channel.attribute
+                            ));
+                        }
                     }
                     if channel.attribute.trim().is_empty() {
                         problems.push(format!(
@@ -1239,7 +1261,7 @@ mod tests {
             .read_to_string(&mut text)
             .unwrap();
         assert!(text.contains("\"format\": \"openlight-show\""));
-        assert!(text.contains("\"version\": 9"));
+        assert!(text.contains("\"version\": 10"));
         assert!(text.contains("OpenLight Demo Wash"), "types are embedded");
         let _ = fs::remove_file(&path);
     }
@@ -1249,13 +1271,13 @@ mod tests {
         let path = temp_path("future");
         fs::write(
             &path,
-            r#"{"format":"openlight-show","version":10,"name":"x","fixture_types":[],"universes":[],"fixtures":[]}"#,
+            r#"{"format":"openlight-show","version":11,"name":"x","fixture_types":[],"universes":[],"fixtures":[]}"#,
         )
         .unwrap();
         let error = Show::load(&path).unwrap_err();
         assert!(matches!(
             error,
-            ShowError::UnsupportedVersion { found: 10, .. }
+            ShowError::UnsupportedVersion { found: 11, .. }
         ));
         let _ = fs::remove_file(&path);
     }
@@ -1593,6 +1615,55 @@ mod tests {
                 .any(|warning| warning.contains("Home seeded from profiles")
                     && warning.contains("fixture 1: Dimmer 100%")),
             "{report:#?}"
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_slot_shared_by_two_channels_is_rejected_with_both_names() {
+        let mut show = demo_show();
+        show.fixture_types[0].modes[0].channels[0].fine_offset = Some(2);
+        let problems = show.validate();
+        assert!(
+            problems.iter().any(|problem| problem.contains("slot 2")
+                && problem.contains("Dimmer")
+                && problem.contains("ColorAdd_R")),
+            "{problems:#?}"
+        );
+
+        show.fixture_types[0].modes[0].channels[0].fine_offset = Some(1);
+        let problems = show.validate();
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("both coarse and fine")),
+            "{problems:#?}"
+        );
+    }
+
+    #[test]
+    fn version_nine_shows_gain_eight_bit_channels() {
+        let show = demo_show();
+        let mut value = serde_json::to_value(&show).unwrap();
+        value["version"] = serde_json::json!(9);
+        for fixture_type in value["fixture_types"].as_array_mut().unwrap() {
+            for mode in fixture_type["modes"].as_array_mut().unwrap() {
+                for channel in mode["channels"].as_array_mut().unwrap() {
+                    channel.as_object_mut().unwrap().remove("fine_offset");
+                }
+            }
+        }
+        let path = temp_path("v9-fine");
+        fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+
+        let (loaded, _) = Show::load_with_report(&path).unwrap();
+        assert_eq!(loaded.version, SHOW_VERSION);
+        assert!(
+            loaded.fixture_types[0].modes[0]
+                .channels
+                .iter()
+                .all(|channel| channel.fine_offset.is_none()),
+            "a v9 profile has no fine byte"
         );
         let _ = fs::remove_file(&path);
     }

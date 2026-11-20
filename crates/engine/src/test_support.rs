@@ -13,6 +13,7 @@ pub fn demo_fixture_type() -> FixtureType {
     };
     let channel = |offset: u16, name: &str| Channel {
         offset,
+        fine_offset: None,
         attribute: name.to_string(),
         default_raw: 0,
         functions: vec![ChannelFunction {
@@ -44,6 +45,71 @@ pub fn demo_fixture_type() -> FixtureType {
             ],
         }],
     }
+}
+
+/// A synthetic moving light: `Pan` with a fine byte and a `Gobo` wheel with
+/// three named sets. Not derived from any vendor fixture profile.
+pub fn demo_moving_type() -> FixtureType {
+    let function = |name: &str, dmx_from: u8, dmx_to: u8, from: f64, to: f64| ChannelFunction {
+        name: name.to_string(),
+        dmx_from,
+        dmx_to,
+        physical_from: from,
+        physical_to: to,
+    };
+    let attribute = |name: &str, feature: &str| AttributeDef {
+        name: name.to_string(),
+        pretty: name.to_string(),
+        feature: feature.into(),
+        unit: "Percent".into(),
+    };
+
+    FixtureType {
+        manufacturer: "OpenLight".into(),
+        name: "Demo Moving".into(),
+        description: "Synthetic moving light with a fine pan byte and a gobo wheel.".into(),
+        attributes: vec![attribute("Pan", "Position"), attribute("Gobo", "Gobo")],
+        modes: vec![Mode {
+            name: "3ch".into(),
+            channels: vec![
+                Channel {
+                    offset: 1,
+                    fine_offset: Some(2),
+                    attribute: "Pan".into(),
+                    default_raw: 0,
+                    functions: Vec::new(),
+                },
+                Channel {
+                    offset: 3,
+                    fine_offset: None,
+                    attribute: "Gobo".into(),
+                    default_raw: 0,
+                    functions: vec![
+                        function("Gobo 1", 0, 15, 0.0, 10.0),
+                        function("Gobo 2", 16, 47, 10.0, 20.0),
+                        function("Rotate CW", 48, 95, 20.0, 30.0),
+                    ],
+                },
+            ],
+        }],
+    }
+}
+
+pub fn demo_moving_show() -> Show {
+    let mut show = Show::new();
+    let fixture_type = demo_moving_type();
+    let type_key = fixture_type.key();
+    show.fixture_types.push(fixture_type);
+    show.fixtures.push(Fixture {
+        number: 1,
+        name: "Demo Moving".into(),
+        type_key,
+        mode: "3ch".into(),
+        universe: 1,
+        address: 1,
+        home: Default::default(),
+    });
+    show
 }
 
 pub fn demo_show() -> Show {

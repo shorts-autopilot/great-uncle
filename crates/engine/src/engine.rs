@@ -12,11 +12,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::command::{
-    self, Command, CommandError, Level, LevelSource, PlaybackRef, StoreMode, TriggerArg,
+    self, Command, CommandError, Level, LevelSource, PlaybackRef, SetTarget, StoreMode, TriggerArg,
 };
 use crate::desk::{Desk, Masters, Preview, RunState};
 use crate::effect::{Effect, Effects, Waveform, MAX_RATE_HZ, MAX_SPREAD_DEGREES};
-use crate::fixture_type::{FixtureType, DIMMER};
+use crate::fixture_type::{Channel, FixtureType, SetSelector, DIMMER};
 use crate::gdtf;
 use crate::history::{History, Snapshot};
 use crate::journal::ReplayFrom;
@@ -442,6 +442,12 @@ impl Engine {
                 attribute,
                 source,
             } => self.set_level(fixtures, attribute, source),
+            Command::SetChannelSet {
+                fixtures,
+                group,
+                attribute,
+                target,
+            } => self.set_channel_set(fixtures, group, attribute, target),
             Command::Off { fixtures } => {
                 self.set_level(fixtures, None, LevelSource::Level(Level::Percent(0.0)))
             }
@@ -741,6 +747,155 @@ impl Engine {
         // or `Off` applies to the same set.
         self.desk.selection = targets;
         Ok(CommandOutcome::message(message))
+    }
+
+    /// `Fixture 1 Gobo [2 | "Rotate CW"]` and the group form: list a
+    /// channel's sets, or store the midpoint of one as an ordinary level so it
+    /// fades and stores like every other value.
+    fn set_channel_set(
+        &mut self,
+        fixtures: Option<Vec<u16>>,
+        group: Option<u16>,
+        attribute: String,
+        target: Option<SetTarget>,
+    ) -> Result<CommandOutcome, CommandError> {
+        let targets = match group {
+            Some(number) => self.group_targets(number)?,
+            None => self.targets(fixtures)?,
+        };
+        let canonical = self.resolve_attribute(&targets, &attribute)?;
+
+        // Copy the channels out before the programmer borrow starts; the mode
+        // list is small and this keeps the two phases independent.
+        let mut addressed: Vec<(u16, Channel)> = Vec::new();
+        let mut missing = Vec::new();
+        for number in &targets {
+            let Some(fixture) = self.show.fixture(*number) else {
+                continue;
+            };
+            let (_, mode) = self.show.mode_for(fixture).map_err(CommandError::new)?;
+            match mode.channel_for(&canonical) {
+                Some(channel) => addressed.push((*number, channel.clone())),
+                None => missing.push(*number),
+            }
+        }
+
+        let mut lines = Vec::new();
+        match target {
+            None => {
+                let mut seen = BTreeSet::new();
+                for (number, channel) in &addressed {
+                    let Some(fixture) = self.show.fixture(*number) else {
+                        continue;
+                    };
+                    if !seen.insert((
+                        fixture.type_key.clone(),
+                        fixture.mode.clone(),
+                        canonical.clone(),
+                    )) {
+                        continue;
+                    }
+                    lines.push(format!(
+                        "Fixture {number} {canonical} (16-bit: {})",
+                        if channel.fine_offset.is_some() {
+                            "yes"
+                        } else {
+                            "no"
+                        }
+                    ));
+                    let (min, max) = channel.physical_range().unwrap_or((0.0, 0.0));
+                    let percent = |value: f64| {
+                        if max > min {
+                            ((value - min) / (max - min)).clamp(0.0, 1.0) * 100.0
+                        } else {
+                            0.0
+                        }
+                    };
+                    for (index, function) in channel.sets() {
+                        lines.push(format!(
+                            "  {index:<2} {:<12} {:>3}..{}%   (DMX {}..{})",
+                            truncate(&function.name, 12),
+                            percent(function.physical_from.min(function.physical_to)).round()
+                                as i64,
+                            percent(function.physical_from.max(function.physical_to)).round()
+                                as i64,
+                            function.dmx_from.min(function.dmx_to),
+                            function.dmx_from.max(function.dmx_to)
+                        ));
+                    }
+                    let level = self
+                        .desk
+                        .programmer
+                        .get(*number, &canonical)
+                        .or_else(|| self.playback.output().get(*number, &canonical))
+                        .unwrap_or_else(|| self.show.home_level(fixture, &canonical));
+                    let raw = channel.raw16_from_level(level);
+                    let coarse = (raw >> 8) as u8;
+                    let current = channel.sets().find(|(_, function)| {
+                        coarse >= function.dmx_from.min(function.dmx_to)
+                            && coarse <= function.dmx_from.max(function.dmx_to)
+                    });
+                    let dmx = if channel.fine_offset.is_some() {
+                        format!("DMX {raw} ({} / {})", raw >> 8, raw as u8)
+                    } else {
+                        format!("DMX {coarse}")
+                    };
+                    lines.push(match current {
+                        Some((_, function)) => {
+                            format!("  current: {} ({dmx})", function.name)
+                        }
+                        None => format!("  current: no set ({dmx})"),
+                    });
+                }
+                for number in &missing {
+                    lines.push(format!(
+                        "Warning: fixture {number} has no `{canonical}` in its mode"
+                    ));
+                }
+            }
+            Some(selector) => {
+                let selector = match &selector {
+                    SetTarget::Index(index) => SetSelector::Index(*index),
+                    SetTarget::Name(name) => SetSelector::Name(name),
+                };
+                let mut assignments = Vec::new();
+                let mut chosen = None;
+                for (number, channel) in &addressed {
+                    let Some((index, function)) = channel.set_for(selector) else {
+                        return Err(channel_set_error(*number, &canonical, channel, selector));
+                    };
+                    let Some(level) = channel.level_for_set(selector) else {
+                        continue;
+                    };
+                    if chosen.is_none() {
+                        chosen = Some((index, function.name.clone(), level));
+                    }
+                    assignments.push((*number, level));
+                }
+                let Some((index, name, level)) = chosen else {
+                    return Err(CommandError::with_hint(
+                        format!("no fixture has `{canonical}`"),
+                        "`Sheet` lists the patched attributes",
+                    ));
+                };
+                let label = format_fixture_list(&targets);
+                let percent = (level * 100.0).round() as i64;
+                let message = self.edit_programmer(|programmer| {
+                    for (number, level) in &assignments {
+                        programmer.set(*number, &canonical, *level);
+                    }
+                    format!("{label} {canonical} set {index} \"{name}\" at {percent}%")
+                });
+                self.desk.selection = targets;
+                lines.push(message);
+                for number in &missing {
+                    lines.push(format!(
+                        "Warning: fixture {number} has no `{canonical}` in its mode"
+                    ));
+                }
+            }
+        }
+        Ok(CommandOutcome::with_lines(lines))
     }
 
     /// Canonical Dimmer attribute, refusing fixtures that have none.
@@ -4962,6 +5117,8 @@ pub const HELP: &[&str] = &[
     "Fixture 1 Thru 5                       select fixtures",
     "Fixture 1 Thru 5 At 50                 set Dimmer (0 to 100)",
     "Fixture 1 At ColorAdd_R 40             set any attribute of the mode",
+    "Fixture 1 Gobo 2 / Gobo \"Rotate CW\"     choose a channel set",
+    "Fixture 1 Gobo / Group 1 Gobo          list the sets and the current one",
     "At Palette Color 3                     apply a stored palette",
     "At 50 / Full / Off                     apply to the current selection",
     "Clear | Clear Values | Clear All        selection / programmer values",
@@ -5119,6 +5276,38 @@ fn attribute_list(mode: &crate::fixture_type::Mode) -> String {
     attributes.join(", ")
 }
 
+/// Explain why a set selector did not match a channel, naming the set count or
+/// the names that do exist.
+fn channel_set_error(
+    number: u16,
+    attribute: &str,
+    channel: &Channel,
+    selector: SetSelector<'_>,
+) -> CommandError {
+    match selector {
+        SetSelector::Index(index) => {
+            let count = channel.functions.len();
+            CommandError::with_hint(
+                format!(
+                    "fixture {number} `{attribute}` has {count} set{}; {index} is out of range",
+                    if count == 1 { "" } else { "s" }
+                ),
+                format!("`Fixture {number} {attribute}` lists them"),
+            )
+        }
+        SetSelector::Name(name) => {
+            let names: Vec<&str> = channel
+                .sets()
+                .map(|(_, function)| function.name.as_str())
+                .collect();
+            CommandError::with_hint(
+                format!("fixture {number} `{attribute}` has no set `{name}`"),
+                format!("sets: {}", names.join(", ")),
+            )
+        }
+    }
+}
+
 fn truncate(text: &str, width: usize) -> String {
     if text.chars().count() <= width {
         return text.to_string();
@@ -5131,7 +5320,7 @@ fn truncate(text: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{demo_fixture_type, demo_show};
+    use crate::test_support::{demo_fixture_type, demo_moving_show, demo_show};
     use std::time::Duration;
 
     fn engine() -> Engine {
@@ -7257,6 +7446,89 @@ mod tests {
         assert_eq!(snapshot.rev, Some(7));
         assert_eq!(snapshot.replay_from(), ReplayFrom::Snapshot(7));
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_channel_set_stores_its_physical_midpoint() {
+        let mut engine = Engine::new(demo_moving_show());
+        engine.execute("Fixture 1 Gobo 2").unwrap();
+        let channel = engine.show.fixture_types[0].modes[0]
+            .channel_for("Gobo")
+            .unwrap();
+        assert_eq!(
+            engine.desk.programmer.get(1, "Gobo"),
+            channel.level_for_set(SetSelector::Index(2))
+        );
+        assert_eq!(
+            engine.render().slot(1, 3),
+            Some(32),
+            "midpoint of DMX 16..47"
+        );
+    }
+
+    #[test]
+    fn a_channel_set_name_is_case_insensitive_and_errors_name_the_choices() {
+        let mut engine = Engine::new(demo_moving_show());
+        engine.execute(r#"Fixture 1 Gobo "rotate cw""#).unwrap();
+        assert_eq!(
+            engine.render().slot(1, 3),
+            Some(72),
+            "midpoint of DMX 48..95"
+        );
+
+        let error = engine.execute("Fixture 1 Gobo 99").unwrap_err();
+        assert!(error.message.contains("3 sets"), "{error}");
+        assert!(error.message.contains("99"), "{error}");
+
+        let error = engine.execute(r#"Fixture 1 Gobo "Gobo""#).unwrap_err();
+        assert!(error.message.contains("no set `Gobo`"), "{error}");
+        assert!(error.hint.unwrap().contains("Gobo 1"));
+    }
+
+    #[test]
+    fn listing_a_channel_shows_its_sets_and_marks_the_current_one() {
+        let mut engine = Engine::new(demo_moving_show());
+        engine.execute("Fixture 1 Gobo 2").unwrap();
+        let text = engine.execute("Fixture 1 Gobo").unwrap().lines.join("\n");
+        assert!(text.contains("Fixture 1 Gobo (16-bit: no)"), "{text}");
+        assert!(text.contains("Gobo 1"), "{text}");
+        assert!(text.contains("Rotate CW"), "{text}");
+        assert!(text.contains("current: Gobo 2 (DMX 32)"), "{text}");
+    }
+
+    #[test]
+    fn a_group_set_applies_to_members_with_the_attribute() {
+        let mut show = demo_moving_show();
+        show.fixture_types.push(demo_fixture_type());
+        show.fixtures.push(Fixture {
+            number: 2,
+            name: "Demo Wash".into(),
+            type_key: "OpenLight Demo Wash".into(),
+            mode: "4ch".into(),
+            universe: 1,
+            address: 4,
+            home: Default::default(),
+        });
+        show.groups.push(Group {
+            number: 1,
+            name: "All".into(),
+            fixtures: vec![1, 2],
+        });
+        let mut engine = Engine::new(show);
+        let outcome = engine.execute(r#"Group 1 Gobo "Gobo 2""#).unwrap();
+        let text = outcome.lines.join("\n");
+        assert!(engine.desk.programmer.get(1, "Gobo").is_some());
+        assert!(text.contains("Warning: fixture 2 has no `Gobo`"), "{text}");
+        assert_eq!(engine.render().slot(1, 3), Some(32));
+    }
+
+    #[test]
+    fn a_sixteen_bit_attribute_writes_two_bytes() {
+        let mut engine = Engine::new(demo_moving_show());
+        engine.execute("Fixture 1 At Pan 50").unwrap();
+        let frame = engine.render();
+        assert_eq!(frame.slot(1, 1), Some(127), "coarse");
+        assert_eq!(frame.slot(1, 2), Some(255), "fine");
     }
 
     #[test]

@@ -258,11 +258,25 @@ pub fn render_with_highlight(
         };
         let base = usize::from(fixture.address.saturating_sub(1));
         for channel in &mode.channels {
+            if let Some(fine) = channel.fine_offset {
+                debug_assert!(
+                    fine != channel.offset
+                        && !mode.channels.iter().any(|other| other.offset == fine),
+                    "fine slot {fine} of `{}` collides with another channel",
+                    channel.attribute
+                );
+            }
             let level = stage.output_level(fixture, &channel.attribute);
-            let raw = channel.raw_from_level(level);
+            let raw = channel.raw16_from_level(level);
             let offset = base + usize::from(channel.offset.saturating_sub(1));
             if offset < DMX_SLOTS {
-                slots[offset] = raw;
+                slots[offset] = (raw >> 8) as u8;
+            }
+            if let Some(fine) = channel.fine_offset {
+                let fine = base + usize::from(fine.saturating_sub(1));
+                if fine < DMX_SLOTS {
+                    slots[fine] = raw as u8;
+                }
             }
         }
     }
@@ -274,9 +288,10 @@ pub fn render_with_highlight(
 mod tests {
     use super::*;
     use crate::effect::EffectOutput;
+    use crate::fixture_type::Channel;
     use crate::pools::Group;
     use crate::show::Fixture;
-    use crate::test_support::demo_show;
+    use crate::test_support::{demo_fixture_type, demo_show};
 
     fn masters() -> Masters {
         Masters::new()
@@ -637,6 +652,71 @@ mod tests {
             0.5,
         );
         assert_eq!(frame.slot(1, 1), Some(128));
+    }
+
+    fn wide_show() -> Show {
+        let mut show = Show::new();
+        let mut fixture_type = demo_fixture_type();
+        fixture_type.name = "Wide".into();
+        fixture_type.modes[0].channels = vec![Channel {
+            offset: 1,
+            fine_offset: Some(2),
+            attribute: "Pan".into(),
+            default_raw: 0,
+            functions: Vec::new(),
+        }];
+        let type_key = fixture_type.key();
+        show.fixture_types.push(fixture_type);
+        show.fixtures.push(Fixture {
+            number: 1,
+            name: "Wide".into(),
+            type_key,
+            mode: "4ch".into(),
+            universe: 1,
+            address: 1,
+            home: Default::default(),
+        });
+        show
+    }
+
+    #[test]
+    fn a_sixteen_bit_channel_writes_both_bytes() {
+        let show = wide_show();
+        let programmer = programmer(&show, &[(1, "Pan", 0.5)]);
+        let frame = program(&show, &programmer, &masters());
+        assert_eq!(frame.slot(1, 1), Some(127), "coarse");
+        assert_eq!(frame.slot(1, 2), Some(255), "fine");
+    }
+
+    #[test]
+    fn a_fine_slot_does_not_bleed_into_the_next_fixture() {
+        let mut show = wide_show();
+        let type_key = show.fixture_types[0].key();
+        show.fixtures.push(Fixture {
+            number: 2,
+            name: "Wide".into(),
+            type_key,
+            mode: "4ch".into(),
+            universe: 1,
+            address: 3,
+            home: Default::default(),
+        });
+        let programmer = programmer(&show, &[(1, "Pan", 1.0)]);
+        let frame = program(&show, &programmer, &masters());
+        assert_eq!(frame.slot(1, 1), Some(255));
+        assert_eq!(frame.slot(1, 2), Some(255));
+        assert_eq!(frame.slot(1, 3), Some(0), "the next fixture is untouched");
+        assert_eq!(frame.slot(1, 4), Some(0));
+    }
+
+    #[test]
+    fn a_fine_slot_past_the_universe_is_skipped() {
+        let mut show = wide_show();
+        show.fixtures[0].address = 512;
+        let programmer = programmer(&show, &[(1, "Pan", 1.0)]);
+        let frame = program(&show, &programmer, &masters());
+        assert_eq!(frame.slot(1, 512), Some(255), "the coarse byte still lands");
+        assert_eq!(frame.len(), 1, "the fine byte is skipped without a panic");
     }
 
     fn two_fixture_show() -> Show {

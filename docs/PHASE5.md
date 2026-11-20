@@ -145,6 +145,30 @@ master still dims it. It is never a programmer write, so a store cannot capture
 it, and colour and position are untouched. A blackout clears it, blind
 suppresses it, and `Clear` (selection gone) and `Release` clear it too.
 
+## 16-bit attributes and channel sets (08)
+
+A profile's fine DMX slot is no longer dropped on import: `Channel.fine_offset`
+records the low byte, the mode's footprint covers it, and the renderer writes
+both bytes from one interpolated 16-bit value. A 50% pan is `0x7F 0xFF`; an
+8-bit profile keeps its existing byte rounding and expands the byte by 257, so
+its output does not move. `raw_from_level` is the high byte of
+`raw16_from_level`, and `level_from_raw16` is the inverse.
+
+```
+Fixture 1 At Pan 50                 one level, two DMX bytes
+Fixture 1 Gobo 2                   the second set, by 1-based index
+Fixture 1 Gobo "Rotate CW"         by exact, case-insensitive name
+Fixture 1 Gobo                     list bands and the current set
+Group 1 Gobo "Open"                every member that has the attribute
+```
+
+A channel set is the profile's existing `ChannelFunction`, so no new show data
+was needed for it. Choosing one stores the midpoint of its physical band as an
+ordinary level, which fades and stores like any other value; the listing prints
+both the physical band and the DMX bytes, including the fine byte on a 16-bit
+channel. A mode that uses one slot twice — coarse or fine — is rejected at load
+with both attributes named. Show v10.
+
 ## Known limitations
 
 - **No DMX hardware in the test environment.** Timing is exercised against a
@@ -156,5 +180,5 @@ suppresses it, and `Clear` (selection gone) and `Release` clear it too.
 - **Home is per fixture and attribute.** There is no per-mode home table, no
   park/default distinction and no automatic re-seed when a profile is
   re-imported.
-- **Only nine of the eighteen roadmap designs are built.** The remaining
-  nine are listed in [`ROADMAP.md`](ROADMAP.md).
+- **Only ten of the eighteen roadmap designs are built.** The remaining
+  eight are listed in [`ROADMAP.md`](ROADMAP.md).
