@@ -105,6 +105,20 @@ impl Default for UniverseStatus {
     }
 }
 
+/// Counters and addresses for the optional OSC/HTTP remote.
+#[derive(Debug, Clone, Default)]
+pub struct RemoteStatus {
+    pub osc_port: u16,
+    pub http_port: u16,
+    pub bind: String,
+    pub osc_accepted: u64,
+    pub osc_unmatched: u64,
+    pub http_clients: u64,
+    pub http_rejected: u64,
+    pub http_rate_limited: u64,
+    pub dropped: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct OutputStatus {
     pub running: bool,
@@ -115,6 +129,7 @@ pub struct OutputStatus {
     pub last_frame: Option<SystemTime>,
     pub universes: BTreeMap<u16, UniverseStatus>,
     pub warnings: Vec<String>,
+    pub remote: Option<RemoteStatus>,
 }
 
 impl Default for OutputStatus {
@@ -127,6 +142,7 @@ impl Default for OutputStatus {
             last_frame: None,
             universes: BTreeMap::new(),
             warnings: Vec::new(),
+            remote: None,
         }
     }
 }

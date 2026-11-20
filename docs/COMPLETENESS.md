@@ -11,8 +11,8 @@ This ledger records scope and implementation evidence; it does not claim that a 
 | Status | Rows | Meaning |
 |---|---|---|
 | implemented | 50 | Works and is covered by tests. |
-| in-progress | 81 | Part of the feature exists; the rest is deferred. |
-| not-started | 705 | Not built, or not designed yet. |
+| in-progress | 83 | Part of the feature exists; the rest is deferred. |
+| not-started | 703 | Not built, or not designed yet. |
 | out-of-scope | 387 | Not a feature of this product; reason recorded below. |
 | verified | 0 | Implemented and proven on hardware. |
 
@@ -71,7 +71,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 4 | Quickeys | ui/pools | 4 | 4 not-started | Needs a design (GUI/CLI shortcuts). |
 | 2 | Data Pools | pools | 1 | 1 not-started | Needs a small design. |
 | 5 | System | system | 7 | 4 not-started, 2 in-progress, 1 out-of-scope | Status covers part; date/time, clock and monitor windows need designs. |
-| 5 | Remote In and Out | io | 14 | 12 not-started, 2 out-of-scope | Item 12 covers OSC/web; MIDI, DMX and DC remotes need designs. |
+| 5 | Remote In and Out | io | 14 | 10 not-started, 2 in-progress, 2 out-of-scope | Item 12 covers inbound OSC and a token-protected web remote; MIDI, DMX and DC remotes need designs. |
 | 7 | Sound | io/media | 3 | 3 out-of-scope | Sound playback is outside a serial-DMX desk. |
 | 5 | RDM (Remote Device Management) | io/rdm | 1 | 1 not-started | Needs a design; requires a read path in the DMX transport. |
 | 5 | Local Settings | system | 1 | 1 not-started | Needs a small settings design. |
@@ -180,7 +180,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 4 | Quickeys | 4 | 0 | Needs a design (GUI/CLI shortcuts). |
 | 2 | Data Pools | 1 | 0 | Needs a small design. |
 | 5 | System | 4 | 2 | Status covers part; date/time, clock and monitor windows need designs. |
-| 5 | Remote In and Out | 12 | 0 | Item 12 covers OSC/web; MIDI, DMX and DC remotes need designs. |
+| 5 | Remote In and Out | 10 | 2 | Item 12 covers inbound OSC and a token-protected web remote; MIDI, DMX and DC remotes need designs. |
 | 5 | RDM (Remote Device Management) | 1 | 0 | Needs a design; requires a read path in the DMX transport. |
 | 5 | Local Settings | 1 | 0 | Needs a small settings design. |
 | 1 | Fixture Types | 7 | 1 | Item 13 adds the fixture builder/export; environmental types are out of scope. |
@@ -204,7 +204,7 @@ These are the gaps that a chapter-by-chapter audit would otherwise hide. Ranked 
 11. **Plugins/Lua** — 164 rows, the largest undecided chapter. Decide between an embedded Lua host and a native plugin API before claiming completeness.
 12. **Show Creator** — Import/export and preset/group creation from fixture types; no design yet.
 13. **File management and backup** — Backup/template shows, a file browser and show organisation need a design.
-14. **Remote inputs** — MIDI, DMX and DC remotes; item 12 only covers OSC/web and item 15 only covers MTC.
+14. **Remote inputs** — Inbound OSC and the browser remote landed with item 12; MIDI, DMX and DC remotes still need designs. Item 15 covers MTC.
 15. **Small metadata features** — Appearances, notes, tags, data pools and XYZ are small designs that still need to exist for a full manual replica.
 
 ## How rows were classified

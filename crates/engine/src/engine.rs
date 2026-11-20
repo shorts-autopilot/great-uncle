@@ -1911,6 +1911,37 @@ impl Engine {
         CommandOutcome::with_lines(lines)
     }
 
+    /// Compact state for the web remote. Built here, beside `Status`, so the
+    /// remote cannot grow a second interpretation of the desk.
+    pub fn remote_state_json(&self) -> String {
+        let executors: Vec<serde_json::Value> = self
+            .show
+            .executors
+            .iter()
+            .map(|executor| {
+                let state = match self.playback.run(Target::Executor(executor.number)) {
+                    None => "idle".to_string(),
+                    Some(run) if run.is_paused() => {
+                        format!("paused cue {}", format_cue_number(run.cue_number))
+                    }
+                    Some(run) if run.done => {
+                        format!("complete cue {}", format_cue_number(run.cue_number))
+                    }
+                    Some(run) => format!("cue {}", format_cue_number(run.cue_number)),
+                };
+                serde_json::json!({"number": executor.number, "state": state})
+            })
+            .collect();
+        serde_json::json!({
+            "executors": executors,
+            "blackout": self.desk.is_blacked_out(self.clock),
+            "blind": self.desk.blind,
+            "lock": self.desk.lock.is_some(),
+            "grand": self.desk.masters.grand,
+        })
+        .to_string()
+    }
+
     fn status_report(&self) -> CommandOutcome {
         let status = lock(&self.status);
         let mut lines = vec![
@@ -2072,6 +2103,20 @@ impl Engine {
             }
         } else {
             lines.push("Effects: idle".to_string());
+        }
+        if let Some(remote) = &status.remote {
+            lines.push(format!(
+                "Remote: osc {} accepted, {} unmatched, {} dropped | http {} clients, {} rejected, {} rate-limited | bind {} (osc {} / http {})",
+                remote.osc_accepted,
+                remote.osc_unmatched,
+                remote.dropped,
+                remote.http_clients,
+                remote.http_rejected,
+                remote.http_rate_limited,
+                remote.bind,
+                remote.osc_port,
+                remote.http_port
+            ));
         }
         lines.push(format!(
             "Undo: {} | Redo: {}",
@@ -6071,9 +6116,8 @@ impl Engine {
             },
             TimecodeSource::Osc => {
                 self.timecode.start_external(number, from, self.clock);
-                self.timecode.set_notice(
-                    "waiting for positions through the OSC feed; the UDP listener is part of the web remote",
-                );
+                self.timecode
+                    .set_notice("waiting for positions from the OSC remote");
                 message.push_str(", waiting for OSC positions");
             }
         }
@@ -6304,8 +6348,43 @@ impl Engine {
             .follow_external(timecode, position.frames, now)
     }
 
-    /// Feed a position from a transport that is not MTC (the OSC listener
-    /// planned for item 12 uses this). Returns the number of events fired.
+    /// Feed a position from the OSC transport. Only an `Osc` source accepts
+    /// it, so a stray OSC packet cannot move an MTC show.
+    pub fn feed_osc_timecode_seconds(&mut self, seconds: f64) -> usize {
+        if !seconds.is_finite() || seconds < 0.0 {
+            return 0;
+        }
+        let Some(number) = self.timecode.active() else {
+            return 0;
+        };
+        let Some(timecode) = self.show.timecode(number) else {
+            return 0;
+        };
+        if timecode.source != TimecodeSource::Osc {
+            return 0;
+        }
+        let frames = timecode.frames_at(seconds);
+        self.feed_timecode_position(frames)
+    }
+
+    /// Feed an `HH:MM:SS:FF` OSC position. It is parsed at the active show's
+    /// frame rate, just like a typed timecode position.
+    pub fn feed_osc_timecode_text(&mut self, text: &str) -> usize {
+        let Some(number) = self.timecode.active() else {
+            return 0;
+        };
+        let Some(timecode) = self.show.timecode(number) else {
+            return 0;
+        };
+        if timecode.source != TimecodeSource::Osc {
+            return 0;
+        }
+        let Ok(frames) = timecode::parse(text, timecode.frame_rate()) else {
+            return 0;
+        };
+        self.feed_timecode_position(frames)
+    }
+
     pub fn feed_timecode_position(&mut self, frames: u64) -> usize {
         if !self.timecode.is_running() || !self.timecode.is_external() {
             return 0;

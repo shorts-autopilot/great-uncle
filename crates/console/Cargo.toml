@@ -12,5 +12,6 @@ path = "src/main.rs"
 
 [dependencies]
 engine = { package = "openlight-engine", path = "../engine" }
+remote = { package = "openlight-remote", path = "../remote" }
 dmx = { package = "openlight-dmx", path = "../dmx" }
 libc = "0.2"

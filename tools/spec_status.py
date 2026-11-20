@@ -264,7 +264,19 @@ EXTRA = {
     "CX-COMMAND_SYNTAX_KEYWORDS-0006": "in-progress",
 }
 
-STATUS = {**PHASE1, **PHASE2, **PHASE3, **PHASE4, **EXTRA}
+# Phase 5 item 12 — inbound OSC and the browser remote. The manual's remote
+# chapter also covers DC/MIDI/DMX remotes and vendor integrations.
+PHASE12 = {
+    **expand(
+        "REMOTE_INPUTS",
+        [
+            ("in-progress", "1 5"),
+            ("not-started", "2 3 4 6 7 8 9 10 11 12"),
+        ],
+    ),
+}
+
+STATUS = {**PHASE1, **PHASE2, **PHASE3, **PHASE4, **PHASE12, **EXTRA}
 
 # Keywords the parser in crates/engine/src/command.rs recognises. A keyword here
 # is not a claim that the manual's full behaviour is implemented; it moves the
@@ -443,7 +455,7 @@ CHAPTER_NOTES = {
     "quickeys": "Needs a design (GUI/CLI shortcuts).",
     "datapool": "Needs a small design.",
     "system_information": "Status covers part; date/time, clock and monitor windows need designs.",
-    "remote_inputs": "Item 12 covers OSC/web; MIDI, DMX and DC remotes need designs.",
+    "remote_inputs": "Item 12 covers inbound OSC and a token-protected web remote; MIDI, DMX and DC remotes need designs.",
     "rdm": "Needs a design; requires a read path in the DMX transport.",
     "local_settings": "Needs a small settings design.",
     "fixture_types": "Item 13 adds the fixture builder/export; environmental types are out of scope.",
@@ -469,7 +481,7 @@ CROSS_CUTTING = [
     ("Plugins/Lua", "164 rows, the largest undecided chapter. Decide between an embedded Lua host and a native plugin API before claiming completeness."),
     ("Show Creator", "Import/export and preset/group creation from fixture types; no design yet."),
     ("File management and backup", "Backup/template shows, a file browser and show organisation need a design."),
-    ("Remote inputs", "MIDI, DMX and DC remotes; item 12 only covers OSC/web and item 15 only covers MTC."),
+    ("Remote inputs", "Inbound OSC and the browser remote landed with item 12; MIDI, DMX and DC remotes still need designs. Item 15 covers MTC."),
     ("Small metadata features", "Appearances, notes, tags, data pools and XYZ are small designs that still need to exist for a full manual replica."),
 ]
 

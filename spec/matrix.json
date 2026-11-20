@@ -74789,7 +74789,7 @@
    "module": "io",
    "phase": 5,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "remote_inputs",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/remote_inputs.html",
@@ -75193,7 +75193,7 @@
    "module": "io",
    "phase": 5,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "remote_inputs_osc",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/remote_inputs_osc.html",

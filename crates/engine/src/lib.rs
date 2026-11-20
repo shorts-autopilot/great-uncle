@@ -58,7 +58,7 @@ pub use effect::{Effect, Waveform};
 pub use engine::{CommandOutcome, Engine};
 pub use fixture_type::{Channel, ChannelFunction, FixtureType, Mode, DIMMER};
 pub use levels::Levels;
-pub use output::{OutputStatus, Runtime, RuntimeConfig, TransportBinding};
+pub use output::{OutputStatus, RemoteStatus, Runtime, RuntimeConfig, TransportBinding};
 pub use palette::Palette;
 pub use playback::{Cue, Executor, Playback, Sequence, Target};
 pub use pools::{Filter, Group, World};

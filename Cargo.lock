@@ -376,6 +376,7 @@ dependencies = [
  "libc",
  "openlight-dmx",
  "openlight-engine",
+ "openlight-remote",
 ]
 
 [[package]]
@@ -397,6 +398,14 @@ dependencies = [
  "serde_json",
  "thiserror",
  "zip",
+]
+
+[[package]]
+name = "openlight-remote"
+version = "0.1.0"
+dependencies = [
+ "openlight-engine",
+ "serde_json",
 ]
 
 [[package]]

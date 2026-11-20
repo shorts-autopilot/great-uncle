@@ -249,6 +249,37 @@ more than 500 ms marks the player `stalled`, and more than five seconds stops
 it. A missing MTC port or a frame-rate mismatch is reported as `source
 unavailable` and never silently falls back to the internal clock. Show v12.
 
+## OSC and the browser remote (12)
+
+The console can now be driven from the network. It listens for OSC 1.0 on
+`--osc-port` (default 9000) and serves a token-protected page on
+`--remote-port` (default 8080), both on loopback unless `--remote-bind` says
+otherwise. `--no-remote` turns both off; `--remote-token-file` moves the token
+file from `~/.openlight/remote.token`. Binding either port is a startup error,
+not a warning.
+
+```
+/openlight/executor/1/go           -> Go Executor 1
+/openlight/executor/1/fader 0.75   -> Executor 1 At 75
+/openlight/blackout 1              -> Blackout
+/openlight/fixture/5/at 0.5        -> Fixture 5 At 50
+/openlight/timecode 1.5            -> feed the active Osc timecode source
+```
+
+OSC is inbound only and is implemented from scratch: padded strings, bundles,
+`i`/`f`/`s`/`b`, bounded packets, ignored future timetags. Unknown addresses are
+counted and ignored. The page shows executor buttons, the grand master and
+blackout, a command box and the engine's replies. `GET /state` is the same state
+`Status` reads, `POST /command` runs an ordinary command line, and `GET /events`
+pushes state over Server-Sent Events. Every request except the static page needs
+the bearer token; a foreign `Origin`, oversized body, missing content type and
+an over-limit burst are refused. The remote holds no lighting state: all writes
+go through one bounded dispatch queue into `Engine::execute`, so a packet flood
+cannot starve the engine tick.
+
+`Status` reports the bound addresses and OSC/HTTP counters. The remote adds no
+show or desk fields, so there is no format version change.
+
 ## Known limitations
 
 - **No DMX hardware in the test environment.** Timing is exercised against a
@@ -260,9 +291,12 @@ unavailable` and never silently falls back to the internal clock. Show v12.
 - **Home is per fixture and attribute.** There is no per-mode home table, no
   park/default distinction and no automatic re-seed when a profile is
   re-imported.
-- **Only thirteen of the eighteen roadmap designs are built.** The remaining
-  five are listed in [`ROADMAP.md`](ROADMAP.md).
+- **Only fourteen of the eighteen roadmap designs are built.** The remaining
+  four are listed in [`ROADMAP.md`](ROADMAP.md).
 - **MTC was tested with synthetic bytes, not hardware.** Quarter-frame and
   full-frame decoding, drop-frame maths and the reader thread are covered by
-  unit tests; a real MIDI interface and the OSC UDP transport (item 12) are
-  still unverified.
+  unit tests; a real MIDI interface remains unverified.
+- **The remote is plain HTTP and loopback by default.** There is no TLS; a
+  token on a trusted show network is the security model, and `--remote-bind
+  0.0.0.0` is an explicit opt-in. OSC has no authentication at all, so expose
+  its port only on a trusted network.

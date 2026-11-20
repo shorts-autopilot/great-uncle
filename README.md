@@ -19,7 +19,7 @@ profiles that you supply.
 | 2 | Palettes, cues, sequences, executor faders | done — see [`docs/PHASE2.md`](docs/PHASE2.md) |
 | 3 | Groups, worlds, filters, masters, effects | done — see [`docs/PHASE3.md`](docs/PHASE3.md) |
 | 4 | Timecode, move-in-black, undo, first UI shell | done — see [`docs/PHASE4.md`](docs/PHASE4.md) |
-| 5+ | desk state, output, journal, blackout/lock, cues, timing, home, cue editing, viewing, 16-bit, patch tools, effects, external timecode | in progress — 03, 04, 05, 06, 01, 02, 07, 10, 09, 08, 11, 14 and 15 built; see [`docs/PHASE5.md`](docs/PHASE5.md) |
+| 5+ | desk state, output, journal, blackout/lock, cues, timing, home, cue editing, viewing, 16-bit, patch tools, effects, external timecode, remote | in progress — 03, 04, 05, 06, 01, 02, 07, 10, 09, 08, 11, 12, 14 and 15 built; see [`docs/PHASE5.md`](docs/PHASE5.md) |
 | 5+ | the remaining roadmap designs | designed — see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 
 It is a console with a command line, a full-screen terminal shell, a script
@@ -29,7 +29,7 @@ with worlds and filters, scale it with grand, rate and group masters, animate it
 with effects — several attributes per effect, each with its own size and phase,
 and musical rates that follow `Tempo` — run cues from a timecode show with
 several tracks and markers, follow MIDI Time Code from a serial port or positions
-from OSC, move
+from OSC, press Go from an OSC controller or the browser remote, move
 fixtures in black and undo any show edit. `Tempo 128` or a few `Tap`s set the
 desk tempo; `Rate 1/4` retimes a running effect in beats, while `Rate 2hz` stays
 a free rate. The programmer, the faders and the playback positions live in a
@@ -73,7 +73,7 @@ check for CI. There is no desktop GUI yet.
 ## Quick start
 
 ```bash
-cargo test --workspace            # 382 tests, no hardware needed
+cargo test --workspace            # 410 tests, no hardware needed
 cargo run -p openlight-console    # interactive console
 cargo run -p openlight-console -- --ui   # full-screen terminal shell
 ```
@@ -139,6 +139,26 @@ Universe 1: 120 frames, last frame 513 bytes, start code 0x00, 4 non-zero slots
 ```
 
 Both fixtures are at full with red at full: cue 2 of the timecode show has run.
+
+## OSC and browser remote
+
+The console listens for OSC on UDP 9000 and serves the browser remote on TCP
+8080, both on loopback by default. The first start creates
+`~/.openlight/remote.token`; open `http://127.0.0.1:8080`, paste that token once,
+and the page shows executors, masters, blackout and a command box. OSC uses the
+same command line:
+
+```
+/openlight/executor/1/go
+/openlight/executor/1/fader 0.75
+/openlight/blackout 1
+/openlight/timecode 12.5
+```
+
+Use `--osc-port`, `--remote-port`, `--remote-bind` and `--remote-token-file` to
+move them, or `--no-remote` for a scripted or headless run. Plain HTTP is for a
+trusted show network; the default bind is loopback and the token is never
+printed in logs.
 
 The trace line ends with the first slots of the frame that went out:
 

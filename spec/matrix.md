@@ -1363,11 +1363,11 @@ Scope reasons and chapter dispositions: [`docs/COMPLETENESS.md`](../docs/COMPLET
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-REMOTE_INPUTS-0001` | Remote In and Out | 5 | 5 | not-started |
+| `CX-REMOTE_INPUTS-0001` | Remote In and Out | 5 | 5 | in-progress |
 | `CX-REMOTE_INPUTS-0002` | DC Remotes | 1 | 5 | not-started |
 | `CX-REMOTE_INPUTS-0003` | MIDI Remotes | 7 | 5 | not-started |
 | `CX-REMOTE_INPUTS-0004` | DMX Remotes | 2 | 5 | not-started |
-| `CX-REMOTE_INPUTS-0005` | OSC (Open Sound Control) | 13 | 5 | not-started |
+| `CX-REMOTE_INPUTS-0005` | OSC (Open Sound Control) | 13 | 5 | in-progress |
 | `CX-REMOTE_INPUTS-0006` | Advanced Examples | 2 | 5 | not-started |
 | `CX-REMOTE_INPUTS-0007` | Use Cases | 1 | 5 | not-started |
 | `CX-REMOTE_INPUTS-0008` | TouchOSC | 2 | 5 | not-started |

@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::io::{self, BufRead, IsTerminal, Write};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -40,6 +41,11 @@ Options:
   --autosave <secs>    snapshot show and desk every <secs> (0 disables)
   --journal <file|off> journal each edit to <file> (default: <show>.journal)
   --no-recover         do not replay the journal at start
+  --osc-port <port>    listen for OSC on this UDP port (default 9000)
+  --remote-port <port> serve the browser remote on this TCP port (default 8080)
+  --remote-bind <ip>   address for OSC and HTTP (default 127.0.0.1)
+  --remote-token-file <file>  bearer token file (default ~/.openlight/remote.token)
+  --no-remote          do not start OSC or the browser remote
   --ui                 open the full-screen terminal shell
   --check              print `Patch Check` and exit; exit 1 on overlap, overflow,
                        a missing type/mode or an invalid address
@@ -104,6 +110,11 @@ struct Options {
     trace: bool,
     ui: bool,
     check: bool,
+    remote: bool,
+    osc_port: u16,
+    remote_port: u16,
+    remote_bind: IpAddr,
+    remote_token_file: Option<PathBuf>,
 }
 
 impl Options {
@@ -122,6 +133,11 @@ impl Options {
             trace: false,
             ui: false,
             check: false,
+            remote: true,
+            osc_port: 9000,
+            remote_port: 8080,
+            remote_bind: IpAddr::from([127, 0, 0, 1]),
+            remote_token_file: None,
         };
 
         let mut index = 0;
@@ -176,6 +192,25 @@ impl Options {
                     };
                 }
                 "--no-recover" => options.recover = false,
+                "--osc-port" => {
+                    options.osc_port =
+                        parse_port(&take_value(&arguments, &mut index, inline, flag)?)?
+                }
+                "--remote-port" => {
+                    options.remote_port =
+                        parse_port(&take_value(&arguments, &mut index, inline, flag)?)?
+                }
+                "--remote-bind" => {
+                    let value = take_value(&arguments, &mut index, inline, flag)?;
+                    options.remote_bind = value
+                        .parse()
+                        .map_err(|_| format!("`{value}` is not an IP address"))?;
+                }
+                "--remote-token-file" => path_option(
+                    &mut options.remote_token_file,
+                    take_value(&arguments, &mut index, inline, flag)?,
+                ),
+                "--no-remote" => options.remote = false,
                 "--engine-hz" => {
                     options.engine_hz = take_value(&arguments, &mut index, inline, flag)?
                         .parse()
@@ -215,6 +250,12 @@ fn take_value(
         .get(*index)
         .cloned()
         .ok_or_else(|| format!("{flag} needs a value"))
+}
+
+fn parse_port(value: &str) -> Result<u16, String> {
+    value
+        .parse()
+        .map_err(|_| format!("`{value}` is not a valid port"))
 }
 
 fn parse_output(spec: &str) -> Result<(u16, String), String> {
@@ -383,6 +424,34 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
         },
     );
 
+    let remote = if options.remote {
+        let config = remote::RemoteConfig {
+            osc_port: options.osc_port,
+            http_port: options.remote_port,
+            bind: options.remote_bind,
+            token_path: options
+                .remote_token_file
+                .clone()
+                .unwrap_or_else(remote::token::default_path),
+        };
+        let handle = remote::Remote::start(runtime.engine(), config)?;
+        println!(
+            "OSC listening on {}; remote at http://{} (token in {})",
+            handle.osc_addr(),
+            handle.http_addr(),
+            handle.token_path().display()
+        );
+        if options.remote_bind.is_unspecified() {
+            println!(
+                "Warning: the remote is bound to {}; anyone who can reach this port and has the token can drive the desk",
+                options.remote_bind
+            );
+        }
+        Some(handle)
+    } else {
+        None
+    };
+
     if let Some(script) = &options.script {
         execute_script(&runtime, script)?;
     }
@@ -410,6 +479,9 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
         }
     }
 
+    if let Some(remote) = remote {
+        remote.stop();
+    }
     runtime.stop();
     Ok(())
 }
@@ -566,4 +638,42 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_flags_parse_and_no_remote_disables_them() {
+        let options = Options::parse(vec!["--no-remote".into()]).unwrap().unwrap();
+        assert!(!options.remote);
+
+        let options = Options::parse(vec![
+            "--osc-port".into(),
+            "9001".into(),
+            "--remote-port".into(),
+            "8081".into(),
+            "--remote-bind".into(),
+            "0.0.0.0".into(),
+            "--remote-token-file".into(),
+            "/tmp/openlight.token".into(),
+        ])
+        .unwrap()
+        .unwrap();
+        assert!(options.remote);
+        assert_eq!(options.osc_port, 9001);
+        assert_eq!(options.remote_port, 8081);
+        assert!(options.remote_bind.is_unspecified());
+        assert_eq!(
+            options.remote_token_file.as_deref(),
+            Some(Path::new("/tmp/openlight.token"))
+        );
+    }
+
+    #[test]
+    fn bad_remote_ports_and_binds_are_startup_errors() {
+        assert!(Options::parse(vec!["--remote-port".into(), "nope".into()]).is_err());
+        assert!(Options::parse(vec!["--remote-bind".into(), "not-an-ip".into()]).is_err());
+    }
 }
