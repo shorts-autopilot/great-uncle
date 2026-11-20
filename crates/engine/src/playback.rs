@@ -74,6 +74,89 @@ pub fn format_trigger(trigger: Trigger, time: f64) -> String {
     }
 }
 
+/// The shape of one fade lane.
+///
+/// Quadratic rather than cubic because it is cheap, monotone and visibly
+/// different at desk scale. `Snap` is an instant change at the lane's start;
+/// its fade time is kept for the record but not evaluated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Curve {
+    #[default]
+    Linear,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
+    Snap,
+}
+
+impl Curve {
+    pub fn label(self) -> &'static str {
+        match self {
+            Curve::Linear => "Linear",
+            Curve::EaseIn => "EaseIn",
+            Curve::EaseOut => "EaseOut",
+            Curve::EaseInOut => "EaseInOut",
+            Curve::Snap => "Snap",
+        }
+    }
+
+    /// Map progress through a fade (0..=1) to the fraction of the distance
+    /// covered. Total on its whole range, so no input can produce a NaN.
+    pub fn apply(self, t: f64) -> f64 {
+        let t = if t.is_finite() {
+            t.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        match self {
+            Curve::Linear => t,
+            Curve::EaseIn => t * t,
+            Curve::EaseOut => 1.0 - (1.0 - t) * (1.0 - t),
+            Curve::EaseInOut => {
+                if t < 0.5 {
+                    2.0 * t * t
+                } else {
+                    1.0 - 2.0 * (1.0 - t) * (1.0 - t)
+                }
+            }
+            Curve::Snap => {
+                if t > 0.0 {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+        }
+    }
+}
+
+/// One attribute's override of a cue's fade, delay and curve.
+///
+/// `Option` rather than a sentinel means "follow the cue" is representable, so
+/// a later cue-fade edit moves every attribute that did not override it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct AttributeTiming {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fade: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delay: Option<f64>,
+    #[serde(default)]
+    pub curve: Curve,
+}
+
+/// The timing a cue stores for one attribute, matched without regard to case:
+/// the programmer and a fixture mode may spell the same attribute differently.
+pub fn timing_for<'a>(cue: &'a Cue, attribute: &str) -> Option<&'a AttributeTiming> {
+    cue.timing.get(attribute).or_else(|| {
+        cue.timing
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(attribute))
+            .map(|(_, timing)| timing)
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Cue {
@@ -99,6 +182,15 @@ pub struct Cue {
     /// switching a trigger back and forth does not lose the number.
     #[serde(default)]
     pub trigger_time: f64,
+    /// Per-attribute timing overrides, keyed by attribute name. An entry carries
+    /// only what it overrides; a missing field follows the cue's own fade or
+    /// delay.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub timing: BTreeMap<String, AttributeTiming>,
+    /// Seconds each consecutive fixture waits before it starts, in the order
+    /// the cue's target state lists the fixtures.
+    #[serde(default)]
+    pub stagger: f64,
     /// Tracked values: only what changes relative to the previous cue.
     #[serde(default)]
     pub levels: Levels,
@@ -209,6 +301,47 @@ impl Target {
     }
 }
 
+/// One attribute's move between two values.
+///
+/// A whole cue becomes a list of these; a cue with no per-attribute timing and
+/// no stagger keeps the single blend instead, so shows written before this
+/// existed render through the same arithmetic they always did.
+#[derive(Debug, Clone)]
+struct Lane {
+    fixture: u16,
+    attribute: String,
+    from: f64,
+    to: f64,
+    /// Cue delay plus the attribute's own delay plus its stagger offset.
+    start: Duration,
+    fade: Duration,
+    curve: Curve,
+}
+
+impl Lane {
+    fn value_at(&self, elapsed: Duration) -> f64 {
+        if elapsed <= self.start {
+            return self.from;
+        }
+        if self.fade.is_zero() || self.curve == Curve::Snap {
+            return self.to;
+        }
+        let faded = (elapsed - self.start).as_secs_f64() / self.fade.as_secs_f64();
+        let t = faded.clamp(0.0, 1.0);
+        (self.from + (self.to - self.from) * self.curve.apply(t)).clamp(0.0, 1.0)
+    }
+
+    fn progress_at(&self, elapsed: Duration) -> f64 {
+        if elapsed <= self.start {
+            return 0.0;
+        }
+        if self.fade.is_zero() || self.curve == Curve::Snap {
+            return 1.0;
+        }
+        ((elapsed - self.start).as_secs_f64() / self.fade.as_secs_f64()).clamp(0.0, 1.0)
+    }
+}
+
 /// One running cue transition.
 #[derive(Debug, Clone)]
 pub struct Run {
@@ -217,6 +350,10 @@ pub struct Run {
     pub cue_number: f64,
     from: Levels,
     to: Levels,
+    /// The per-attribute fade plan. Empty when every lane would move with the
+    /// cue's own fade and delay at `Linear`, in which case the single blend is
+    /// evaluated instead.
+    lanes: Vec<Lane>,
     start: Instant,
     delay: Duration,
     fade: Duration,
@@ -224,6 +361,9 @@ pub struct Run {
     paused_progress: f64,
     paused_delay: Duration,
     paused_fade: Duration,
+    /// Lanes rebased to start at `resume`, frozen at the same instant as
+    /// `paused` so a pause continues rather than restarts.
+    paused_lanes: Option<Vec<Lane>>,
     pub done: bool,
     /// When the run began: `Time` triggers count from here.
     pub started: Instant,
@@ -233,20 +373,28 @@ pub struct Run {
 }
 
 impl Run {
-    /// 0 before the delay ends, 1 once the fade has finished.
+    /// 0 before the delay ends, 1 once every lane has finished.
     pub fn progress(&self, now: Instant) -> f64 {
         if self.paused.is_some() {
             return self.paused_progress;
         }
         let elapsed = now.saturating_duration_since(self.start);
-        if elapsed < self.delay {
-            return 0.0;
+        if self.lanes.is_empty() {
+            if elapsed < self.delay {
+                return 0.0;
+            }
+            let faded = elapsed - self.delay;
+            if self.fade.is_zero() {
+                return 1.0;
+            }
+            return (faded.as_secs_f64() / self.fade.as_secs_f64()).clamp(0.0, 1.0);
         }
-        let faded = elapsed - self.delay;
-        if self.fade.is_zero() {
-            return 1.0;
-        }
-        (faded.as_secs_f64() / self.fade.as_secs_f64()).clamp(0.0, 1.0)
+        // The slowest lane decides when the cue is settled, so a quick colour
+        // fade cannot make a `Follow` fire while a long move is still running.
+        self.lanes
+            .iter()
+            .map(|lane| lane.progress_at(elapsed))
+            .fold(1.0, f64::min)
     }
 
     pub fn is_paused(&self) -> bool {
@@ -258,11 +406,21 @@ impl Run {
         if let Some(levels) = &self.paused {
             return levels.clone();
         }
-        self.levels_at_progress(self.progress(now))
+        if self.lanes.is_empty() {
+            return self.levels_at_progress(self.progress(now));
+        }
+        let elapsed = now.saturating_duration_since(self.start);
+        let mut levels = self.to.clone();
+        for lane in &self.lanes {
+            levels.set(lane.fixture, &lane.attribute, lane.value_at(elapsed));
+        }
+        levels
     }
 
     /// The look at a fraction of the fade, shared by time and by a hand on a
-    /// fader so both produce the same blend.
+    /// fader so both produce the same blend. With a lane plan the fraction is
+    /// each attribute's own progress; the cue's delays and stagger do not
+    /// stretch the hand.
     fn levels_at_progress(&self, progress: f64) -> Levels {
         if progress <= 0.0 {
             return self.from.clone();
@@ -271,6 +429,80 @@ impl Run {
             return self.to.clone();
         }
         Levels::blend(&self.from, &self.to, progress)
+    }
+
+    fn levels_at_fraction(&self, fraction: f64) -> Levels {
+        if self.lanes.is_empty() {
+            return self.levels_at_progress(fraction);
+        }
+        let fraction = if fraction.is_finite() {
+            fraction.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let mut levels = self.to.clone();
+        for lane in &self.lanes {
+            let value = if fraction <= 0.0 {
+                lane.from
+            } else if fraction >= 1.0 {
+                lane.to
+            } else {
+                lane.from + (lane.to - lane.from) * lane.curve.apply(fraction)
+            };
+            levels.set(lane.fixture, &lane.attribute, value.clamp(0.0, 1.0));
+        }
+        levels
+    }
+
+    /// Lanes that continue a held run from the frozen look: each keeps its
+    /// remaining delay and the fade time left at `elapsed`.
+    fn held_lanes(&self, elapsed: Duration) -> Vec<Lane> {
+        self.lanes
+            .iter()
+            .map(|lane| {
+                let value = lane.value_at(elapsed);
+                let progress = lane.progress_at(elapsed);
+                let start = lane.start.saturating_sub(elapsed);
+                let fade = if elapsed <= lane.start || lane.fade.is_zero() {
+                    lane.fade
+                } else {
+                    lane.fade.mul_f64((1.0 - progress).clamp(0.0, 1.0))
+                };
+                Lane {
+                    from: value,
+                    start,
+                    fade,
+                    ..lane.clone()
+                }
+            })
+            .collect()
+    }
+
+    /// Lanes that continue a hand-driven run from `fraction` of every fade.
+    fn rebased_lanes(&self, fraction: f64) -> Vec<Lane> {
+        let fraction = if fraction.is_finite() {
+            fraction.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        self.lanes
+            .iter()
+            .map(|lane| {
+                let covered = if fraction <= 0.0 {
+                    0.0
+                } else if fraction >= 1.0 {
+                    1.0
+                } else {
+                    lane.curve.apply(fraction)
+                };
+                Lane {
+                    from: lane.from + (lane.to - lane.from) * covered,
+                    start: Duration::ZERO,
+                    fade: lane.fade.mul_f64((1.0 - fraction).clamp(0.0, 1.0)),
+                    ..lane.clone()
+                }
+            })
+            .collect()
     }
 }
 
@@ -328,12 +560,14 @@ impl Playback {
         if cue.mib {
             snap_non_intensity(&mut from, &to);
         }
+        let lanes = build_lanes(cue, &from, &to);
         self.runs.insert(
             target,
             Run {
                 cue_number: cue.number,
                 from,
                 to,
+                lanes,
                 start: now,
                 delay: seconds(cue.delay),
                 fade: seconds(cue.fade),
@@ -341,6 +575,7 @@ impl Playback {
                 paused_progress: 1.0,
                 paused_delay: Duration::ZERO,
                 paused_fade: Duration::ZERO,
+                paused_lanes: None,
                 done: false,
                 started: now,
                 settled: None,
@@ -359,10 +594,19 @@ impl Playback {
             return false;
         };
         let fraction = fraction.clamp(0.0, 1.0);
-        run.paused = Some(run.levels_at_progress(fraction));
+        run.paused = Some(run.levels_at_fraction(fraction));
+        run.paused_lanes = if run.lanes.is_empty() {
+            None
+        } else {
+            Some(run.rebased_lanes(fraction))
+        };
         run.paused_progress = fraction;
         run.paused_delay = Duration::ZERO;
-        run.paused_fade = run.fade.mul_f64(1.0 - fraction);
+        run.paused_fade = if run.lanes.is_empty() {
+            run.fade.mul_f64(1.0 - fraction)
+        } else {
+            Duration::ZERO
+        };
         run.settled = None;
         true
     }
@@ -418,6 +662,11 @@ impl Playback {
                 let elapsed = now.saturating_duration_since(run.start);
                 run.paused_delay = run.delay.saturating_sub(elapsed);
                 run.paused_fade = run.fade.mul_f64((1.0 - progress).clamp(0.0, 1.0));
+                run.paused_lanes = if run.lanes.is_empty() {
+                    None
+                } else {
+                    Some(run.held_lanes(elapsed))
+                };
                 run.paused = Some(levels);
                 run.paused_progress = progress;
                 // A held run is not settled, so it does not chain on its own.
@@ -436,10 +685,19 @@ impl Playback {
         let Some(levels) = run.paused.take() else {
             return false;
         };
-        run.from = levels;
-        run.delay = run.paused_delay;
-        run.fade = run.paused_fade;
         run.start = now;
+        match run.paused_lanes.take() {
+            Some(lanes) => {
+                run.lanes = lanes;
+                run.delay = Duration::ZERO;
+                run.fade = Duration::ZERO;
+            }
+            None => {
+                run.from = levels;
+                run.delay = run.paused_delay;
+                run.fade = run.paused_fade;
+            }
+        }
         run.paused_progress = 1.0;
         true
     }
@@ -502,6 +760,74 @@ impl Playback {
         self.output = output;
         changed
     }
+}
+
+/// Build the per-attribute fade plan for a cue.
+///
+/// Timing is looked up per attribute, the cue's fade and delay fill the gaps,
+/// and the stagger index is the fixture's position in the cue's target state
+/// rather than its number. Only values that actually change become lanes; the
+/// rest come from the target state and cost nothing per frame. An empty plan
+/// means every lane would have used the cue's own fade and delay at `Linear`,
+/// which is what keeps a pre-v7 show on the single-blend path.
+fn build_lanes(cue: &Cue, from: &Levels, to: &Levels) -> Vec<Lane> {
+    // Fixtures and attributes of both states: an attribute that only exists in
+    // `from` still has to fade to zero.
+    let mut plan: Vec<(u16, Vec<String>)> = Vec::new();
+    for (fixture, attributes) in to.fixtures() {
+        plan.push((fixture, attributes.keys().cloned().collect()));
+    }
+    for (fixture, attributes) in from.fixtures() {
+        match plan.iter_mut().find(|(number, _)| *number == fixture) {
+            Some((_, names)) => {
+                for name in attributes.keys() {
+                    if !names
+                        .iter()
+                        .any(|existing| existing.eq_ignore_ascii_case(name))
+                    {
+                        names.push(name.clone());
+                    }
+                }
+            }
+            None => plan.push((fixture, attributes.keys().cloned().collect())),
+        }
+    }
+    plan.sort_by_key(|(fixture, _)| *fixture);
+
+    let cue_delay = seconds(cue.delay);
+    let mut lanes = Vec::new();
+    for (position, (fixture, names)) in plan.into_iter().enumerate() {
+        let offset = seconds(cue.stagger * position as f64);
+        for name in names {
+            let start = from.get(fixture, &name).unwrap_or(0.0);
+            let end = to.get(fixture, &name).unwrap_or(0.0);
+            if (start - end).abs() < 1e-12 {
+                continue;
+            }
+            let timing = timing_for(cue, &name);
+            lanes.push(Lane {
+                fixture,
+                attribute: name,
+                from: start,
+                to: end,
+                // The cue delay is added once, and an attribute's own delay
+                // adds to it; a missing override contributes nothing.
+                start: cue_delay
+                    + seconds(timing.and_then(|timing| timing.delay).unwrap_or(0.0))
+                    + offset,
+                fade: seconds(timing.and_then(|timing| timing.fade).unwrap_or(cue.fade)),
+                curve: timing.map(|timing| timing.curve).unwrap_or_default(),
+            });
+        }
+    }
+
+    let plain = lanes.iter().all(|lane| {
+        lane.start == cue_delay && lane.fade == seconds(cue.fade) && lane.curve == Curve::Linear
+    });
+    if plain {
+        return Vec::new();
+    }
+    lanes
 }
 
 /// Move-in-black: for every fixture that is dark in `from`, replace the
@@ -571,8 +897,19 @@ mod tests {
             mib: false,
             trigger: Trigger::Go,
             trigger_time: 0.0,
+            timing: BTreeMap::new(),
+            stagger: 0.0,
             levels,
         }
+    }
+
+    fn two_fixture_show() -> Show {
+        let mut show = demo_show();
+        let mut second = show.fixtures[0].clone();
+        second.number = 2;
+        second.address = 5;
+        show.fixtures.push(second);
+        show
     }
 
     fn sequence() -> Sequence {
@@ -1109,6 +1446,352 @@ mod tests {
                 .get(1, "Dimmer"),
             Some(1.0)
         );
+    }
+
+    #[test]
+    fn a_per_attribute_fade_finishes_before_the_cue() {
+        let mut show = demo_show();
+        show.sequences.push(Sequence {
+            number: 1,
+            name: "Timing".into(),
+            cues: vec![
+                cue(
+                    1.0,
+                    0.0,
+                    levels(&[(1, "Dimmer", 0.0), (1, "ColorAdd_R", 0.0)]),
+                ),
+                Cue {
+                    timing: BTreeMap::from([(
+                        "ColorAdd_R".to_string(),
+                        AttributeTiming {
+                            fade: Some(0.5),
+                            ..AttributeTiming::default()
+                        },
+                    )]),
+                    ..cue(
+                        2.0,
+                        2.0,
+                        levels(&[(1, "Dimmer", 1.0), (1, "ColorAdd_R", 1.0)]),
+                    )
+                },
+            ],
+        });
+        let start = Instant::now();
+        let mut playback = Playback::new();
+        playback
+            .go(&show, Target::Sequence(1), 1, 0, start)
+            .unwrap();
+        playback
+            .go(&show, Target::Sequence(1), 1, 1, start)
+            .unwrap();
+        let half = playback
+            .run(Target::Sequence(1))
+            .unwrap()
+            .levels_at(start + Duration::from_millis(500));
+        assert_eq!(half.get(1, "ColorAdd_R"), Some(1.0), "colour is in place");
+        assert_eq!(
+            half.get(1, "Dimmer"),
+            Some(0.25),
+            "the dimmer is still moving"
+        );
+    }
+
+    #[test]
+    fn a_per_attribute_delay_adds_to_the_cue_delay() {
+        let mut show = demo_show();
+        show.sequences.push(Sequence {
+            number: 1,
+            name: "Timing".into(),
+            cues: vec![
+                cue(1.0, 0.0, levels(&[(1, "Dimmer", 0.0)])),
+                Cue {
+                    delay: 1.0,
+                    timing: BTreeMap::from([(
+                        "Dimmer".to_string(),
+                        AttributeTiming {
+                            delay: Some(1.0),
+                            ..AttributeTiming::default()
+                        },
+                    )]),
+                    ..cue(2.0, 2.0, levels(&[(1, "Dimmer", 1.0)]))
+                },
+            ],
+        });
+        let start = Instant::now();
+        let mut playback = Playback::new();
+        playback
+            .go(&show, Target::Sequence(1), 1, 0, start)
+            .unwrap();
+        playback
+            .go(&show, Target::Sequence(1), 1, 1, start)
+            .unwrap();
+        let run = playback.run(Target::Sequence(1)).unwrap();
+        assert!(
+            run.progress(start + Duration::from_millis(1900)) < 1.0,
+            "a lane that has not started keeps the cue unsettled"
+        );
+        assert_eq!(
+            run.levels_at(start + Duration::from_millis(1900))
+                .get(1, "Dimmer"),
+            Some(0.0),
+            "the cue delay alone was not enough"
+        );
+        assert_eq!(
+            run.levels_at(start + Duration::from_secs(3))
+                .get(1, "Dimmer"),
+            Some(0.5),
+            "half of the fade after both delays"
+        );
+    }
+
+    #[test]
+    fn a_stagger_offsets_fixtures_in_target_order() {
+        let mut show = two_fixture_show();
+        show.sequences.push(Sequence {
+            number: 1,
+            name: "Stagger".into(),
+            cues: vec![
+                cue(1.0, 0.0, levels(&[(1, "Dimmer", 0.0), (2, "Dimmer", 0.0)])),
+                Cue {
+                    stagger: 0.5,
+                    ..cue(2.0, 1.0, levels(&[(1, "Dimmer", 1.0), (2, "Dimmer", 1.0)]))
+                },
+            ],
+        });
+        let start = Instant::now();
+        let mut playback = Playback::new();
+        playback
+            .go(&show, Target::Sequence(1), 1, 0, start)
+            .unwrap();
+        playback
+            .go(&show, Target::Sequence(1), 1, 1, start)
+            .unwrap();
+        let run = playback.run(Target::Sequence(1)).unwrap();
+        let at_half = run.levels_at(start + Duration::from_millis(500));
+        assert_eq!(at_half.get(1, "Dimmer"), Some(0.5));
+        assert_eq!(at_half.get(2, "Dimmer"), Some(0.0), "fixture 2 waits");
+        let later = run.levels_at(start + Duration::from_millis(1250));
+        assert_eq!(later.get(1, "Dimmer"), Some(1.0));
+        assert_eq!(later.get(2, "Dimmer"), Some(0.75));
+    }
+
+    #[test]
+    fn a_snap_curve_changes_at_its_start() {
+        let mut show = demo_show();
+        show.sequences.push(Sequence {
+            number: 1,
+            name: "Snap".into(),
+            cues: vec![
+                cue(1.0, 0.0, levels(&[(1, "Dimmer", 0.0)])),
+                Cue {
+                    timing: BTreeMap::from([(
+                        "Dimmer".to_string(),
+                        AttributeTiming {
+                            delay: Some(1.0),
+                            curve: Curve::Snap,
+                            ..AttributeTiming::default()
+                        },
+                    )]),
+                    ..cue(2.0, 3.0, levels(&[(1, "Dimmer", 1.0)]))
+                },
+            ],
+        });
+        let start = Instant::now();
+        let mut playback = Playback::new();
+        playback
+            .go(&show, Target::Sequence(1), 1, 0, start)
+            .unwrap();
+        playback
+            .go(&show, Target::Sequence(1), 1, 1, start)
+            .unwrap();
+        let run = playback.run(Target::Sequence(1)).unwrap();
+        assert_eq!(
+            run.levels_at(start + Duration::from_millis(999))
+                .get(1, "Dimmer"),
+            Some(0.0)
+        );
+        assert_eq!(
+            run.levels_at(start + Duration::from_millis(1001))
+                .get(1, "Dimmer"),
+            Some(1.0),
+            "a snap ignores its fade time"
+        );
+    }
+
+    #[test]
+    fn ease_out_is_ahead_of_linear_at_the_midpoint() {
+        assert_eq!(Curve::EaseOut.apply(0.0), 0.0);
+        assert_eq!(Curve::EaseOut.apply(1.0), 1.0);
+        assert_eq!(Curve::EaseOut.apply(0.5), 0.75);
+        assert_eq!(Curve::EaseIn.apply(0.5), 0.25);
+        assert_eq!(Curve::EaseInOut.apply(0.5), 0.5);
+        assert_eq!(Curve::Snap.apply(0.0), 0.0);
+        assert_eq!(Curve::Snap.apply(0.01), 1.0);
+
+        let mut show = demo_show();
+        show.sequences.push(Sequence {
+            number: 1,
+            name: "Ease".into(),
+            cues: vec![
+                cue(1.0, 0.0, levels(&[(1, "Dimmer", 0.0)])),
+                Cue {
+                    timing: BTreeMap::from([(
+                        "Dimmer".to_string(),
+                        AttributeTiming {
+                            curve: Curve::EaseOut,
+                            ..AttributeTiming::default()
+                        },
+                    )]),
+                    ..cue(2.0, 2.0, levels(&[(1, "Dimmer", 1.0)]))
+                },
+            ],
+        });
+        let start = Instant::now();
+        let mut playback = Playback::new();
+        playback
+            .go(&show, Target::Sequence(1), 1, 0, start)
+            .unwrap();
+        playback
+            .go(&show, Target::Sequence(1), 1, 1, start)
+            .unwrap();
+        let run = playback.run(Target::Sequence(1)).unwrap();
+        assert_eq!(
+            run.levels_at(start + Duration::from_secs(1))
+                .get(1, "Dimmer"),
+            Some(0.75)
+        );
+        assert_eq!(
+            run.levels_at(start + Duration::from_secs(2))
+                .get(1, "Dimmer"),
+            Some(1.0)
+        );
+    }
+
+    #[test]
+    fn an_untimed_attribute_holds_its_target() {
+        let mut show = demo_show();
+        show.sequences.push(Sequence {
+            number: 1,
+            name: "Base".into(),
+            cues: vec![
+                cue(
+                    1.0,
+                    0.0,
+                    levels(&[(1, "Dimmer", 0.0), (1, "ColorAdd_R", 1.0)]),
+                ),
+                Cue {
+                    timing: BTreeMap::from([(
+                        "Dimmer".to_string(),
+                        AttributeTiming {
+                            fade: Some(1.0),
+                            ..AttributeTiming::default()
+                        },
+                    )]),
+                    ..cue(2.0, 1.0, levels(&[(1, "Dimmer", 1.0)]))
+                },
+            ],
+        });
+        let start = Instant::now();
+        let mut playback = Playback::new();
+        playback
+            .go(&show, Target::Sequence(1), 1, 0, start)
+            .unwrap();
+        playback
+            .go(&show, Target::Sequence(1), 1, 1, start)
+            .unwrap();
+        let half = playback
+            .run(Target::Sequence(1))
+            .unwrap()
+            .levels_at(start + Duration::from_millis(500));
+        assert_eq!(
+            half.get(1, "ColorAdd_R"),
+            Some(1.0),
+            "a value the cue does not change is not part of the plan"
+        );
+        assert_eq!(half.get(1, "Dimmer"), Some(0.5));
+    }
+
+    #[test]
+    fn a_plain_cue_blends_exactly_like_a_single_fade() {
+        let mut show = demo_show();
+        let from = levels(&[(1, "Dimmer", 0.0), (1, "ColorAdd_B", 1.0)]);
+        let to = levels(&[(1, "Dimmer", 1.0), (1, "ColorAdd_R", 0.25)]);
+        let delta = to.difference(&from);
+        show.sequences.push(Sequence {
+            number: 1,
+            name: "Plain".into(),
+            cues: vec![cue(1.0, 0.0, from.clone()), cue(2.0, 4.0, delta)],
+        });
+        let start = Instant::now();
+        let mut playback = Playback::new();
+        playback
+            .go(&show, Target::Sequence(1), 1, 0, start)
+            .unwrap();
+        playback
+            .go(&show, Target::Sequence(1), 1, 1, start)
+            .unwrap();
+        let target = show.sequences[0].state_at(1);
+        let quarter = playback
+            .run(Target::Sequence(1))
+            .unwrap()
+            .levels_at(start + Duration::from_secs(1));
+        assert_eq!(quarter, Levels::blend(&from, &target, 0.25));
+    }
+
+    #[test]
+    fn pausing_mid_ease_resumes_to_the_same_end() {
+        let mut show = demo_show();
+        show.sequences.push(Sequence {
+            number: 1,
+            name: "Hold".into(),
+            cues: vec![
+                cue(
+                    1.0,
+                    0.0,
+                    levels(&[(1, "Dimmer", 0.0), (1, "ColorAdd_R", 0.0)]),
+                ),
+                Cue {
+                    timing: BTreeMap::from([(
+                        "ColorAdd_R".to_string(),
+                        AttributeTiming {
+                            fade: Some(0.5),
+                            ..AttributeTiming::default()
+                        },
+                    )]),
+                    ..cue(
+                        2.0,
+                        2.0,
+                        levels(&[(1, "Dimmer", 1.0), (1, "ColorAdd_R", 1.0)]),
+                    )
+                },
+            ],
+        });
+        let start = Instant::now();
+        let mut playback = Playback::new();
+        playback
+            .go(&show, Target::Sequence(1), 1, 0, start)
+            .unwrap();
+        playback
+            .go(&show, Target::Sequence(1), 1, 1, start)
+            .unwrap();
+        assert!(playback.pause(Target::Sequence(1), start + Duration::from_millis(250)));
+        let frozen = playback
+            .run(Target::Sequence(1))
+            .unwrap()
+            .levels_at(start + Duration::from_secs(9));
+        assert_eq!(frozen.get(1, "ColorAdd_R"), Some(0.5));
+
+        assert!(playback.resume(Target::Sequence(1), start + Duration::from_secs(1)));
+        let resumed = playback
+            .run(Target::Sequence(1))
+            .unwrap()
+            .levels_at(start + Duration::from_millis(1250));
+        assert_eq!(resumed.get(1, "ColorAdd_R"), Some(1.0));
+        let finished = playback
+            .run(Target::Sequence(1))
+            .unwrap()
+            .levels_at(start + Duration::from_millis(2750));
+        assert_eq!(finished.get(1, "Dimmer"), Some(1.0));
     }
 
     #[test]

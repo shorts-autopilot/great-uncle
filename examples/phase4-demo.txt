@@ -3,8 +3,8 @@
 #   cargo run -p openlight-console -- --output 1=virtual \
 #     --script examples/phase4-demo.txt --frames 120 --trace
 #
-# The script is deterministic: the track has finished, so the final frame is
-# cue 2 at full.
+# The script is deterministic: the track has been stopped, and the final frame
+# is half a second into sequence 3's per-attribute cue.
 
 Import Gdtf "examples/gdtf/openlight-demo-wash.gdtf"
 
@@ -37,6 +37,9 @@ Timecode 1 Start
 Wait 2
 Timecode 1 Pause
 Timecode 1 Stop
+# The track leaves cue 2 holding the rig; release it so the timing scene below
+# is the only playback in the final frame.
+Release Sequence 1
 
 # A list that runs itself: cue 2 follows cue 1's fade with no command in
 # between. It is released afterwards so the final frame is unchanged.
@@ -49,8 +52,27 @@ Wait 1.5
 Release Sequence 2
 Clear All
 
+# Per-attribute timing: the colour is in place after half a second while the
+# dimmer waits six seconds and then snaps, which is past the end of this run.
+# The final frame shows the colour full and the dimmer still dark, so the trace
+# proves the order.
+Fixture 1 Thru 2 At 0
+Fixture 1 Thru 2 At ColorAdd_R 0
+Store Cue 1 "Dark" Fade 0 Sequence 3
+Fixture 1 Thru 2 At ColorAdd_R Full
+Fixture 1 Thru 2 At Full
+Store Cue 2 "Colour first" Fade 3 Sequence 3
+Cue 2 Timing ColorAdd_R Fade 0.5 Sequence 3
+Cue 2 Timing Dimmer Delay 6 Curve Snap Sequence 3
+Clear All
+Go Sequence 3
+Go Sequence 3
+# Stop half a second in: the colour has arrived and the dimmer has not.
+Wait 0.5
+
 Timecode 1
 Sequence 1
 Sequence 2
+Sequence 3
 Status
 Save "target/phase4-demo.olshow.json"

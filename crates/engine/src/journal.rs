@@ -22,7 +22,10 @@
 //! already contains those statements — and statements that are not idempotent
 //! (an `Undo`, a store that captures a programmer) would produce a different
 //! document than the one on disk. The autosave says the same thing for a
-//! snapshot: its revision is the newest one already captured.
+//! snapshot: its revision is the newest one already captured, or nothing at all
+//! when it was taken with the journal switched off, in which case every entry
+//! in the journal predates the snapshot and replaying any of it would apply
+//! stale statements to a newer document.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufWriter, Write};
@@ -82,15 +85,30 @@ pub struct Baseline {
     pub head_lost: Option<u64>,
 }
 
+/// Where the document that was loaded came from, which decides how much of the
+/// journal it already contains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplayFrom {
+    /// No snapshot was restored: the show file is the starting point.
+    File,
+    /// A snapshot captured at this journal revision was restored.
+    Snapshot(u64),
+    /// A snapshot captured while no journal was open was restored. Every entry
+    /// in the journal predates it, so replaying the tail onto it would apply
+    /// statements the snapshot already replaced.
+    SnapshotWithoutJournal,
+}
+
 impl Tail {
     /// The revision the document already reflects.
     ///
-    /// `snapshot` is the revision of the autosave that was restored, or zero
-    /// when there was none. A save after that snapshot is newer still, so the
-    /// greater of the two wins. A journal that begins after revision 1 lost its
-    /// head; the oldest entry available is then the best starting point, and
-    /// the caller is told so it can say as much.
-    pub fn baseline(&self, show: &Path, snapshot: u64) -> Baseline {
+    /// A save after a restored snapshot is newer still, so the greater of the
+    /// two wins. A snapshot taken with the journal off reflects the whole
+    /// journal: the file was a fork that never consumed it, so starting after
+    /// the head is the only safe answer. A journal that begins after revision 1
+    /// lost its head; the oldest entry available is then the best starting
+    /// point, and the caller is told so it can say as much.
+    pub fn baseline(&self, show: &Path, from: ReplayFrom) -> Baseline {
         let key = path_key(show);
         let checkpoint = self
             .entries
@@ -99,6 +117,13 @@ impl Tail {
             .find(|entry| entry.kind == EntryKind::Checkpoint && entry.line == key)
             .map(|entry| entry.rev)
             .unwrap_or(0);
+        let snapshot = match from {
+            ReplayFrom::File => 0,
+            ReplayFrom::Snapshot(rev) => rev,
+            ReplayFrom::SnapshotWithoutJournal => {
+                self.entries.last().map(|entry| entry.rev).unwrap_or(0)
+            }
+        };
         let mut baseline = Baseline {
             rev: snapshot.max(checkpoint),
             head_lost: None,
@@ -283,14 +308,18 @@ impl Journal {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Snapshot {
-    pub rev: u64,
+    /// The journal revision the snapshot already contains, or `None` when it
+    /// was captured with no journal open. An old snapshot that says zero is
+    /// read as revision zero, exactly as it was written.
+    #[serde(default)]
+    pub rev: Option<u64>,
     pub at: String,
     pub show: Show,
     pub desk: DeskFile,
 }
 
 impl Snapshot {
-    pub fn capture(rev: u64, show: &Show, desk: &Desk) -> Self {
+    pub fn capture(rev: Option<u64>, show: &Show, desk: &Desk) -> Self {
         Self {
             rev,
             at: now_rfc3339(),
@@ -315,6 +344,14 @@ impl Snapshot {
         let snapshot: Snapshot = serde_json::from_str(&text)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         Ok(Some(snapshot))
+    }
+
+    /// Where replay must begin for this snapshot.
+    pub fn replay_from(&self) -> ReplayFrom {
+        match self.rev {
+            Some(rev) => ReplayFrom::Snapshot(rev),
+            None => ReplayFrom::SnapshotWithoutJournal,
+        }
     }
 
     /// The document and the desk this snapshot describes.
@@ -409,11 +446,11 @@ mod tests {
             journal.note(EntryKind::Show, "Fixture 1 At 70", 0);
         }
         let tail = read(&journal_path).unwrap();
-        let baseline = tail.baseline(&show, 0);
+        let baseline = tail.baseline(&show, ReplayFrom::File);
         assert_eq!(baseline.rev, 3, "the checkpoint is the newest entry");
         assert_eq!(baseline.head_lost, None);
         assert_eq!(
-            tail.baseline(&show, 9).rev,
+            tail.baseline(&show, ReplayFrom::Snapshot(9)).rev,
             9,
             "a newer autosave wins over an older save"
         );
@@ -422,7 +459,7 @@ mod tests {
         // save.
         let other = temp("checkpoint-other.olshow");
         fs::write(&other, "{}").unwrap();
-        assert_eq!(tail.baseline(&other, 0).rev, 0);
+        assert_eq!(tail.baseline(&other, ReplayFrom::File).rev, 0);
 
         let _ = fs::remove_file(&journal_path);
         let _ = fs::remove_file(&show);
@@ -441,14 +478,40 @@ mod tests {
         )
         .unwrap();
         let tail = read(&path).unwrap();
-        let baseline = tail.baseline(Path::new("/no/such/show.olshow"), 0);
+        let baseline = tail.baseline(Path::new("/no/such/show.olshow"), ReplayFrom::File);
         assert_eq!(baseline.rev, 40, "the oldest entry's predecessor");
         assert_eq!(baseline.head_lost, Some(41));
 
         // A snapshot from before the rotation is no better than the file head.
-        let stale = tail.baseline(Path::new("/no/such/show.olshow"), 20);
+        let stale = tail.baseline(Path::new("/no/such/show.olshow"), ReplayFrom::Snapshot(20));
         assert_eq!(stale.rev, 40);
         assert_eq!(stale.head_lost, Some(41));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_snapshot_taken_without_a_journal_skips_the_whole_tail() {
+        let path = temp("no-journal-snapshot");
+        {
+            let mut journal = Journal::open(path.clone()).unwrap();
+            journal.note(EntryKind::Show, "Fixture 1 At 50", 1);
+            journal.note(EntryKind::Show, "Fixture 1 At 60", 2);
+        }
+        let tail = read(&path).unwrap();
+        // The snapshot was captured in a session with the journal off, so none
+        // of these entries can be trusted to be missing from it.
+        let baseline = tail.baseline(
+            Path::new("/no/such/show.olshow"),
+            ReplayFrom::SnapshotWithoutJournal,
+        );
+        assert_eq!(baseline.rev, 2);
+        assert_eq!(baseline.head_lost, None);
+
+        let snapshot = Snapshot::capture(None, &crate::test_support::demo_show(), &Desk::new());
+        assert_eq!(snapshot.rev, None);
+        assert_eq!(snapshot.replay_from(), ReplayFrom::SnapshotWithoutJournal);
+        let with_rev = Snapshot::capture(Some(4), &crate::test_support::demo_show(), &Desk::new());
+        assert_eq!(with_rev.replay_from(), ReplayFrom::Snapshot(4));
         let _ = fs::remove_file(&path);
     }
 
@@ -538,11 +601,11 @@ mod tests {
         let show = crate::test_support::demo_show();
         let mut desk = Desk::new();
         desk.programmer.set(1, "Dimmer", 0.5);
-        let snapshot = Snapshot::capture(7, &show, &desk);
+        let snapshot = Snapshot::capture(Some(7), &show, &desk);
         snapshot.save(&path).unwrap();
 
         let loaded = Snapshot::load(&path).unwrap().unwrap();
-        assert_eq!(loaded.rev, 7);
+        assert_eq!(loaded.rev, Some(7));
         let (restored, restored_desk, warnings) = loaded.restore();
         assert_eq!(restored, show);
         assert_eq!(restored_desk.programmer.get(1, "Dimmer"), Some(0.5));

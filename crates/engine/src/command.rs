@@ -52,7 +52,7 @@
 
 use std::fmt;
 
-use crate::playback::{ExecutorMode, Trigger};
+use crate::playback::{Curve, ExecutorMode, Trigger};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -161,6 +161,23 @@ pub enum Command {
         sequence: u16,
         number: f64,
         trigger: TriggerArg,
+    },
+    /// `Cue 2 Timing ColorAdd_R Fade 0.5 …`: per-attribute timing. With no
+    /// attribute and no clauses it lists the cue's timing table.
+    CueTiming {
+        sequence: u16,
+        number: f64,
+        attribute: Option<String>,
+        fade: Option<f64>,
+        delay: Option<f64>,
+        curve: Option<Curve>,
+        /// Drop the override and follow the cue again.
+        off: bool,
+    },
+    CueStagger {
+        sequence: u16,
+        number: f64,
+        stagger: f64,
     },
     SetExecutorMode {
         executor: u16,
@@ -365,6 +382,15 @@ impl Command {
             | Command::ListEffects { .. }
             | Command::ListTimecodes { .. }
             | Command::Unlock { .. } => false,
+            // Listing a cue's timing table changes nothing.
+            Command::CueTiming {
+                attribute: None,
+                fade: None,
+                delay: None,
+                curve: None,
+                off: false,
+                ..
+            } => false,
             // Lifting a blackout is always allowed: refusing it is a hazard.
             Command::Blackout { off: true, .. } => false,
             _ => true,
@@ -574,6 +600,9 @@ const RESERVED: &[&str] = &[
     "mode",
     "fader",
     "go",
+    "timing",
+    "stagger",
+    "curve",
 ];
 
 struct Parser<'a> {
@@ -1633,30 +1662,130 @@ impl Parser<'_> {
         ))
     }
 
-    /// `Cue 2 Trigger Follow 1.5`: the trigger is show data, so it is an edit
-    /// with its own undo step rather than a re-store that captures values.
+    /// `Cue 2 Trigger Follow 1.5`, `Cue 2 Timing Pan Fade 3`, `Cue 2 Stagger
+    /// 0.2`: these are show data, so each is an edit with its own undo step
+    /// rather than a re-store that captures values.
     fn cue_command(&mut self) -> Result<Command, CommandError> {
         let number = self.cue_number()?;
-        if !self.eat_word("trigger") {
-            return Err(CommandError::with_hint(
-                format!("cue {number} needs an action"),
-                "use `Cue 2 Trigger Follow 1.5`, or `Sequence 1` to list the cues",
-            ));
+        if self.eat_word("trigger") {
+            let trigger = self.trigger()?;
+            let sequence = self.sequence_suffix()?;
+            self.expect_end()?;
+            return Ok(Command::CueTrigger {
+                sequence,
+                number,
+                trigger,
+            });
         }
-        let trigger = self.trigger()?;
-        let sequence = if self.eat_word("sequence") {
-            self.whole_number("sequence number")?
-        } else if self.eat_word("in") {
+        if self.eat_word("stagger") {
+            let stagger = self.seconds("stagger")?;
+            let sequence = self.sequence_suffix()?;
+            self.expect_end()?;
+            return Ok(Command::CueStagger {
+                sequence,
+                number,
+                stagger,
+            });
+        }
+        if self.eat_word("timing") {
+            let attribute = self.optional_attribute_name();
+            let mut fade = None;
+            let mut delay = None;
+            let mut curve = None;
+            let mut off = false;
+            loop {
+                if self.eat_word("fade") {
+                    fade = Some(self.seconds("fade")?);
+                } else if self.eat_word("delay") {
+                    delay = Some(self.seconds("delay")?);
+                } else if self.eat_word("curve") {
+                    curve = Some(self.curve()?);
+                } else if self.eat_word("off") {
+                    off = true;
+                } else {
+                    break;
+                }
+            }
+            let has_clause = fade.is_some() || delay.is_some() || curve.is_some() || off;
+            if attribute.is_none() && has_clause {
+                return Err(CommandError::with_hint(
+                    "`Timing` needs an attribute for a change",
+                    "use `Cue 2 Timing ColorAdd_R Fade 0.5`, or `Cue 2 Timing` to list",
+                ));
+            }
+            if off && (fade.is_some() || delay.is_some() || curve.is_some()) {
+                return Err(CommandError::with_hint(
+                    "`Off` drops the whole override",
+                    "use `Cue 2 Timing ColorAdd_R Off` on its own",
+                ));
+            }
+            let sequence = self.sequence_suffix()?;
+            self.expect_end()?;
+            return Ok(Command::CueTiming {
+                sequence,
+                number,
+                attribute,
+                fade,
+                delay,
+                curve,
+                off,
+            });
+        }
+        Err(CommandError::with_hint(
+            format!("cue {number} needs an action"),
+            "use `Cue 2 Trigger Follow 1.5`, `Cue 2 Timing ColorAdd_R Fade 0.5`, or `Sequence 1` to list the cues",
+        ))
+    }
+
+    fn sequence_suffix(&mut self) -> Result<u16, CommandError> {
+        if self.eat_word("sequence") {
+            return self.whole_number("sequence number");
+        }
+        if self.eat_word("in") {
             self.eat_word("sequence");
-            self.whole_number("sequence number")?
-        } else {
-            1
-        };
-        self.expect_end()?;
-        Ok(Command::CueTrigger {
-            sequence,
-            number,
-            trigger,
+            return self.whole_number("sequence number");
+        }
+        Ok(1)
+    }
+
+    /// The attribute a timing clause is about. Clause keywords are not names,
+    /// so `Cue 2 Timing` and `Cue 2 Timing Sequence 2` stay unambiguous.
+    fn optional_attribute_name(&mut self) -> Option<String> {
+        let clause = ["fade", "delay", "curve", "off", "sequence", "in"];
+        match self.peek().cloned() {
+            Some(Token::Quoted(name)) => {
+                self.position += 1;
+                Some(name)
+            }
+            Some(Token::Word(word))
+                if !clause
+                    .iter()
+                    .any(|keyword| word.eq_ignore_ascii_case(keyword)) =>
+            {
+                self.position += 1;
+                Some(word)
+            }
+            _ => None,
+        }
+    }
+
+    /// `Linear`, `EaseIn`, `EaseOut`, `EaseInOut` or `Snap`.
+    fn curve(&mut self) -> Result<Curve, CommandError> {
+        let word = self.name_token("curve")?;
+        [
+            Curve::Linear,
+            Curve::EaseIn,
+            Curve::EaseOut,
+            Curve::EaseInOut,
+            Curve::Snap,
+        ]
+        .into_iter()
+        .find(|curve| curve.label().eq_ignore_ascii_case(&word))
+        .ok_or_else(|| {
+            CommandError::with_hint(
+                format!("`{word}` is not a curve"),
+                "use `Linear`, `EaseIn`, `EaseOut`, `EaseInOut` or `Snap`",
+            )
         })
     }
 
@@ -2051,6 +2180,62 @@ mod tests {
             }
         );
         assert_eq!(
+            command("Cue 2 Timing ColorAdd_R Fade 0.5 Delay 1 Curve EaseOut Sequence 3"),
+            Command::CueTiming {
+                sequence: 3,
+                number: 2.0,
+                attribute: Some("ColorAdd_R".into()),
+                fade: Some(0.5),
+                delay: Some(1.0),
+                curve: Some(Curve::EaseOut),
+                off: false,
+            }
+        );
+        assert_eq!(
+            command("Cue 2 Stagger 0.2"),
+            Command::CueStagger {
+                sequence: 1,
+                number: 2.0,
+                stagger: 0.2,
+            }
+        );
+        assert_eq!(
+            command("Cue 2 Timing ColorAdd_R"),
+            Command::CueTiming {
+                sequence: 1,
+                number: 2.0,
+                attribute: Some("ColorAdd_R".into()),
+                fade: None,
+                delay: None,
+                curve: None,
+                off: false,
+            }
+        );
+        assert_eq!(
+            command("Cue 2 Timing"),
+            Command::CueTiming {
+                sequence: 1,
+                number: 2.0,
+                attribute: None,
+                fade: None,
+                delay: None,
+                curve: None,
+                off: false,
+            }
+        );
+        assert_eq!(
+            command("Cue 2 Timing ColorAdd_R Off"),
+            Command::CueTiming {
+                sequence: 1,
+                number: 2.0,
+                attribute: Some("ColorAdd_R".into()),
+                fade: None,
+                delay: None,
+                curve: None,
+                off: true,
+            }
+        );
+        assert_eq!(
             command("Cue 4 Trigger Go"),
             Command::CueTrigger {
                 sequence: 1,
@@ -2183,6 +2368,14 @@ mod tests {
             .message
             .contains("follow time"));
         assert!(error("Cue 2 Trigger Follow -1").message.contains("-1"));
+        assert!(error("Cue 2 Timing ColorAdd_R Curve Bounce")
+            .message
+            .contains("Bounce"));
+        assert!(error("Cue 2 Timing Fade 1").message.contains("attribute"));
+        assert!(error("Cue 2 Timing ColorAdd_R Off Fade 1")
+            .message
+            .contains("Off"));
+        assert!(error("Cue 2 Stagger -0.5").message.contains("-0.5"));
         assert!(error("Cue 2 Trigger Sometimes")
             .message
             .contains("Sometimes"));

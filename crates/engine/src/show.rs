@@ -8,9 +8,10 @@
 //! worlds, filters and effects. Version 4 adds timecode shows. Version 5 moves
 //! the programmer, the masters and the executor faders out of the show and into
 //! the desk file, because they are handles rather than programming. Version 6
-//! adds cue triggers and executor modes. Older files still load: new sections
-//! default to empty, and the v5 upgrade hands the values it finds in an old file
-//! to the desk through a [`LoadReport`].
+//! adds cue triggers and executor modes. Version 7 adds per-attribute timing,
+//! curves and stagger. Older files still load: new sections default to empty,
+//! and the v5 upgrade hands the values it finds in an old file to the desk
+//! through a [`LoadReport`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -28,9 +29,9 @@ use crate::pools::{Filter, Group, World, MAX_GROUP_FIXTURES, MAX_POOL_OBJECTS};
 use crate::timecode::{self, TimecodeShow, MAX_FPS, MAX_TIMECODES, MAX_TIMECODE_EVENTS, MIN_FPS};
 
 pub const SHOW_FORMAT: &str = "openlight-show";
-pub const SHOW_VERSION: u32 = 6;
+pub const SHOW_VERSION: u32 = 7;
 /// Older documents that still load, oldest first.
-pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3, 4, 5, 6];
+pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3, 4, 5, 6, 7];
 /// Fastest rate master accepted, as a factor (400%).
 pub const MAX_RATE_MASTER: f64 = 4.0;
 pub const MAX_UNIVERSE_SIZE: u16 = 512;
@@ -486,6 +487,7 @@ impl Show {
                     ("fade", cue.fade),
                     ("delay", cue.delay),
                     ("trigger time", cue.trigger_time),
+                    ("stagger", cue.stagger),
                 ] {
                     if !value.is_finite() || !(0.0..=MAX_TIME).contains(&value) {
                         problems.push(format!(
@@ -508,6 +510,48 @@ impl Show {
                                 sequence.number
                             ));
                         }
+                    }
+                }
+                for (attribute, timing) in &cue.timing {
+                    if attribute.trim().is_empty() {
+                        problems.push(format!(
+                            "sequence {} cue {label}: timing without an attribute",
+                            sequence.number
+                        ));
+                    }
+                    for (name, value) in [("fade", timing.fade), ("delay", timing.delay)] {
+                        if let Some(value) = value {
+                            if !value.is_finite() || !(0.0..=MAX_TIME).contains(&value) {
+                                problems.push(format!(
+                                    "sequence {} cue {label}: `{attribute}` timing {name} {value} is outside 0..={MAX_TIME} seconds",
+                                    sequence.number
+                                ));
+                            }
+                        }
+                    }
+                }
+                // A cue with values can only time attributes its own fixture
+                // modes have, so a typo is caught at save rather than silently
+                // never applying. A cue with no values may carry any timing; it
+                // takes effect the next time that attribute appears.
+                let mut types = Vec::new();
+                for (fixture, _) in cue.levels.fixtures() {
+                    if let Some(fixture) = self.fixture(fixture) {
+                        if let Ok((fixture_type, _)) = self.mode_for(fixture) {
+                            types.push(fixture_type);
+                        }
+                    }
+                }
+                for attribute in cue.timing.keys() {
+                    if !types.is_empty()
+                        && !types
+                            .iter()
+                            .any(|fixture_type| fixture_type.attribute(attribute).is_some())
+                    {
+                        problems.push(format!(
+                            "sequence {} cue {label}: `{attribute}` is not an attribute of the cue's fixtures",
+                            sequence.number
+                        ));
                     }
                 }
             }
@@ -1040,7 +1084,7 @@ mod tests {
             .read_to_string(&mut text)
             .unwrap();
         assert!(text.contains("\"format\": \"openlight-show\""));
-        assert!(text.contains("\"version\": 6"));
+        assert!(text.contains("\"version\": 7"));
         assert!(text.contains("OpenLight Demo Wash"), "types are embedded");
         let _ = fs::remove_file(&path);
     }
@@ -1285,6 +1329,8 @@ mod tests {
                 mib: false,
                 trigger: Trigger::Go,
                 trigger_time: 0.0,
+                timing: BTreeMap::new(),
+                stagger: 0.0,
                 levels: Levels::new(),
             }],
         });
@@ -1337,6 +1383,84 @@ mod tests {
         assert_eq!(reloaded, show);
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(crate::journal::path_for(&path, ".bak"));
+    }
+
+    #[test]
+    fn version_six_shows_upgrade_with_an_empty_timing_map() {
+        use crate::playback::Trigger;
+
+        let mut path = std::env::temp_dir();
+        path.push(format!("openlight-{}-v6.olshow", std::process::id()));
+        fs::write(
+            &path,
+            r#"{
+                "format": "openlight-show",
+                "version": 6,
+                "name": "Old",
+                "sequences": [{"number": 1, "cues": [{"number": 1}]}]
+            }"#,
+        )
+        .unwrap();
+        let (show, report) = Show::load_with_report(&path).unwrap();
+        assert!(report.warnings.is_empty(), "{report:#?}");
+        assert_eq!(show.version, SHOW_VERSION);
+        let cue = &show.sequences[0].cues[0];
+        assert!(cue.timing.is_empty());
+        assert_eq!(cue.stagger, 0.0);
+        assert_eq!(cue.trigger, Trigger::Go);
+
+        show.save(&path).unwrap();
+        let (reloaded, _) = Show::load_with_report(&path).unwrap();
+        assert_eq!(reloaded, show);
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(crate::journal::path_for(&path, ".bak"));
+    }
+
+    #[test]
+    fn invalid_cue_timing_is_reported() {
+        use crate::playback::{AttributeTiming, Cue, Curve, Sequence, Trigger};
+
+        let mut show = demo_show();
+        let mut levels = Levels::new();
+        levels.set(1, "Dimmer", 0.5);
+        let mut timing = BTreeMap::new();
+        timing.insert(
+            "Bogus".to_string(),
+            AttributeTiming {
+                fade: Some(-1.0),
+                delay: Some(f64::NAN),
+                curve: Curve::EaseOut,
+            },
+        );
+        show.sequences.push(Sequence {
+            number: 1,
+            name: "Main".into(),
+            cues: vec![Cue {
+                number: 1.0,
+                name: String::new(),
+                fade: 0.0,
+                delay: 0.0,
+                mib: false,
+                trigger: Trigger::Go,
+                trigger_time: 0.0,
+                timing,
+                stagger: -0.5,
+                levels,
+            }],
+        });
+
+        let problems = show.validate();
+        for expected in [
+            "timing fade -1",
+            "timing delay NaN",
+            "`Bogus` is not an attribute",
+            "stagger -0.5",
+        ] {
+            assert!(
+                problems.iter().any(|problem| problem.contains(expected)),
+                "missing `{expected}` in {problems:#?}"
+            );
+        }
     }
 
     #[test]
@@ -1411,6 +1535,8 @@ mod tests {
                     mib: false,
                     trigger: Trigger::Go,
                     trigger_time: 0.0,
+                    timing: BTreeMap::new(),
+                    stagger: 0.0,
                     levels: Levels::new(),
                 },
                 Cue {
@@ -1421,6 +1547,8 @@ mod tests {
                     mib: false,
                     trigger: Trigger::Go,
                     trigger_time: 0.0,
+                    timing: BTreeMap::new(),
+                    stagger: 0.0,
                     levels: Levels::new(),
                 },
                 Cue {
@@ -1431,6 +1559,8 @@ mod tests {
                     mib: false,
                     trigger: Trigger::Go,
                     trigger_time: 0.0,
+                    timing: BTreeMap::new(),
+                    stagger: 0.0,
                     levels: Levels::new(),
                 },
             ],

@@ -19,8 +19,8 @@ profiles that you supply.
 | 2 | Palettes, cues, sequences, executor faders | done — see [`docs/PHASE2.md`](docs/PHASE2.md) |
 | 3 | Groups, worlds, filters, masters, effects | done — see [`docs/PHASE3.md`](docs/PHASE3.md) |
 | 4 | Timecode, move-in-black, undo, first UI shell | done — see [`docs/PHASE4.md`](docs/PHASE4.md) |
-| 5+ | desk state, output, journal, blackout/lock, cue triggers | in progress — 03, 04, 05, 06 and 01 built; see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
-| 5+ | timing, patch tools, GUI, … | designed — see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
+| 5+ | desk state, output, journal, blackout/lock, cue triggers, timing | in progress — 03, 04, 05, 06, 01 and 02 built; see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
+| 5+ | patch tools, GUI, … | designed — see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 
 It is a console with a command line, a full-screen terminal shell, a script
 runner and four output transports. You can program, store palettes and cues, run
@@ -35,15 +35,18 @@ and every universe reports the frame rate and send time it actually achieved.
 Every edit is journaled beside the show as it happens and a snapshot is written
 on a timer, so a power cut costs the last few seconds rather than the session:
 the next start replays the journal — starting after the last successful save,
-never on top of it — and offers to save. A cue list can also run itself: a cue
-stores a `Go`, `Follow` or `Time` trigger, and an executor's button and fader
-are `Go`, `Fader`, `Flash` or `Solo`, with their positions kept in the desk
-file. There is no desktop GUI yet.
+and never on top of a snapshot taken while the journal was off — and offers to
+save. A cue list can also run itself: a cue stores a `Go`, `Follow` or `Time`
+trigger, and an executor's button and fader are `Go`, `Fader`, `Flash` or
+`Solo`, with their positions kept in the desk file. A cue's fade can be split
+per attribute — colour in half a second, position in four, a snap on the
+dimmer — with a curve on each lane and a stagger between consecutive fixtures.
+There is no desktop GUI yet.
 
 ## Quick start
 
 ```bash
-cargo test --workspace            # 240 tests, no hardware needed
+cargo test --workspace            # 256 tests, no hardware needed
 cargo run -p openlight-console    # interactive console
 cargo run -p openlight-console -- --ui   # full-screen terminal shell
 ```

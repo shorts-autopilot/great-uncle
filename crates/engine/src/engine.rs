@@ -17,13 +17,14 @@ use crate::effect::{Effect, Effects, Waveform, MAX_RATE_HZ, MAX_SPREAD_DEGREES};
 use crate::fixture_type::{FixtureType, DIMMER};
 use crate::gdtf;
 use crate::history::{History, Snapshot};
+use crate::journal::ReplayFrom;
 use crate::levels::Levels;
 use crate::output::{lock, OutputStatus};
 use crate::palette::{self, Palette};
 use crate::patch::PatchRange;
 use crate::playback::{
-    format_cue_number, format_trigger, Cue, Executor, ExecutorMode, Playback, Sequence, Target,
-    Trigger, MAX_CUE_NUMBER, MAX_TIME,
+    format_cue_number, format_trigger, timing_for, Cue, Curve, Executor, ExecutorMode, Playback,
+    Sequence, Target, Trigger, MAX_CUE_NUMBER, MAX_TIME,
 };
 use crate::pools::{Filter, Group, World};
 use crate::render::{self, OutputFrame, Stage};
@@ -39,6 +40,15 @@ struct CueSpec {
     delay: Option<f64>,
     mib: Option<bool>,
     trigger: Option<TriggerArg>,
+}
+
+/// Everything `Cue <n> Timing …` carries before it is applied.
+struct TimingSpec {
+    attribute: Option<String>,
+    fade: Option<f64>,
+    delay: Option<f64>,
+    curve: Option<Curve>,
+    off: bool,
 }
 
 /// Everything `Store Effect` carries before defaults are applied.
@@ -255,17 +265,11 @@ impl Engine {
         // The revision a snapshot records is a journal revision, because that
         // is what replay compares it against. Engine revisions count renders
         // and restart at zero, so using one here would replay statements the
-        // snapshot already contains.
-        let rev = self.journal_rev();
+        // snapshot already contains. With no journal open there is no revision
+        // to claim: recording zero would let a later session replay the stale
+        // tail onto this snapshot, so the snapshot says so instead.
+        let rev = self.journal.as_ref().map(crate::journal::Journal::rev);
         crate::journal::Snapshot::capture(rev, &self.show, &self.desk).save(path)
-    }
-
-    /// The newest journal revision, or zero when no journal is open.
-    fn journal_rev(&self) -> u64 {
-        self.journal
-            .as_ref()
-            .map(|journal| journal.rev())
-            .unwrap_or(0)
     }
 
     /// Install a recovered document and desk, restoring playback positions.
@@ -291,14 +295,14 @@ impl Engine {
         &mut self,
         tail: &crate::journal::Tail,
         show_path: &Path,
-        snapshot: u64,
+        from: ReplayFrom,
     ) -> RecoveryReport {
         // A `Save` records where the file on disk stands, and the autosave
         // records where a snapshot stands; replay starts after the newer one.
         // Replaying statements the document already contains would apply
         // non-idempotent edits (an `Undo`, a store that captures a programmer)
         // a second time and diverge from the saved file.
-        let baseline = tail.baseline(show_path, snapshot);
+        let baseline = tail.baseline(show_path, from);
         let from = baseline.rev;
         let mut report = RecoveryReport {
             head_lost: baseline.head_lost,
@@ -430,6 +434,30 @@ impl Engine {
                 number,
                 trigger,
             } => self.cue_trigger(sequence, number, trigger),
+            Command::CueTiming {
+                sequence,
+                number,
+                attribute,
+                fade,
+                delay,
+                curve,
+                off,
+            } => self.cue_timing(
+                sequence,
+                number,
+                TimingSpec {
+                    attribute,
+                    fade,
+                    delay,
+                    curve,
+                    off,
+                },
+            ),
+            Command::CueStagger {
+                sequence,
+                number,
+                stagger,
+            } => self.cue_stagger(sequence, number, stagger),
             Command::SetExecutorMode { executor, mode } => self.set_executor_mode(executor, mode),
             Command::SetExecutorFlash { executor, on } => self.set_executor_flash(executor, on),
             Command::SetExecutorSolo { executor, on } => self.set_executor_solo(executor, on),
@@ -1707,6 +1735,8 @@ impl Engine {
                         mib: mib.unwrap_or(false),
                         trigger: Trigger::Go,
                         trigger_time: 0.0,
+                        timing: Default::default(),
+                        stagger: 0.0,
                         levels: delta,
                     };
                     if let Some(trigger) = trigger {
@@ -1773,6 +1803,286 @@ impl Engine {
             ))
         })?;
         Ok(CommandOutcome::message(message))
+    }
+
+    /// `Cue 2 Timing …`: list one attribute's timing, list the cue's table, or
+    /// change an override. Timing never restarts a running cue: a run keeps the
+    /// plan it started with, and the change applies the next time it starts.
+    fn cue_timing(
+        &mut self,
+        sequence_number: u16,
+        number: f64,
+        spec: TimingSpec,
+    ) -> Result<CommandOutcome, CommandError> {
+        let Some(sequence) = self.show.sequence(sequence_number) else {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence_number} does not exist"),
+                "`Sequence` lists the sequences",
+            ));
+        };
+        let Some(index) = sequence.cue_index(number) else {
+            return Err(CommandError::with_hint(
+                format!(
+                    "sequence {sequence_number} has no cue {}",
+                    format_cue_number(number)
+                ),
+                format!("`Sequence {sequence_number}` lists its cues"),
+            ));
+        };
+        let Some(attribute) = spec.attribute else {
+            return Ok(CommandOutcome::with_lines(
+                self.cue_timing_table(sequence_number, index),
+            ));
+        };
+        let canonical = self.resolve_cue_attribute(sequence_number, index, &attribute)?;
+        if spec.fade.is_none() && spec.delay.is_none() && spec.curve.is_none() && !spec.off {
+            let line = self.cue_timing_line(sequence_number, index, &canonical);
+            return Ok(CommandOutcome::message(line));
+        }
+        for (label, value) in [("fade", spec.fade), ("delay", spec.delay)] {
+            if let Some(value) = value {
+                if !value.is_finite() || !(0.0..=MAX_TIME).contains(&value) {
+                    return Err(CommandError::new(format!(
+                        "{label} {value} is outside 0..={MAX_TIME} seconds"
+                    )));
+                }
+            }
+        }
+        let message = if spec.off {
+            format!("`{canonical}` follows the cue fade and delay again")
+        } else {
+            let mut parts = Vec::new();
+            if let Some(fade) = spec.fade {
+                parts.push(format!("fade {fade:.1}s"));
+            }
+            if let Some(delay) = spec.delay {
+                parts.push(format!("delay {delay:.1}s"));
+            }
+            if let Some(curve) = spec.curve {
+                parts.push(curve.label().to_string());
+            }
+            format!("`{canonical}` {}", parts.join(", "))
+        };
+        self.mutate(|show| {
+            if let Some(index) = show.sequence_index(sequence_number) {
+                if let Some(cue) = show.sequences[index].cue_mut(number) {
+                    if spec.off {
+                        cue.timing.remove(&canonical);
+                    } else {
+                        let entry = cue.timing.entry(canonical.clone()).or_default();
+                        if let Some(fade) = spec.fade {
+                            entry.fade = Some(fade);
+                        }
+                        if let Some(delay) = spec.delay {
+                            entry.delay = Some(delay);
+                        }
+                        if let Some(curve) = spec.curve {
+                            entry.curve = curve;
+                        }
+                        // An entry that overrides nothing is not kept, so the
+                        // stored map lists exactly what differs from the cue.
+                        if entry.fade.is_none()
+                            && entry.delay.is_none()
+                            && entry.curve == Curve::Linear
+                        {
+                            cue.timing.remove(&canonical);
+                        }
+                    }
+                }
+            }
+            Ok(message.clone())
+        })?;
+        Ok(CommandOutcome::message(format!(
+            "Cue {} in sequence {sequence_number}: {message}",
+            format_cue_number(number)
+        )))
+    }
+
+    fn cue_stagger(
+        &mut self,
+        sequence_number: u16,
+        number: f64,
+        stagger: f64,
+    ) -> Result<CommandOutcome, CommandError> {
+        if !stagger.is_finite() || !(0.0..=MAX_TIME).contains(&stagger) {
+            return Err(CommandError::new(format!(
+                "stagger {stagger} is outside 0..={MAX_TIME} seconds"
+            )));
+        }
+        let Some(sequence) = self.show.sequence(sequence_number) else {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence_number} does not exist"),
+                "`Sequence` lists the sequences",
+            ));
+        };
+        if sequence.cue_index(number).is_none() {
+            return Err(CommandError::with_hint(
+                format!(
+                    "sequence {sequence_number} has no cue {}",
+                    format_cue_number(number)
+                ),
+                format!("`Sequence {sequence_number}` lists its cues"),
+            ));
+        }
+        let label = format_cue_number(number);
+        let message = self.mutate(|show| {
+            if let Some(index) = show.sequence_index(sequence_number) {
+                if let Some(cue) = show.sequences[index].cue_mut(number) {
+                    cue.stagger = stagger;
+                }
+            }
+            Ok(if stagger > 0.0 {
+                format!(
+                    "Cue {label} in sequence {sequence_number}: each fixture starts {stagger:.2}s after the one before"
+                )
+            } else {
+                format!("Cue {label} in sequence {sequence_number}: no stagger")
+            })
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn cue_timing_table(&self, sequence_number: u16, index: usize) -> Vec<String> {
+        let Some(sequence) = self.show.sequence(sequence_number) else {
+            return vec![format!("Sequence {sequence_number} does not exist.")];
+        };
+        let Some(cue) = sequence.cues.get(index) else {
+            return vec![format!(
+                "sequence {sequence_number} has no cue at that position"
+            )];
+        };
+        let mut lines = vec![format!(
+            "Cue {} in sequence {sequence_number}: fade {:.1}s, delay {:.1}s{}",
+            format_cue_number(cue.number),
+            cue.fade,
+            cue.delay,
+            if cue.stagger > 0.0 {
+                format!(", stagger {:.2}s", cue.stagger)
+            } else {
+                String::new()
+            }
+        )];
+        if cue.timing.is_empty() {
+            lines.push(
+                "No per-attribute timing: every attribute follows the cue fade and delay."
+                    .to_string(),
+            );
+            return lines;
+        }
+        lines.push(format!(
+            "{:<16} {:>8} {:>8}  {}",
+            "Attribute", "Fade", "Delay", "Curve"
+        ));
+        for (attribute, timing) in &cue.timing {
+            lines.push(format!(
+                "{:<16} {:>7.1}s {:>7.1}s  {}",
+                truncate(attribute, 16),
+                timing.fade.unwrap_or(cue.fade),
+                timing.delay.unwrap_or(cue.delay),
+                timing.curve.label()
+            ));
+        }
+        lines
+    }
+
+    fn cue_timing_line(&self, sequence_number: u16, index: usize, attribute: &str) -> String {
+        let Some(sequence) = self.show.sequence(sequence_number) else {
+            return format!("Sequence {sequence_number} does not exist.");
+        };
+        let Some(cue) = sequence.cues.get(index) else {
+            return "The cue no longer exists.".to_string();
+        };
+        let label = format!(
+            "Cue {} in sequence {sequence_number}",
+            format_cue_number(cue.number)
+        );
+        match timing_for(cue, attribute) {
+            None => format!("{label}: `{attribute}` follows the cue fade and delay"),
+            Some(timing) => format!(
+                "{label}: `{attribute}` fade {:.1}s, delay {:.1}s, {}",
+                timing.fade.unwrap_or(cue.fade),
+                timing.delay.unwrap_or(cue.delay),
+                timing.curve.label()
+            ),
+        }
+    }
+
+    /// Store a timing key in the spelling the cue or a fixture mode uses, so
+    /// `Timing colour …` and `Timing ColorAdd_R …` name the same lane. An
+    /// attribute none of the cue's fixtures has is rejected, naming it.
+    fn resolve_cue_attribute(
+        &self,
+        sequence_number: u16,
+        index: usize,
+        typed: &str,
+    ) -> Result<String, CommandError> {
+        let Some(sequence) = self.show.sequence(sequence_number) else {
+            return Err(CommandError::new(format!(
+                "sequence {sequence_number} does not exist"
+            )));
+        };
+        let Some(cue) = sequence.cues.get(index) else {
+            return Err(CommandError::new("the cue no longer exists"));
+        };
+        let state = sequence.state_at(index);
+        let mut names: Vec<&String> = cue
+            .levels
+            .fixtures()
+            .flat_map(|(_, attributes)| attributes.keys())
+            .collect();
+        names.extend(cue.timing.keys());
+        names.extend(
+            state
+                .fixtures()
+                .flat_map(|(_, attributes)| attributes.keys()),
+        );
+        if let Some(name) = names
+            .into_iter()
+            .find(|name| name.eq_ignore_ascii_case(typed))
+        {
+            return Ok(name.clone());
+        }
+
+        let fixtures: Vec<u16> = if cue.levels.is_empty() {
+            self.show
+                .fixtures
+                .iter()
+                .map(|fixture| fixture.number)
+                .collect()
+        } else {
+            cue.levels.fixtures().map(|(number, _)| number).collect()
+        };
+        let mut known: Vec<&str> = Vec::new();
+        for number in fixtures {
+            let Some(fixture) = self.show.fixture(number) else {
+                continue;
+            };
+            let Ok((fixture_type, _)) = self.show.mode_for(fixture) else {
+                continue;
+            };
+            if let Some(attribute) = fixture_type.attribute(typed) {
+                return Ok(attribute.name.clone());
+            }
+            known.extend(
+                fixture_type
+                    .attributes
+                    .iter()
+                    .map(|attribute| attribute.name.as_str()),
+            );
+        }
+        known.sort_unstable();
+        known.dedup();
+        Err(CommandError::with_hint(
+            format!(
+                "`{typed}` is not an attribute of the fixtures cue {} uses",
+                format_cue_number(cue.number)
+            ),
+            if known.is_empty() {
+                "patch a fixture first: `Sheet` lists what is patched".to_string()
+            } else {
+                format!("known attributes: {}", known.join(", "))
+            },
+        ))
     }
 
     fn delete_cue(
@@ -1846,6 +2156,26 @@ impl Engine {
                                 ""
                             }
                         ));
+                        // Only overrides print, so a plain cue list stays one
+                        // line per cue.
+                        for (attribute, timing) in &cue.timing {
+                            if timing.fade.is_none()
+                                && timing.delay.is_none()
+                                && timing.curve == Curve::Linear
+                            {
+                                continue;
+                            }
+                            lines.push(format!(
+                                "  Timing  {:<16} fade {:.1}s  delay {:.1}s  {}",
+                                truncate(attribute, 16),
+                                timing.fade.unwrap_or(cue.fade),
+                                timing.delay.unwrap_or(cue.delay),
+                                timing.curve.label()
+                            ));
+                        }
+                        if cue.stagger > 0.0 {
+                            lines.push(format!("  Stagger {:.2}s between fixtures", cue.stagger));
+                        }
                     }
                     CommandOutcome::with_lines(lines)
                 }
@@ -3673,6 +4003,9 @@ pub const HELP: &[&str] = &[
     "Store Cue 1 [\"name\"] [Fade 2] [Delay 0.5] [Mib] [Sequence 2]",
     "Store Cue 2 Follow 1.5 / Time 0.5  start without a button",
     "Cue 2 Trigger Go / Follow 1 / Time 2  retime a stored cue",
+    "Cue 2 Timing ColorAdd_R Fade 0.5 [Delay 0] [Curve EaseOut]",
+    "Cue 2 Timing ColorAdd_R / Timing / Timing ColorAdd_R Off",
+    "Cue 2 Stagger 0.2                   start each fixture after the one before",
     "Delete Cue 1 [Sequence 2] / Sequence [2]  delete or list cues",
     "Undo / Redo                            step through show edits",
     "Store Timecode 1 \"Song\" [Fps 25]       create a timecode show",
@@ -4867,6 +5200,129 @@ mod tests {
     }
 
     #[test]
+    fn per_attribute_timing_reaches_the_output() {
+        let mut engine = engine();
+        let start = engine.clock();
+        engine.tick(start);
+        engine.execute("Fixture 1 At 0").unwrap();
+        engine.execute("Fixture 1 At ColorAdd_R 0").unwrap();
+        engine.execute("Store Cue 1 Fade 0").unwrap();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Fixture 1 At ColorAdd_R Full").unwrap();
+        engine.execute("Store Cue 2 Fade 2").unwrap();
+        engine.execute("Cue 2 Timing ColorAdd_R Fade 0.5").unwrap();
+        engine
+            .execute("Cue 2 Timing Dimmer Delay 1.5 Curve Snap")
+            .unwrap();
+        engine.execute("Clear All").unwrap();
+        engine.execute("Go Sequence 1").unwrap();
+        engine.execute("Go Sequence 1").unwrap();
+
+        engine.tick(start + Duration::from_secs(1));
+        assert_eq!(
+            engine.render().slot(1, 2),
+            Some(255),
+            "colour arrives first"
+        );
+        assert_eq!(
+            engine.render().slot(1, 1),
+            Some(0),
+            "the dimmer is still held"
+        );
+
+        engine.tick(start + Duration::from_secs(2));
+        assert_eq!(engine.render().slot(1, 1), Some(255), "the dimmer snapped");
+    }
+
+    #[test]
+    fn per_attribute_timing_round_trips_through_save_and_load() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 1 Fade 2").unwrap();
+        engine
+            .execute("Cue 1 Timing ColorAdd_R Fade 0.5 Curve EaseOut")
+            .unwrap();
+        engine.execute("Cue 1 Stagger 0.2").unwrap();
+
+        let path = std::env::temp_dir().join(format!(
+            "openlight-{}-timing.olshow.json",
+            std::process::id()
+        ));
+        engine
+            .execute(&format!("Save \"{}\"", path.display()))
+            .unwrap();
+        let show = Show::load(&path).unwrap();
+        let cue = &show.sequences[0].cues[0];
+        let timing = cue.timing.get("ColorAdd_R").expect("timing is stored");
+        assert_eq!(timing.fade, Some(0.5));
+        assert_eq!(timing.curve, Curve::EaseOut);
+        assert_eq!(cue.stagger, 0.2);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("oldesk"));
+        let _ = std::fs::remove_file(crate::journal::path_for(&path, ".bak"));
+        let _ = std::fs::remove_file(crate::journal::path_for(&path, ".autosave"));
+    }
+
+    #[test]
+    fn timing_off_restores_the_cue_fade() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 1 Fade 2").unwrap();
+        engine.execute("Cue 1 Timing Dimmer Fade 0.5").unwrap();
+
+        let listing = engine.execute("Sequence 1").unwrap().lines.join("\n");
+        assert!(listing.contains("Timing"), "{listing}");
+        assert!(listing.contains("0.5"), "{listing}");
+
+        engine.execute("Cue 1 Timing Dimmer Off").unwrap();
+        assert!(
+            engine.show.sequences[0].cues[0].timing.is_empty(),
+            "an override that overrides nothing is dropped"
+        );
+        let line = engine
+            .execute("Cue 1 Timing Dimmer")
+            .unwrap()
+            .lines
+            .join("\n");
+        assert!(line.contains("follows the cue fade"), "{line}");
+    }
+
+    #[test]
+    fn timing_an_attribute_the_fixtures_lack_is_rejected() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        let error = engine.execute("Cue 1 Timing Pan Fade 1").unwrap_err();
+        assert!(error.message.contains("Pan"), "{error}");
+        assert!(engine.show.sequences[0].cues[0].timing.is_empty());
+    }
+
+    #[test]
+    fn timing_a_running_cue_does_not_disturb_the_run() {
+        let mut engine = engine();
+        let start = engine.clock();
+        engine.tick(start);
+        engine.execute("Fixture 1 At 0").unwrap();
+        engine.execute("Store Cue 1 Fade 0").unwrap();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 2 Fade 1").unwrap();
+        engine.execute("Clear All").unwrap();
+        engine.execute("Go Sequence 1").unwrap();
+        engine.execute("Go Sequence 1").unwrap();
+        engine.tick(start + Duration::from_millis(500));
+        assert_eq!(engine.render().slot(1, 1), Some(128));
+
+        engine.execute("Cue 2 Timing Dimmer Fade 0").unwrap();
+        engine.tick(start + Duration::from_millis(500));
+        assert_eq!(
+            engine.render().slot(1, 1),
+            Some(128),
+            "the run keeps the plan it started with"
+        );
+    }
+
+    #[test]
     fn timecode_drives_cues_from_the_engine_clock() {
         let mut engine = engine();
         let start = engine.clock();
@@ -5328,7 +5784,7 @@ mod tests {
         assert_eq!(tail.incomplete, 0);
 
         let mut recovered = engine();
-        let report = recovered.recover(&tail, Path::new(NO_SHOW), 0);
+        let report = recovered.recover(&tail, Path::new(NO_SHOW), ReplayFrom::File);
         assert_eq!(report.applied, 2, "{report:?}");
         assert!(report.skipped.is_empty(), "{report:?}");
         assert_eq!(recovered.show, show);
@@ -5342,7 +5798,7 @@ mod tests {
         // Replaying inside a live session must not journal the replay itself.
         recovered.set_journal(Some(crate::journal::Journal::open(path.clone()).unwrap()));
         let before = crate::journal::read(&path).unwrap().entries.len();
-        recovered.recover(&tail, Path::new(NO_SHOW), 0);
+        recovered.recover(&tail, Path::new(NO_SHOW), ReplayFrom::File);
         assert_eq!(crate::journal::read(&path).unwrap().entries.len(), before);
         let _ = std::fs::remove_file(&path);
     }
@@ -5368,7 +5824,7 @@ mod tests {
             incomplete: 1,
         };
         let mut engine = engine();
-        let report = engine.recover(&tail, Path::new(NO_SHOW), 0);
+        let report = engine.recover(&tail, Path::new(NO_SHOW), ReplayFrom::File);
         assert_eq!(report.applied, 1);
         assert_eq!(report.skipped.len(), 1, "the missing fixture is not fatal");
         assert!(report.skipped[0].contains("Fixture 99"));
@@ -5391,7 +5847,7 @@ mod tests {
             incomplete: 0,
         };
         let mut engine = engine();
-        let report = engine.recover(&tail, Path::new(NO_SHOW), 0);
+        let report = engine.recover(&tail, Path::new(NO_SHOW), ReplayFrom::File);
         assert_eq!(report.applied, 1);
         assert_eq!(report.stopped, Some(3));
         assert_eq!(
@@ -5427,7 +5883,7 @@ mod tests {
         let tail = crate::journal::read(&journal).unwrap();
         assert_eq!(tail.entries.len(), 4, "{tail:#?}");
         assert_eq!(tail.entries[2].kind, crate::journal::EntryKind::Checkpoint);
-        assert_eq!(tail.baseline(&show_path, 0).rev, 3);
+        assert_eq!(tail.baseline(&show_path, ReplayFrom::File).rev, 3);
 
         let (mut reopened, _) = Engine::open(&show_path).unwrap();
         assert_eq!(
@@ -5435,7 +5891,7 @@ mod tests {
             Some(0.4),
             "the file holds the undone value"
         );
-        let report = reopened.recover(&tail, &show_path, 0);
+        let report = reopened.recover(&tail, &show_path, ReplayFrom::File);
         assert_eq!(
             report.applied, 1,
             "only the edit after the save: {report:?}"
@@ -5482,10 +5938,10 @@ mod tests {
         let snapshot = crate::journal::Snapshot::load(&path).unwrap().unwrap();
         assert_eq!(
             snapshot.rev,
-            engine.journal().unwrap().rev(),
+            Some(engine.journal().unwrap().rev()),
             "a snapshot records a journal revision, not a render count"
         );
-        assert_eq!(snapshot.rev, 2, "the edit, then the save checkpoint");
+        assert_eq!(snapshot.rev, Some(2), "the edit, then the save checkpoint");
 
         let lines = engine.execute("Status").unwrap().lines;
         assert!(

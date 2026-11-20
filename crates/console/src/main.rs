@@ -259,13 +259,18 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
                     for warning in warnings {
                         println!("Warning: {warning}");
                     }
-                    println!(
-                        "Recovering from autosave {} (revision {})",
-                        snapshot.at, snapshot.rev
-                    );
-                    snapshot.rev
+                    match snapshot.rev {
+                        Some(rev) => {
+                            println!("Recovering from autosave {} (revision {rev})", snapshot.at)
+                        }
+                        None => println!(
+                            "Recovering from autosave {} (taken with the journal off)",
+                            snapshot.at
+                        ),
+                    }
+                    snapshot.replay_from()
                 }
-                None => 0,
+                None => engine::journal::ReplayFrom::File,
             };
             let tail = engine::journal::read(&engine::journal::path_for(&show_path, ".journal"))?;
             let report = engine.recover(&tail, &show_path, from);
