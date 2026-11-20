@@ -123,6 +123,28 @@ and `Sequence::rebase` rewrites every delta so no cue's look moves. `Delete Cue`
 refuses when a timecode event starts the cue and names the event and position
 instead of failing with a generic validation error. Show v9.
 
+## Blind, preview and highlight (09)
+
+`Blind` keeps the programmer off the stage without a second buffer: `At`,
+`Store` and `Update` still work and `Sheet` still lists the values, but the
+renderer substitutes an empty programmer for as long as blind is on. Playback
+keeps running, so editing during a show does not freeze it, and `Blind Off`
+makes the edit appear in one frame. Blind is saved with the desk, and `Status`
+and the shell header both carry a marker.
+
+`Preview Cue 14 [Sequence 2]` renders that cue's tracked state with no
+programmer, effects or masters and prints its first non-zero channels in
+`Sheet`; a bare `Preview` inspects the next cue of the running sequence, and a
+single-sequence show needs no `Sequence` clause. The frame is only a listing
+value, never sent. `Preview Off` clears it, deleting the cue clears it with a
+message, and moving the cue carries it to the new number.
+
+`Highlight` holds every selected fixture at full intensity in the renderer,
+after the programmer/playback/home chain and before the masters, so a grand
+master still dims it. It is never a programmer write, so a store cannot capture
+it, and colour and position are untouched. A blackout clears it, blind
+suppresses it, and `Clear` (selection gone) and `Release` clear it too.
+
 ## Known limitations
 
 - **No DMX hardware in the test environment.** Timing is exercised against a
@@ -134,5 +156,5 @@ instead of failing with a generic validation error. Show v9.
 - **Home is per fixture and attribute.** There is no per-mode home table, no
   park/default distinction and no automatic re-seed when a profile is
   re-imported.
-- **Only eight of the eighteen roadmap designs are built.** The remaining
-  ten are listed in [`ROADMAP.md`](ROADMAP.md).
+- **Only nine of the eighteen roadmap designs are built.** The remaining
+  nine are listed in [`ROADMAP.md`](ROADMAP.md).

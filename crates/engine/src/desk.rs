@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::levels::Levels;
+use crate::playback::format_cue_number;
 use crate::show::{Show, MAX_RATE_MASTER};
 
 pub const DESK_FORMAT: &str = "openlight-desk";
@@ -168,6 +169,25 @@ impl RunState {
     }
 }
 
+/// A cue the operator is inspecting. Not a saved intent: the engine resolves
+/// the cue number on every render, so a preview follows edits to the show until
+/// the cue it names is gone.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Preview {
+    pub sequence: u16,
+    pub cue: f64,
+}
+
+impl Preview {
+    pub fn label(&self) -> String {
+        format!(
+            "cue {} in sequence {}",
+            format_cue_number(self.cue),
+            self.sequence
+        )
+    }
+}
+
 /// Everything the desk owns. Survives a save; never travels inside a show.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Desk {
@@ -175,6 +195,14 @@ pub struct Desk {
     pub selection: Vec<u16>,
     /// The programmer: un-stored values that win over playback.
     pub programmer: Levels,
+    /// True while the programmer is kept off the stage.
+    pub blind: bool,
+    /// True while selected fixtures are held at full intensity as an output
+    /// aid. Never a programmer value, so it cannot be stored into a cue.
+    pub highlight: bool,
+    /// The cue `Sheet` is inspecting. Transient: never written to the desk
+    /// file, because a preview is a view, not a saved intent.
+    pub preview: Option<Preview>,
     /// Active world: limits selection and programming, never output.
     pub world: Option<u16>,
     /// Active filter: limits the features commands may touch.
@@ -339,6 +367,20 @@ impl Desk {
             }
         }
 
+        if let Some(preview) = self.preview {
+            let live = show
+                .sequence(preview.sequence)
+                .and_then(|sequence| sequence.cue_index(preview.cue))
+                .is_some();
+            if !live {
+                self.preview = None;
+                warnings.push(format!(
+                    "desk: preview of {} no longer exists; cleared",
+                    preview.label()
+                ));
+            }
+        }
+
         if let Some(number) = self.world {
             if show.world(number).is_none() {
                 self.world = None;
@@ -432,6 +474,10 @@ impl Desk {
         let mut desk = Desk {
             selection: file.selection,
             programmer: file.programmer,
+            blind: file.blind,
+            highlight: file.highlight,
+            // A preview is a view, not an intent: it never survives a reload.
+            preview: None,
             world: file.world,
             filter: file.filter,
             masters,
@@ -464,6 +510,8 @@ impl Desk {
             show: show.name.clone(),
             selection: self.selection.clone(),
             programmer: self.programmer.clone(),
+            blind: self.blind,
+            highlight: self.highlight,
             world: self.world,
             filter: self.filter,
             masters: self.masters.clone(),
@@ -546,6 +594,10 @@ pub struct DeskFile {
     selection: Vec<u16>,
     #[serde(default)]
     programmer: Levels,
+    #[serde(default)]
+    blind: bool,
+    #[serde(default)]
+    highlight: bool,
     #[serde(default)]
     world: Option<u16>,
     #[serde(default)]
@@ -688,6 +740,43 @@ mod tests {
         assert!(loaded.runs.is_empty());
         assert!(warnings.len() >= 6, "{warnings:#?}");
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn blind_and_highlight_round_trip_but_preview_does_not() {
+        let show = demo_show();
+        let mut desk = Desk::new();
+        desk.blind = true;
+        desk.highlight = true;
+        desk.preview = Some(Preview {
+            sequence: 1,
+            cue: 2.0,
+        });
+
+        let path = temp_path("modes");
+        desk.save(&path, &show).unwrap();
+        let (loaded, warnings) = Desk::load(&path, &show).unwrap().unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(loaded.blind, "blind is saved desk state");
+        assert!(loaded.highlight, "highlight is saved desk state");
+        assert_eq!(loaded.preview, None, "a preview is a transient view");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_dangling_preview_is_cleared_with_a_warning() {
+        let show = demo_show();
+        let mut desk = Desk::new();
+        desk.preview = Some(Preview {
+            sequence: 9,
+            cue: 4.0,
+        });
+        let warnings = desk.sanitise(&show);
+        assert_eq!(desk.preview, None);
+        assert!(
+            warnings.iter().any(|warning| warning.contains("preview")),
+            "{warnings:?}"
+        );
     }
 
     #[test]

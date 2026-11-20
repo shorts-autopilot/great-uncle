@@ -94,9 +94,19 @@ pub fn intensity_master(show: &Show, masters: &Masters, fixture: u16) -> f64 {
     masters.grand * group
 }
 
-/// One fixture's output at the current moment: programmer over playback, then
-/// effects, then masters. Shared by the renderer and the fixture sheet so both
-/// describe the same output.
+/// The highlight override: selected fixtures at full intensity.
+///
+/// An output aid, not a programmer value. Only the renderer applies it, so a
+/// listing still shows the programmed look and no store can capture it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Highlight<'a> {
+    pub on: bool,
+    pub fixtures: &'a [u16],
+}
+
+/// One fixture's look at the current moment: programmer over playback, then
+/// effects, then masters. The renderer adds an optional highlight override and
+/// the fixture sheet reads the un-overridden values.
 pub struct Stage<'a> {
     show: &'a Show,
     programmer: &'a Levels,
@@ -104,6 +114,7 @@ pub struct Stage<'a> {
     effects: &'a EffectOutput,
     masters: &'a Masters,
     blackout: f64,
+    highlight: Highlight<'a>,
 }
 
 impl<'a> Stage<'a> {
@@ -122,7 +133,14 @@ impl<'a> Stage<'a> {
             effects,
             masters,
             blackout,
+            highlight: Highlight::default(),
         }
+    }
+
+    /// Apply the highlight override to the rendered values.
+    pub fn with_highlight(mut self, highlight: Highlight<'a>) -> Self {
+        self.highlight = highlight;
+        self
     }
 
     /// Where the base value comes from, before effects and masters.
@@ -139,6 +157,30 @@ impl<'a> Stage<'a> {
     }
 
     pub fn level(&self, fixture: &Fixture, attribute: &str) -> f64 {
+        self.apply_masters(fixture, attribute, self.base_level(fixture, attribute))
+    }
+
+    /// The rendered value: like [`Stage::level`], but selected fixtures are
+    /// held at full on their intensity attributes while highlight is on.
+    ///
+    /// The override happens after the programmer/playback/home chain and
+    /// effects and before the masters, so a grand master still dims a
+    /// highlighted rig. Only the renderer calls this; listings keep showing the
+    /// programmed look.
+    pub fn output_level(&self, fixture: &Fixture, attribute: &str) -> f64 {
+        let base = if self.highlight.on
+            && is_intensity(attribute)
+            && self.highlight.fixtures.contains(&fixture.number)
+        {
+            1.0
+        } else {
+            self.base_level(fixture, attribute)
+        };
+        self.apply_masters(fixture, attribute, base)
+    }
+
+    /// Programmer over playback over home, then effects. No masters.
+    fn base_level(&self, fixture: &Fixture, attribute: &str) -> f64 {
         // Programmer beats playback beats home beats nothing.
         let base = match self.source(fixture, attribute) {
             ValueSource::Programmer => self
@@ -149,10 +191,15 @@ impl<'a> Stage<'a> {
             ValueSource::Home => self.show.home_level(fixture, attribute),
             ValueSource::None => 0.0,
         };
-        let level = match self.effects.get(fixture.number, attribute) {
+        match self.effects.get(fixture.number, attribute) {
             Some(offset) => (base + offset).clamp(0.0, 1.0),
             None => base,
-        };
+        }
+    }
+
+    /// Intensity is scaled by the group and grand masters and by blackout;
+    /// colour and position pass through untouched.
+    fn apply_masters(&self, fixture: &Fixture, attribute: &str, level: f64) -> f64 {
         if is_intensity(attribute) {
             level * intensity_master(self.show, self.masters, fixture.number) * self.blackout
         } else {
@@ -174,12 +221,34 @@ pub fn render(
     masters: &Masters,
     blackout: f64,
 ) -> OutputFrame {
+    render_with_highlight(
+        show,
+        programmer,
+        playback,
+        effects,
+        masters,
+        blackout,
+        Highlight::default(),
+    )
+}
+
+/// Render every universe with an optional highlight override.
+pub fn render_with_highlight(
+    show: &Show,
+    programmer: &Levels,
+    playback: &Levels,
+    effects: &EffectOutput,
+    masters: &Masters,
+    blackout: f64,
+    highlight: Highlight<'_>,
+) -> OutputFrame {
     let mut frame = OutputFrame::default();
     for universe in &show.universes {
         frame.ensure(universe.number);
     }
 
-    let stage = Stage::new(show, programmer, playback, effects, masters, blackout);
+    let stage = Stage::new(show, programmer, playback, effects, masters, blackout)
+        .with_highlight(highlight);
     for fixture in &show.fixtures {
         let Ok((_, mode)) = show.mode_for(fixture) else {
             continue;
@@ -189,7 +258,7 @@ pub fn render(
         };
         let base = usize::from(fixture.address.saturating_sub(1));
         for channel in &mode.channels {
-            let level = stage.level(fixture, &channel.attribute);
+            let level = stage.output_level(fixture, &channel.attribute);
             let raw = channel.raw_from_level(level);
             let offset = base + usize::from(channel.offset.saturating_sub(1));
             if offset < DMX_SLOTS {
@@ -568,5 +637,105 @@ mod tests {
             0.5,
         );
         assert_eq!(frame.slot(1, 1), Some(128));
+    }
+
+    fn two_fixture_show() -> Show {
+        let mut show = demo_show();
+        show.fixtures.push(Fixture {
+            number: 2,
+            name: "Second".into(),
+            type_key: "OpenLight Demo Wash".into(),
+            mode: "4ch".into(),
+            universe: 1,
+            address: 5,
+            home: Default::default(),
+        });
+        show
+    }
+
+    #[test]
+    fn highlight_lifts_selected_intensity_only() {
+        let show = two_fixture_show();
+        let programmer = programmer(
+            &show,
+            &[
+                (1, "Dimmer", 0.2),
+                (1, "ColorAdd_R", 0.5),
+                (2, "Dimmer", 0.5),
+            ],
+        );
+        let frame = render_with_highlight(
+            &show,
+            &programmer,
+            &Levels::new(),
+            &EffectOutput::default(),
+            &masters(),
+            1.0,
+            Highlight {
+                on: true,
+                fixtures: &[1],
+            },
+        );
+        assert_eq!(frame.slot(1, 1), Some(255), "selected fixture is full");
+        assert_eq!(frame.slot(1, 2), Some(128), "colour is untouched");
+        assert_eq!(
+            frame.slot(1, 5),
+            Some(128),
+            "an unselected fixture keeps its level"
+        );
+    }
+
+    #[test]
+    fn highlight_happens_before_the_masters() {
+        let show = demo_show();
+        let programmer = programmer(&show, &[(1, "Dimmer", 0.2)]);
+        let mut masters = masters();
+        masters.grand = 0.5;
+        let playback = Levels::new();
+        let effects = EffectOutput::default();
+        let stage = Stage::new(&show, &programmer, &playback, &effects, &masters, 1.0)
+            .with_highlight(Highlight {
+                on: true,
+                fixtures: &[1],
+            });
+        let fixture = &show.fixtures[0];
+        assert_eq!(
+            stage.level(fixture, "Dimmer"),
+            0.1,
+            "the listing is untouched"
+        );
+        assert_eq!(
+            stage.output_level(fixture, "Dimmer"),
+            0.5,
+            "highlight is scaled by the grand master"
+        );
+        assert_eq!(stage.output_level(fixture, "ColorAdd_R"), 0.0);
+    }
+
+    #[test]
+    fn an_off_highlight_changes_nothing() {
+        let show = demo_show();
+        let programmer = programmer(&show, &[(1, "Dimmer", 0.2)]);
+        let plain = render(
+            &show,
+            &programmer,
+            &Levels::new(),
+            &EffectOutput::default(),
+            &masters(),
+            1.0,
+        );
+        let off = render_with_highlight(
+            &show,
+            &programmer,
+            &Levels::new(),
+            &EffectOutput::default(),
+            &masters(),
+            1.0,
+            Highlight {
+                on: false,
+                fixtures: &[1],
+            },
+        );
+        assert_eq!(off, plain);
     }
 }

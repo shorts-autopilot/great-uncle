@@ -19,7 +19,7 @@ profiles that you supply.
 | 2 | Palettes, cues, sequences, executor faders | done — see [`docs/PHASE2.md`](docs/PHASE2.md) |
 | 3 | Groups, worlds, filters, masters, effects | done — see [`docs/PHASE3.md`](docs/PHASE3.md) |
 | 4 | Timecode, move-in-black, undo, first UI shell | done — see [`docs/PHASE4.md`](docs/PHASE4.md) |
-| 5+ | desk state, output, journal, blackout/lock, cues, timing, home, cue editing | in progress — 03, 04, 05, 06, 01, 02, 07 and 10 built; see [`docs/PHASE5.md`](docs/PHASE5.md) |
+| 5+ | desk state, output, journal, blackout/lock, cues, timing, home, cue editing, viewing | in progress — 03, 04, 05, 06, 01, 02, 07, 10 and 09 built; see [`docs/PHASE5.md`](docs/PHASE5.md) |
 | 5+ | patch tools, GUI, … | designed — see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 
 It is a console with a command line, a full-screen terminal shell, a script
@@ -49,12 +49,17 @@ state so later edits upstream cannot move it, `Cue 2 Shield Pan` asserts one
 attribute at a fixed level, and `Cue 2 Show` prints the absolute look. `Update
 Cue 2` merges the programmer into a stored cue, `Store Cue 2 Replace` keeps only
 what the programmer has, and `Cue 2 Move` / `Copy` renumber or copy a cue
-without changing any look. There is no desktop GUI yet.
+without changing any look. A blind desk edits the programmer without sending it:
+`Blind` keeps the programmer off the stage while playback keeps running, and
+`Blind Off` shows the edit in one frame. `Preview Cue 14` renders a stored cue
+without sending it and prints its first non-zero channels in `Sheet`, while
+`Highlight` holds the selected fixtures at full intensity as an output aid that
+can never be stored. There is no desktop GUI yet.
 
 ## Quick start
 
 ```bash
-cargo test --workspace            # 294 tests, no hardware needed
+cargo test --workspace            # 311 tests, no hardware needed
 cargo run -p openlight-console    # interactive console
 cargo run -p openlight-console -- --ui   # full-screen terminal shell
 ```

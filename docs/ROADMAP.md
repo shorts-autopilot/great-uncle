@@ -3,7 +3,7 @@
 Phase 4 closed the first loop: the desk plays cues, follows timecode, moves in
 black and can undo. This document is the **design set for the next eighteen
 pieces of work**, ranked by value to a working desk. Each item has a design in
-[`docs/design/`](design/). Eight of them are built so far, in the order the
+[`docs/design/`](design/). Nine of them are built so far, in the order the
 designs ask for:
 
 | Item | State |
@@ -16,7 +16,8 @@ designs ask for:
 | 02 per-attribute timing, curves and stagger | **built** — cue `timing` map and `stagger`, `Cue n Timing …`, `Cue n Stagger`, one fade lane per attribute with quadratic curves, show v7 |
 | 07 fixture defaults and `Home` | **built** — per-fixture home with the profile's `Channel.Default` fallback, `Fixture n Default …`, `Home`, sheet sources `P`/`Pb`/`H`, show v8 |
 | 10 cue-editing safety | **built** — cue `blocked`/`shield`, `Sequence::rebase`, `Update`, `Store … Merge`/`Replace`, `Cue n Move`/`Copy`/`Show`, `Delete Cue` names a blocking timecode event, show v9 |
-| the other ten | designed, not built |
+| 09 blind, preview and highlight | **built** — desk `blind`/`highlight` and a transient preview, `Blind [Off]`, `Preview [Cue n] [Sequence n]` / `Preview Off`, `Highlight [Off]`, highlight as a render-stage override that no store can capture |
+| the other nine | designed, not built |
 
 The designs are written to be implemented one at a time. Every one names the
 files it touches, the command grammar it adds, the show/desk format change it

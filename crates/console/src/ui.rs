@@ -237,13 +237,14 @@ impl UiState {
         let body_height = height - CHROME;
 
         let left = format!(
-            " OpenLight — {}{}",
+            " OpenLight — {}{}{}",
             engine.show.name,
             if engine.desk.blackout.is_some() {
                 "   BLACKOUT"
             } else {
                 ""
-            }
+            },
+            if engine.desk.blind { "   BLIND" } else { "" }
         );
         let right = format!("{}  ", engine.timecode_status());
         let mut lines = vec![join(&left, &right, width)];
@@ -567,6 +568,18 @@ mod tests {
         assert!(lines[22].starts_with("openlight> "), "{:?}", lines[22]);
         assert!(lines[23].contains("Ctrl-D"), "{:?}", lines[23]);
         assert_eq!(lines[3].chars().count(), 80, "body is padded to width");
+    }
+
+    #[test]
+    fn the_header_marks_blind() {
+        let (mut state, mut engine) = state_and_engine();
+        type_line(&mut state, &mut engine, "Blind");
+        let lines = state.render(&mut engine, 80, 24);
+        assert!(lines[0].contains("BLIND"), "{:?}", lines[0]);
+
+        type_line(&mut state, &mut engine, "Blind Off");
+        let lines = state.render(&mut engine, 80, 24);
+        assert!(!lines[0].contains("BLIND"), "{:?}", lines[0]);
     }
 
     #[test]

@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use crate::command::{
     self, Command, CommandError, Level, LevelSource, PlaybackRef, StoreMode, TriggerArg,
 };
-use crate::desk::{Desk, RunState};
+use crate::desk::{Desk, Masters, Preview, RunState};
 use crate::effect::{Effect, Effects, Waveform, MAX_RATE_HZ, MAX_SPREAD_DEGREES};
 use crate::fixture_type::{FixtureType, DIMMER};
 use crate::gdtf;
@@ -29,7 +29,7 @@ use crate::playback::{
     Sequence, Target, Trigger, MAX_CUE_NUMBER, MAX_TIME,
 };
 use crate::pools::{Filter, Group, World};
-use crate::render::{self, OutputFrame, Stage};
+use crate::render::{self, Highlight, OutputFrame, Stage};
 use crate::show::{Fixture, Show, MAX_RATE_MASTER};
 use crate::timecode::{self, TimecodeEvent, TimecodePlayer, TimecodeShow, MAX_FPS, MIN_FPS};
 
@@ -382,14 +382,52 @@ impl Engine {
         let effects = self
             .effects
             .output(&self.show, self.desk.masters.rate, self.clock);
-        render::render(
+        // Blind replaces the programmer with an empty level map for this one
+        // render. Playback still runs: the programmer is the only layer that
+        // goes dark.
+        let empty = Levels::new();
+        let programmer = if self.desk.blind {
+            &empty
+        } else {
+            &self.desk.programmer
+        };
+        // A blind desk and a full blackout both outrank the highlight: an
+        // output aid must not defeat either one.
+        let highlight =
+            if self.desk.highlight && !self.desk.blind && !self.desk.is_blacked_out(self.clock) {
+                Highlight {
+                    on: true,
+                    fixtures: &self.desk.selection,
+                }
+            } else {
+                Highlight::default()
+            };
+        render::render_with_highlight(
             &self.show,
-            &self.desk.programmer,
+            programmer,
             self.playback.output(),
             &effects,
             &self.desk.masters,
             self.desk.blackout_master(self.clock),
+            highlight,
         )
+    }
+
+    /// Render the previewed cue with no programmer, effects or masters. Only
+    /// `Sheet` reads this value; it never reaches `Shared` or a transport.
+    pub fn preview_frame(&self) -> Option<OutputFrame> {
+        let preview = self.desk.preview?;
+        let sequence = self.show.sequence(preview.sequence)?;
+        let index = sequence.cue_index(preview.cue)?;
+        let levels = sequence.state_at(index);
+        Some(render::render(
+            &self.show,
+            &Levels::new(),
+            &levels,
+            &crate::effect::EffectOutput::default(),
+            &Masters::new(),
+            1.0,
+        ))
     }
 
     pub fn help_text(&self) -> Vec<String> {
@@ -593,6 +631,9 @@ impl Engine {
             Command::Pause { target } => self.playback_pause(target),
             Command::Release { target } => self.playback_release(target),
             Command::Blackout { off, fade } => self.set_blackout(off, fade),
+            Command::Blind { on } => self.set_blind(on),
+            Command::Preview { cue, sequence, off } => self.preview(cue, sequence, off),
+            Command::Highlight { on } => self.set_highlight(on),
             Command::Lock { code } => self.lock_desk(code),
             Command::Unlock { code } => self.unlock_desk(code),
             Command::Sheet => Ok(self.sheet()),
@@ -619,6 +660,10 @@ impl Engine {
             if fixtures.len() == 1 { "" } else { "s" }
         );
         self.desk.selection = fixtures;
+        // A selection change is normally invisible, but highlight renders it.
+        if self.desk.highlight {
+            self.revision += 1;
+        }
         Ok(CommandOutcome::message(message))
     }
 
@@ -758,6 +803,11 @@ impl Engine {
     fn clear(&mut self, all: bool, values: bool) -> Result<CommandOutcome, CommandError> {
         if !values {
             self.desk.selection.clear();
+            // Dropping a highlight is an output change even though no value
+            // was touched.
+            if std::mem::take(&mut self.desk.highlight) {
+                self.revision += 1;
+            }
             return Ok(CommandOutcome::message("Selection cleared"));
         }
         let targets: Vec<u16> = if all {
@@ -791,6 +841,7 @@ impl Engine {
         });
         if all {
             self.desk.selection.clear();
+            self.desk.highlight = false;
         }
         Ok(CommandOutcome::message(message))
     }
@@ -1207,10 +1258,14 @@ impl Engine {
         if self.show.fixtures.is_empty() {
             return CommandOutcome::message("No fixtures patched.");
         }
-        let mut lines = vec![format!(
+        let mut lines = Vec::new();
+        if let Some(banner) = self.preview_banner() {
+            lines.push(banner);
+        }
+        lines.push(format!(
             "{:<4} {:<22} {:<26} {:<10} {:<10} {}",
             "No.", "Name", "Type", "Mode", "Patch", "Output"
-        )];
+        ));
         let mut fixtures: Vec<&Fixture> = self.show.fixtures.iter().collect();
         fixtures.sort_by_key(|fixture| fixture.number);
         let playback = self.playback.output();
@@ -1343,6 +1398,12 @@ impl Engine {
             "Masters: grand {}% | rate {}%",
             (self.desk.masters.grand * 100.0).round() as i64,
             (self.desk.masters.rate * 100.0).round() as i64
+        ));
+        lines.push(format!(
+            "Blind: {} | Highlight: {} | Preview: {}",
+            if self.desk.blind { "on" } else { "off" },
+            if self.desk.highlight { "on" } else { "off" },
+            self.preview_summary()
         ));
         lines.push(format!(
             "Blackout: {} | Lock: {}",
@@ -2207,6 +2268,12 @@ impl Engine {
                 "Moved cue {label} to {target_label} in sequence {sequence_number}"
             ))
         })?;
+        // A preview follows the cue it names, even when the cue is renumbered.
+        if let Some(preview) = &mut self.desk.preview {
+            if preview.sequence == sequence_number && (preview.cue - number).abs() < 1e-9 {
+                preview.cue = to;
+            }
+        }
         Ok(CommandOutcome::message(message))
     }
 
@@ -2647,7 +2714,17 @@ impl Engine {
                 format_cue_number(number)
             ))
         })?;
-        Ok(CommandOutcome::message(message))
+        let previewed = self.desk.preview.is_some_and(|preview| {
+            preview.sequence == sequence_number && (preview.cue - number).abs() < 1e-9
+        });
+        if previewed {
+            self.desk.preview = None;
+        }
+        Ok(CommandOutcome::message(if previewed {
+            format!("{message}; preview cleared")
+        } else {
+            message
+        }))
     }
 
     fn sequence_list(&self, only: Option<u16>) -> CommandOutcome {
@@ -3169,6 +3246,9 @@ impl Engine {
         reference: Option<PlaybackRef>,
     ) -> Result<CommandOutcome, CommandError> {
         let target = self.resolve_target(reference)?;
+        // Releasing hands the stage back to the programmer, so the temporary
+        // full-intensity aid goes with it.
+        let highlighted = std::mem::take(&mut self.desk.highlight);
         if self.playback.release(target) {
             self.refresh_playback();
             Ok(CommandOutcome::message(format!(
@@ -3176,6 +3256,9 @@ impl Engine {
                 target.label()
             )))
         } else {
+            if highlighted {
+                self.revision += 1;
+            }
             Ok(CommandOutcome::message(format!(
                 "{} is not running",
                 target.label()
@@ -3745,6 +3828,11 @@ impl Engine {
             )));
         }
         let level = if off { 1.0 } else { 0.0 };
+        if !off {
+            // Safety beats convenience: a blackout that a highlight can undo
+            // is not a blackout.
+            self.desk.highlight = false;
+        }
         self.desk
             .set_blackout(level, std::time::Duration::from_secs_f64(fade), self.clock);
         self.revision += 1;
@@ -3753,6 +3841,194 @@ impl Engine {
         } else {
             "Blackout".to_string()
         }))
+    }
+
+    /// `Blind` / `Blind Off`: keep the programmer off the stage without making
+    /// a second buffer. The edit, the store and the listing all stay ordinary.
+    fn set_blind(&mut self, on: bool) -> Result<CommandOutcome, CommandError> {
+        self.desk.blind = on;
+        self.revision += 1;
+        Ok(CommandOutcome::message(if on {
+            "Blind; the programmer no longer reaches the stage"
+        } else {
+            "Blind off; the programmer is live"
+        }))
+    }
+
+    /// `Highlight` / `Highlight Off`: a render-stage output aid on the selected
+    /// fixtures. It is never written to the programmer, so no store captures it.
+    fn set_highlight(&mut self, on: bool) -> Result<CommandOutcome, CommandError> {
+        if on && self.desk.selection.is_empty() {
+            return Err(CommandError::with_hint(
+                "nothing selected to highlight",
+                "select fixtures first: `Fixture 1`",
+            ));
+        }
+        self.desk.highlight = on;
+        self.revision += 1;
+        Ok(CommandOutcome::message(if on {
+            "Highlight on; selected fixtures are at full intensity"
+        } else {
+            "Highlight off"
+        }))
+    }
+
+    /// `Preview [Cue n] [Sequence s]` / `Preview Off`.
+    fn preview(
+        &mut self,
+        cue: Option<f64>,
+        sequence: Option<u16>,
+        off: bool,
+    ) -> Result<CommandOutcome, CommandError> {
+        if off {
+            return Ok(CommandOutcome::message(
+                if self.desk.preview.take().is_some() {
+                    "Preview off"
+                } else {
+                    "No preview is active"
+                },
+            ));
+        }
+        let sequence_number = self.preview_sequence_number(sequence)?;
+        let sequence = self
+            .show
+            .sequence(sequence_number)
+            .expect("preview_sequence_number checked the sequence");
+        let number = match cue {
+            Some(number) => number,
+            None => {
+                // The next cue after whatever this sequence is running; with
+                // nothing running, its first cue.
+                let current = self
+                    .playback
+                    .runs()
+                    .filter(|(target, _)| {
+                        self.sequence_number_for(*target).ok() == Some(sequence_number)
+                    })
+                    .map(|(_, run)| run.cue_number)
+                    .next();
+                let index = current.map_or(0, |number| sequence.insertion_index(number));
+                sequence
+                    .cues
+                    .get(index)
+                    .map(|cue| cue.number)
+                    .ok_or_else(|| {
+                        CommandError::with_hint(
+                            format!("sequence {sequence_number} has no next cue"),
+                            "name one: `Preview Cue <n>`",
+                        )
+                    })?
+            }
+        };
+        let Some(index) = sequence.cue_index(number) else {
+            return Err(CommandError::with_hint(
+                format!(
+                    "sequence {sequence_number} has no cue {}",
+                    format_cue_number(number)
+                ),
+                format!("`Sequence {sequence_number}` lists its cues"),
+            ));
+        };
+        let values = sequence.state_at(index).len();
+        let preview = Preview {
+            sequence: sequence_number,
+            cue: number,
+        };
+        self.desk.preview = Some(preview);
+        Ok(CommandOutcome::message(format!(
+            "Previewing {} ({values} value{}); `Preview Off` clears it",
+            preview.label(),
+            if values == 1 { "" } else { "s" }
+        )))
+    }
+
+    /// Resolve which sequence a preview addresses: the one named, or the first
+    /// running playback.
+    fn preview_sequence_number(&self, requested: Option<u16>) -> Result<u16, CommandError> {
+        if let Some(number) = requested {
+            if self.show.sequence(number).is_none() {
+                return Err(CommandError::with_hint(
+                    format!("sequence {number} does not exist"),
+                    "`Sequence` lists the sequences",
+                ));
+            }
+            return Ok(number);
+        }
+        for (target, _) in self.playback.runs() {
+            if let Ok(number) = self.sequence_number_for(target) {
+                return Ok(number);
+            }
+        }
+        // With one sequence there is nothing to disambiguate, so a bare
+        // `Preview Cue 14` is the common single-list case.
+        if self.show.sequences.len() == 1 {
+            return Ok(self.show.sequences[0].number);
+        }
+        Err(CommandError::with_hint(
+            "no playback is running to preview",
+            "name one: `Preview Cue 14 Sequence 2`, or store a cue first",
+        ))
+    }
+
+    /// `Status`'s preview summary.
+    fn preview_summary(&self) -> String {
+        let Some(preview) = self.desk.preview else {
+            return "off".to_string();
+        };
+        match self.show.sequence(preview.sequence).and_then(|sequence| {
+            sequence
+                .cue_index(preview.cue)
+                .map(|index| (sequence, index))
+        }) {
+            Some((sequence, index)) => {
+                let values = sequence.state_at(index).len();
+                format!(
+                    "{} ({values} value{})",
+                    preview.label(),
+                    if values == 1 { "" } else { "s" }
+                )
+            }
+            None => format!("{} (missing)", preview.label()),
+        }
+    }
+
+    /// One `Sheet` line: the previewed cue and the first non-zero slots.
+    fn preview_banner(&self) -> Option<String> {
+        let preview = self.desk.preview?;
+        let Some(frame) = self.preview_frame() else {
+            return Some(format!(
+                "Preview {}: no longer in the show",
+                preview.label()
+            ));
+        };
+        let mut count = 0usize;
+        let mut first = Vec::new();
+        for (universe, slots) in frame.universes() {
+            for (offset, value) in slots.iter().enumerate() {
+                if *value == 0 {
+                    continue;
+                }
+                count += 1;
+                if first.len() < 8 {
+                    first.push(format!("{universe}.{:03} {value}", offset + 1));
+                }
+            }
+        }
+        let more = if count > first.len() {
+            format!(" (+{} more)", count - first.len())
+        } else {
+            String::new()
+        };
+        Some(if count == 0 {
+            format!("Preview {}: every channel is zero", preview.label())
+        } else {
+            format!(
+                "Preview {}: {count} non-zero channel{} — {}{more}",
+                preview.label(),
+                if count == 1 { "" } else { "s" },
+                first.join(", ")
+            )
+        })
     }
 
     fn lock_desk(&mut self, code: Option<String>) -> Result<CommandOutcome, CommandError> {
@@ -4728,6 +5004,9 @@ pub const HELP: &[&str] = &[
     "Store Effect 1 \"Pulse\" [Attribute Dimmer] [Waveform Sine] [Rate 1] [Size 50] [Spread 0]",
     "Effect 1 On [Fixture 1 Thru 4] / Effect 1 Off / Effect Off / Effect",
     "Blackout [Fade 2] / Blackout Off      darken the rig without losing the look",
+    "Blind / Blind Off                      edit without changing the stage",
+    "Preview [Cue 14] [Sequence 2] / Preview Off  inspect a cue without sending it",
+    "Highlight / Highlight Off              full intensity on selected fixtures",
     "Lock [code] / Unlock [code]           refuse mutating commands while locked",
     "Sheet                                  print the fixture sheet",
     "Status                                 output, show and playback state",
@@ -6978,6 +7257,235 @@ mod tests {
         assert_eq!(snapshot.rev, Some(7));
         assert_eq!(snapshot.replay_from(), ReplayFrom::Snapshot(7));
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn blind_hides_the_programmer_but_not_playback() {
+        let mut engine = engine();
+        engine.execute("Blind").unwrap();
+        engine.execute("Fixture 1 At Full").unwrap();
+        assert_eq!(engine.render().slot(1, 1), Some(0));
+        assert!(engine
+            .execute("Status")
+            .unwrap()
+            .lines
+            .iter()
+            .any(|line| line.contains("Blind: on")));
+
+        engine.execute("Blind Off").unwrap();
+        assert_eq!(engine.render().slot(1, 1), Some(255));
+
+        // A running cue keeps driving the rig while the desk is blind.
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Clear All").unwrap();
+        engine.execute("Go Sequence 1").unwrap();
+        engine.execute("Blind").unwrap();
+        assert_eq!(
+            engine.render().slot(1, 1),
+            Some(255),
+            "playback is not blind"
+        );
+    }
+
+    #[test]
+    fn a_blind_store_captures_the_programmer() {
+        let mut engine = engine();
+        engine.execute("Blind").unwrap();
+        engine.execute("Fixture 1 At 40").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        let cue = engine.show.sequence(1).unwrap().cue(1.0).unwrap();
+        assert_eq!(cue.levels.get(1, "Dimmer"), Some(0.4));
+    }
+
+    #[test]
+    fn preview_shows_a_cue_without_reaching_the_stage() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Clear Values").unwrap();
+        assert_eq!(engine.render().slot(1, 1), Some(0));
+
+        let outcome = engine.execute("Preview Cue 1").unwrap();
+        let message = outcome.lines.join("\n");
+        assert!(message.contains("cue 1 in sequence 1"), "{message}");
+        assert_eq!(engine.preview_frame().unwrap().slot(1, 1), Some(255));
+        assert_eq!(
+            engine.render().slot(1, 1),
+            Some(0),
+            "a preview never becomes output"
+        );
+
+        // The frame is exactly the cue rendered with no programmer or masters.
+        let sequence = engine.show.sequence(1).unwrap();
+        let reference = render::render(
+            &engine.show,
+            &Levels::new(),
+            &sequence.state_at(0),
+            &crate::effect::EffectOutput::default(),
+            &Masters::new(),
+            1.0,
+        );
+        assert_eq!(engine.preview_frame().unwrap(), reference);
+
+        // A programmer edit changes the stage, not the inspected cue.
+        engine.execute("Fixture 1 At 50").unwrap();
+        assert_eq!(engine.preview_frame().unwrap().slot(1, 1), Some(255));
+        let sheet = engine.execute("Sheet").unwrap().lines.join("\n");
+        assert!(sheet.contains("Preview cue 1 in sequence 1"), "{sheet}");
+        assert!(sheet.contains("1.001 255"), "{sheet}");
+    }
+
+    #[test]
+    fn preview_of_a_missing_cue_names_the_sequence_and_cue() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        let error = engine.execute("Preview Cue 9").unwrap_err();
+        assert!(error.message.contains("sequence 1"), "{error}");
+        assert!(error.message.contains("cue 9"), "{error}");
+        assert!(engine.desk.preview.is_none());
+    }
+
+    #[test]
+    fn a_bare_preview_targets_the_next_cue_of_the_running_sequence() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 25").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Fixture 1 At 75").unwrap();
+        engine.execute("Store Cue 2").unwrap();
+        engine.execute("Clear All").unwrap();
+        engine.execute("Go Sequence 1").unwrap();
+
+        engine.execute("Preview").unwrap();
+        assert_eq!(
+            engine.desk.preview,
+            Some(Preview {
+                sequence: 1,
+                cue: 2.0
+            })
+        );
+        assert_eq!(engine.preview_frame().unwrap().slot(1, 1), Some(191));
+    }
+
+    #[test]
+    fn deleting_or_moving_a_previewed_cue_keeps_the_preview_honest() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Preview Cue 1").unwrap();
+
+        engine.execute("Cue 1 Move 4").unwrap();
+        assert_eq!(
+            engine.desk.preview,
+            Some(Preview {
+                sequence: 1,
+                cue: 4.0
+            }),
+            "a preview follows a renumbered cue"
+        );
+        assert_eq!(engine.preview_frame().unwrap().slot(1, 1), Some(255));
+
+        let outcome = engine.execute("Cue 4 Move 1").unwrap();
+        assert!(!outcome.lines[0].contains("preview cleared"));
+        let outcome = engine.execute("Delete Cue 1").unwrap();
+        assert!(outcome.lines[0].contains("preview cleared"), "{outcome:?}");
+        assert!(engine.desk.preview.is_none());
+        assert!(engine.preview_frame().is_none());
+    }
+
+    #[test]
+    fn status_names_the_preview_and_its_value_count() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Fixture 1 At ColorAdd_R 50").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Preview Cue 1").unwrap();
+        let status = engine.execute("Status").unwrap().lines.join("\n");
+        assert!(
+            status.contains("Preview: cue 1 in sequence 1 (2 values)"),
+            "{status}"
+        );
+    }
+
+    #[test]
+    fn highlight_lifts_selected_fixtures_and_clears_on_clear() {
+        let mut engine = two_fixture_engine();
+        engine.execute("Fixture 2 At 50").unwrap();
+        engine.execute("Fixture 1 At 20").unwrap();
+        engine.execute("Fixture 1 At ColorAdd_R 50").unwrap();
+        engine.execute("Highlight").unwrap();
+        assert_eq!(engine.render().slot(1, 1), Some(255), "fixture 1 is full");
+        assert_eq!(engine.render().slot(1, 2), Some(128), "colour is untouched");
+        assert_eq!(
+            engine.render().slot(1, 5),
+            Some(128),
+            "fixture 2 is not selected"
+        );
+
+        let sheet = engine.execute("Sheet").unwrap().lines.join("\n");
+        assert!(
+            sheet.contains("Dimmer 20%"),
+            "the listing keeps the programmed look: {sheet}"
+        );
+        engine.execute("Store Cue 1").unwrap();
+        let cue = engine.show.sequence(1).unwrap().cue(1.0).unwrap();
+        assert_eq!(
+            cue.levels.get(1, "Dimmer"),
+            Some(0.2),
+            "highlight is not a programmer value and cannot be stored"
+        );
+
+        // Moving the selection while highlight is on must wake the output
+        // thread even though no programmer value changed.
+        let revision = engine.revision;
+        engine.execute("Fixture 2").unwrap();
+        assert!(engine.revision > revision);
+        assert_eq!(
+            engine.render().slot(1, 5),
+            Some(255),
+            "the new selection is full"
+        );
+        assert_eq!(engine.render().slot(1, 1), Some(51));
+
+        engine.execute("Clear").unwrap();
+        assert!(
+            !engine.desk.highlight,
+            "clearing the selection clears the aid"
+        );
+        assert_eq!(engine.render().slot(1, 1), Some(51));
+    }
+
+    #[test]
+    fn highlight_needs_a_selection_and_blackout_wins() {
+        let mut engine = engine();
+        let error = engine.execute("Highlight").unwrap_err();
+        assert!(error.message.contains("nothing selected"), "{error}");
+
+        engine.execute("Fixture 1 At 20").unwrap();
+        engine.execute("Highlight").unwrap();
+        assert_eq!(engine.render().slot(1, 1), Some(255));
+        engine.execute("Blackout").unwrap();
+        assert!(!engine.desk.highlight, "a blackout clears the aid");
+        assert_eq!(engine.render().slot(1, 1), Some(0));
+    }
+
+    #[test]
+    fn highlight_is_suppressed_while_blind() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 20").unwrap();
+        engine.execute("Highlight").unwrap();
+        engine.execute("Blind").unwrap();
+        assert_eq!(
+            engine.render().slot(1, 1),
+            Some(0),
+            "a blind desk has nothing to light"
+        );
+        engine.execute("Blind Off").unwrap();
+        assert_eq!(
+            engine.render().slot(1, 1),
+            Some(255),
+            "highlight is still on"
+        );
     }
 
     #[test]

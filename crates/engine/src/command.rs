@@ -49,6 +49,9 @@
 //! Timecode 1 Remove 00:00:10:00 | Timecode 1 At 00:00:10:00
 //! Timecode 1 Start | Pause | Stop
 //! Blackout [Fade 2] | Blackout Off
+//! Blind | Blind Off                      keep the programmer off the stage
+//! Preview [Cue 14] [Sequence 2] | Preview Off
+//! Highlight | Highlight Off              selected fixtures at full intensity
 //! Lock [code] | Unlock [code]
 //! Sheet | Status | Help
 //! Save [Show|Desk] "file" | Load [Show] "file"
@@ -406,6 +409,17 @@ pub enum Command {
         off: bool,
         fade: Option<f64>,
     },
+    Blind {
+        on: bool,
+    },
+    Preview {
+        cue: Option<f64>,
+        sequence: Option<u16>,
+        off: bool,
+    },
+    Highlight {
+        on: bool,
+    },
     Lock {
         code: Option<String>,
     },
@@ -473,6 +487,8 @@ impl Command {
             } => false,
             // Lifting a blackout is always allowed: refusing it is a hazard.
             Command::Blackout { off: true, .. } => false,
+            // A preview is a view, never an output or a saved intent.
+            Command::Preview { .. } => false,
             _ => true,
         }
     }
@@ -693,6 +709,9 @@ const RESERVED: &[&str] = &[
     "curve",
     "default",
     "home",
+    "blind",
+    "preview",
+    "highlight",
 ];
 
 struct Parser<'a> {
@@ -913,6 +932,42 @@ impl Parser<'_> {
             };
             self.expect_end()?;
             return Ok(Command::Blackout { off: false, fade });
+        }
+        if word.eq_ignore_ascii_case("blind") {
+            let on = !self.eat_word("off");
+            self.expect_end()?;
+            return Ok(Command::Blind { on });
+        }
+        if word.eq_ignore_ascii_case("highlight") || word.eq_ignore_ascii_case("highlt") {
+            let on = !self.eat_word("off");
+            self.expect_end()?;
+            return Ok(Command::Highlight { on });
+        }
+        if word.eq_ignore_ascii_case("preview") || word.eq_ignore_ascii_case("prvw") {
+            if self.eat_word("off") {
+                self.expect_end()?;
+                return Ok(Command::Preview {
+                    cue: None,
+                    sequence: None,
+                    off: true,
+                });
+            }
+            let cue = if self.eat_word("cue") {
+                Some(self.cue_number()?)
+            } else {
+                None
+            };
+            let sequence = if self.eat_word("sequence") {
+                Some(self.whole_number("sequence number")?)
+            } else {
+                None
+            };
+            self.expect_end()?;
+            return Ok(Command::Preview {
+                cue,
+                sequence,
+                off: false,
+            });
         }
         if word.eq_ignore_ascii_case("lock") {
             let code = self.optional_code()?;
@@ -3191,8 +3246,20 @@ mod tests {
     fn the_lock_allow_list_is_a_classification() {
         // Questions and listings are always answerable.
         for line in [
-            "Help", "Status", "Sheet", "Palette", "Sequence", "Executor", "Group", "World",
-            "Filter", "Master", "Effect", "Timecode",
+            "Help",
+            "Status",
+            "Sheet",
+            "Palette",
+            "Sequence",
+            "Executor",
+            "Group",
+            "World",
+            "Filter",
+            "Master",
+            "Effect",
+            "Timecode",
+            "Preview",
+            "Preview Off",
         ] {
             assert!(!command(line).mutates(), "{line} must not mutate");
         }
@@ -3218,5 +3285,61 @@ mod tests {
         }
         assert!(command("Blackout").mutates());
         assert!(command("Lock").mutates());
+        assert!(command("Blind").mutates());
+        assert!(command("Highlight").mutates());
+    }
+
+    #[test]
+    fn parses_blind_preview_and_highlight() {
+        assert_eq!(command("Blind"), Command::Blind { on: true });
+        assert_eq!(command("Blind Off"), Command::Blind { on: false });
+        assert_eq!(command("Highlight"), Command::Highlight { on: true });
+        assert_eq!(command("Highlight Off"), Command::Highlight { on: false });
+        assert_eq!(
+            command("Preview"),
+            Command::Preview {
+                cue: None,
+                sequence: None,
+                off: false
+            }
+        );
+        assert_eq!(
+            command("Preview Cue 14"),
+            Command::Preview {
+                cue: Some(14.0),
+                sequence: None,
+                off: false
+            }
+        );
+        assert_eq!(
+            command("Preview Cue 14 Sequence 2"),
+            Command::Preview {
+                cue: Some(14.0),
+                sequence: Some(2),
+                off: false
+            }
+        );
+        assert_eq!(
+            command("Preview Sequence 2"),
+            Command::Preview {
+                cue: None,
+                sequence: Some(2),
+                off: false
+            }
+        );
+        assert_eq!(
+            command("Preview Off"),
+            Command::Preview {
+                cue: None,
+                sequence: None,
+                off: true
+            }
+        );
+        assert!(lex("Blind maybe")
+            .and_then(|tokens| parse(&tokens))
+            .is_err());
+        assert!(lex("Preview Cue")
+            .and_then(|tokens| parse(&tokens))
+            .is_err());
     }
 }
