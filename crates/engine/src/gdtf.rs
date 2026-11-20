@@ -10,7 +10,7 @@
 //! instead of failing the import.
 
 use std::fs::File;
-use std::io::Read;
+use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 
 use roxmltree::{Document, Node};
@@ -54,35 +54,40 @@ pub fn import(path: &Path) -> Result<ImportReport, GdtfError> {
         path: path.to_path_buf(),
         kind: GdtfErrorKind::Archive(error.to_string()),
     })?;
-
-    let mut xml = None;
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(|error| GdtfError {
-            path: path.to_path_buf(),
-            kind: GdtfErrorKind::Archive(error.to_string()),
-        })?;
-        let name = entry.name().replace('\\', "/").to_ascii_lowercase();
-        if name == "description.xml" || name.ends_with("/description.xml") {
-            let mut text = String::new();
-            entry
-                .read_to_string(&mut text)
-                .map_err(|source| GdtfError {
-                    path: path.to_path_buf(),
-                    kind: GdtfErrorKind::Io(source),
-                })?;
-            xml = Some(text);
-            break;
-        }
-    }
-
-    let xml = xml.ok_or_else(|| GdtfError {
+    let xml = description_from_archive(&mut archive).map_err(|kind| GdtfError {
         path: path.to_path_buf(),
-        kind: GdtfErrorKind::MissingDescription,
+        kind,
     })?;
     parse_description(&xml).map_err(|kind| GdtfError {
         path: path.to_path_buf(),
         kind,
     })
+}
+
+/// Read a `.gdtf` archive already held in memory. MVR embeds these archives
+/// inside its own zip, so extracting to a temp directory is unnecessary.
+pub fn import_bytes(bytes: &[u8]) -> Result<ImportReport, GdtfErrorKind> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+        .map_err(|error| GdtfErrorKind::Archive(error.to_string()))?;
+    let xml = description_from_archive(&mut archive)?;
+    parse_description(&xml)
+}
+
+fn description_from_archive<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+) -> Result<String, GdtfErrorKind> {
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| GdtfErrorKind::Archive(error.to_string()))?;
+        let name = entry.name().replace('\\', "/").to_ascii_lowercase();
+        if name == "description.xml" || name.ends_with("/description.xml") {
+            let mut text = String::new();
+            entry.read_to_string(&mut text)?;
+            return Ok(text);
+        }
+    }
+    Err(GdtfErrorKind::MissingDescription)
 }
 
 /// Parse the contents of `description.xml`.
@@ -112,6 +117,13 @@ pub fn parse_description(xml: &str) -> Result<ImportReport, GdtfErrorKind> {
         }
     }
     Ok(ImportReport { types, warnings })
+}
+
+/// Parse `description.xml` bytes without first opening an archive.
+pub fn parse_description_bytes(xml: &[u8]) -> Result<ImportReport, GdtfErrorKind> {
+    let xml = std::str::from_utf8(xml)
+        .map_err(|error| GdtfErrorKind::Xml(format!("description is not UTF-8: {error}")))?;
+    parse_description(xml)
 }
 
 fn parse_fixture_type(node: Node, warnings: &mut Vec<String>) -> FixtureType {
@@ -152,6 +164,7 @@ fn parse_fixture_type(node: Node, warnings: &mut Vec<String>) -> FixtureType {
         description,
         attributes,
         modes,
+        home: Default::default(),
     }
 }
 
@@ -544,6 +557,16 @@ pub(crate) mod tests {
             report.warnings
         );
         assert_eq!(report.types[0].modes[0].channels[0].fine_offset, None);
+    }
+
+    #[test]
+    fn parses_a_description_from_bytes_for_archive_less_imports() {
+        let report = parse_description_bytes(DEMO_XML.as_bytes()).unwrap();
+        assert_eq!(report.types[0].key(), "OpenLight Demo Wash");
+        assert!(matches!(
+            parse_description_bytes(b"<not xml"),
+            Err(GdtfErrorKind::Xml(_))
+        ));
     }
 
     #[test]

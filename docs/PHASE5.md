@@ -280,6 +280,24 @@ cannot starve the engine tick.
 `Status` reports the bound addresses and OSC/HTTP counters. The remote adds no
 show or desk fields, so there is no format version change.
 
+## MVR and the fixture builder (13)
+
+`Import Mvr "rig.mvr"` reads the MVR scene description, extracts its embedded
+GDTF archives and applies the whole rig as one validated mutation. Fixtures keep
+their MVR names and addresses, are numbered from the next free number in
+document order, and a name collision gets a numeric suffix. Re-importing a rig
+with the same names updates those fixtures instead of duplicating them. Missing
+profiles, bad addresses and overlapping ranges skip only the affected fixture
+and become warnings; one `Matrix` warning counts the positions the show has no
+3D model for. `--mvr <file>` runs the same import before any `--script` line.
+
+Profiles are editable JSON rather than XML. `Import Type` / `Export Type` move
+`.olft` files, `Copy Type` duplicates a key, and `Type New`, `Type <key> Mode`
+and `Type <key> Channel` build a profile through the same validator. The profile
+home map is the fallback after a fixture's stored home and before the channel
+default. The show format stays at v12; the new profile home field is optional,
+so older documents load unchanged.
+
 ## Known limitations
 
 - **No DMX hardware in the test environment.** Timing is exercised against a
@@ -291,11 +309,15 @@ show or desk fields, so there is no format version change.
 - **Home is per fixture and attribute.** There is no per-mode home table, no
   park/default distinction and no automatic re-seed when a profile is
   re-imported.
-- **Only fourteen of the eighteen roadmap designs are built.** The remaining
-  four are listed in [`ROADMAP.md`](ROADMAP.md).
+- **Only fifteen of the eighteen roadmap designs are built.** The remaining
+  three are listed in [`ROADMAP.md`](ROADMAP.md).
 - **MTC was tested with synthetic bytes, not hardware.** Quarter-frame and
   full-frame decoding, drop-frame maths and the reader thread are covered by
   unit tests; a real MIDI interface remains unverified.
+- **MVR is a patch/profile carrier.** Geometry, models, trusses and layers as
+groups are ignored, and there is no MVR export. Real archives vary in
+dialect; the parser accepts namespaces and a missing `<Scene>` wrapper, but it
+has not been run against a large vendor library.
 - **The remote is plain HTTP and loopback by default.** There is no TLS; a
   token on a trusted show network is the security model, and `--remote-bind
   0.0.0.0` is an explicit opt-in. OSC has no authentication at all, so expose

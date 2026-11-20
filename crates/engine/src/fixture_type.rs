@@ -8,6 +8,8 @@
 //! and converted to DMX at render time, so a show stays meaningful if a fixture
 //! type gains a more accurate curve later.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 /// Attribute name used by `At`/`Full`/`Off` intensity commands.
@@ -24,6 +26,10 @@ pub struct FixtureType {
     pub attributes: Vec<AttributeDef>,
     #[serde(default)]
     pub modes: Vec<Mode>,
+    /// Profile-level home overrides. A patched fixture still stores its own
+    /// overrides; this is the fallback before the channel default.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub home: BTreeMap<String, f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -69,6 +75,24 @@ pub struct ChannelFunction {
     pub dmx_to: u8,
     pub physical_from: f64,
     pub physical_to: f64,
+}
+
+/// Split a library key into its manufacturer and model parts. The first word
+/// is the manufacturer; the rest is the model. A one-word key has no
+/// manufacturer, so its key round-trips exactly.
+pub fn split_key(key: &str) -> (String, String) {
+    let key = key.trim();
+    match key.split_once(char::is_whitespace) {
+        Some((manufacturer, name)) => {
+            let name = name.trim();
+            if name.is_empty() {
+                (String::new(), manufacturer.to_string())
+            } else {
+                (manufacturer.to_string(), name.to_string())
+            }
+        }
+        None => (String::new(), key.to_string()),
+    }
 }
 
 impl FixtureType {

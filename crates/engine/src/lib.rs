@@ -27,6 +27,7 @@
 //! * [`render`] — programmer, playback, effects and masters to DMX universes.
 //! * [`output`] — 60 Hz engine tick + 30 Hz frame output thread.
 
+pub mod builder;
 pub mod command;
 pub mod csv;
 pub mod desk;
@@ -38,6 +39,7 @@ pub mod history;
 pub mod journal;
 pub mod levels;
 pub mod mtc;
+pub mod mvr;
 pub mod output;
 pub mod palette;
 pub mod patch;
@@ -52,11 +54,12 @@ pub mod timecode;
 #[cfg(test)]
 pub(crate) mod test_support;
 
+pub use builder::FixtureTypeFile;
 pub use command::CommandError;
 pub use desk::{Desk, Masters};
 pub use effect::{Effect, Waveform};
 pub use engine::{CommandOutcome, Engine};
-pub use fixture_type::{Channel, ChannelFunction, FixtureType, Mode, DIMMER};
+pub use fixture_type::{split_key, Channel, ChannelFunction, FixtureType, Mode, DIMMER};
 pub use levels::Levels;
 pub use output::{OutputStatus, RemoteStatus, Runtime, RuntimeConfig, TransportBinding};
 pub use palette::Palette;

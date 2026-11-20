@@ -19,7 +19,7 @@ profiles that you supply.
 | 2 | Palettes, cues, sequences, executor faders | done — see [`docs/PHASE2.md`](docs/PHASE2.md) |
 | 3 | Groups, worlds, filters, masters, effects | done — see [`docs/PHASE3.md`](docs/PHASE3.md) |
 | 4 | Timecode, move-in-black, undo, first UI shell | done — see [`docs/PHASE4.md`](docs/PHASE4.md) |
-| 5+ | desk state, output, journal, blackout/lock, cues, timing, home, cue editing, viewing, 16-bit, patch tools, effects, external timecode, remote | in progress — 03, 04, 05, 06, 01, 02, 07, 10, 09, 08, 11, 12, 14 and 15 built; see [`docs/PHASE5.md`](docs/PHASE5.md) |
+| 5+ | desk state, output, journal, blackout/lock, cues, timing, home, cue editing, viewing, 16-bit, patch tools, effects, external timecode, remote, MVR, fixture builder | in progress — 03, 04, 05, 06, 01, 02, 07, 10, 09, 08, 11, 12, 13, 14 and 15 built; see [`docs/PHASE5.md`](docs/PHASE5.md) |
 | 5+ | the remaining roadmap designs | designed — see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 
 It is a console with a command line, a full-screen terminal shell, a script
@@ -29,7 +29,8 @@ with worlds and filters, scale it with grand, rate and group masters, animate it
 with effects — several attributes per effect, each with its own size and phase,
 and musical rates that follow `Tempo` — run cues from a timecode show with
 several tracks and markers, follow MIDI Time Code from a serial port or positions
-from OSC, press Go from an OSC controller or the browser remote, move
+from OSC, press Go from an OSC controller or the browser remote, import an MVR
+rig and fix or create its fixture profiles, move
 fixtures in black and undo any show edit. `Tempo 128` or a few `Tap`s set the
 desk tempo; `Rate 1/4` retimes a running effect in beats, while `Rate 2hz` stays
 a free rate. The programmer, the faders and the playback positions live in a
@@ -73,7 +74,7 @@ check for CI. There is no desktop GUI yet.
 ## Quick start
 
 ```bash
-cargo test --workspace            # 410 tests, no hardware needed
+cargo test --workspace            # 432 tests, no hardware needed
 cargo run -p openlight-console    # interactive console
 cargo run -p openlight-console -- --ui   # full-screen terminal shell
 ```
@@ -159,6 +160,34 @@ Use `--osc-port`, `--remote-port`, `--remote-bind` and `--remote-token-file` to
 move them, or `--no-remote` for a scripted or headless run. Plain HTTP is for a
 trusted show network; the default bind is loopback and the token is never
 printed in logs.
+
+## MVR and the fixture builder
+
+Import a rig before the first script line with `--mvr`, or from the command
+line; profiles travel inside the MVR archive and each fixture keeps its MVR
+address and name:
+
+```bash
+cargo run -p openlight-console -- --mvr "rig.mvr" \
+  --output 1=virtual --script examples/phase2-demo.txt --frames 120 --trace
+```
+
+```
+Imported 24 fixtures, 3 types, 24 GDTF archives from rig.mvr
+```
+
+Profiles are editable data. `Type New` starts a small profile, `Mode` and
+`Channel` build it, and `Import Type`, `Export Type` and `Copy Type` move it
+through the portable `.olft` JSON format:
+
+```
+Type New "Generic 4ch"
+Type "Generic 4ch" Mode "4ch"
+Type "Generic 4ch" Channel 1 Dimmer "Dimmer"
+Type "Generic 4ch" Channel 2 ColorAdd_R "Red"
+Export Type "Generic 4ch" "generic-4ch.olft"
+Copy Type "Generic 4ch" As "Generic Wide"
+```
 
 The trace line ends with the first slots of the frame that went out:
 

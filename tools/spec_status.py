@@ -276,7 +276,21 @@ PHASE12 = {
     ),
 }
 
-STATUS = {**PHASE1, **PHASE2, **PHASE3, **PHASE4, **PHASE12, **EXTRA}
+# Phase 5 item 13 — MVR patch import and the .olft fixture builder. Geometry,
+# models and MVR export remain outside the design.
+PHASE13 = {
+    **expand(
+        "FIXTURE_TYPES",
+        [
+            ("in-progress", "4 5"),
+            ("implemented", "6 10 12"),
+            ("out-of-scope", "7 8 9"),
+        ],
+    ),
+    "CX-PATCH-0005": "in-progress",
+}
+
+STATUS = {**PHASE1, **PHASE2, **PHASE3, **PHASE4, **PHASE12, **PHASE13, **EXTRA}
 
 # Keywords the parser in crates/engine/src/command.rs recognises. A keyword here
 # is not a claim that the manual's full behaviour is implemented; it moves the
@@ -458,7 +472,7 @@ CHAPTER_NOTES = {
     "remote_inputs": "Item 12 covers inbound OSC and a token-protected web remote; MIDI, DMX and DC remotes need designs.",
     "rdm": "Needs a design; requires a read path in the DMX transport.",
     "local_settings": "Needs a small settings design.",
-    "fixture_types": "Item 13 adds the fixture builder/export; environmental types are out of scope.",
+    "fixture_types": "Item 13 adds a profile builder and .olft export; geometry, models and environmental types are out of scope.",
     "file_management": "A file browser needs a design; SFTP/folder layout are out of scope.",
     "show-creator": "Needs a design.",
     "appear": "Pool appearance metadata needs a small design.",

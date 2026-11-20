@@ -29,6 +29,7 @@ Usage: openlight [options]
 
 Options:
   --show <file>        load a show file at start
+  --mvr <file>         import an MVR rig before any --script command
   --gdtf <file>        import a GDTF fixture type (repeatable)
   --output <spec>      bind a universe to an output, e.g. 1=virtual,
                        1=generic:/dev/ttyUSB0, 1=enttec:/dev/ttyUSB0, 1=udmx
@@ -98,6 +99,7 @@ enum JournalChoice {
 
 struct Options {
     show: Option<PathBuf>,
+    mvr: Option<PathBuf>,
     gdtf: Vec<PathBuf>,
     outputs: Vec<(u16, String)>,
     frames: Option<u64>,
@@ -121,6 +123,7 @@ impl Options {
     fn parse(arguments: Vec<String>) -> Result<Option<Options>, String> {
         let mut options = Options {
             show: None,
+            mvr: None,
             gdtf: Vec::new(),
             outputs: Vec::new(),
             frames: None,
@@ -150,6 +153,10 @@ impl Options {
             match flag {
                 "--show" => path_option(
                     &mut options.show,
+                    take_value(&arguments, &mut index, inline, flag)?,
+                ),
+                "--mvr" => path_option(
+                    &mut options.mvr,
                     take_value(&arguments, &mut index, inline, flag)?,
                 ),
                 "--gdtf" => options.gdtf.push(PathBuf::from(take_value(
@@ -380,6 +387,13 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
     for path in &options.gdtf {
         let outcome = engine.execute(&format!("Import Gdtf {}", quote(&path.to_string_lossy())))?;
         print_outcome(&outcome);
+    }
+
+    if let Some(path) = &options.mvr {
+        let outcome = engine.execute(&format!("Import Mvr {}", quote(&path.to_string_lossy())))?;
+        for line in outcome.lines {
+            println!("{line}");
+        }
     }
 
     if options.check {
@@ -669,6 +683,14 @@ mod tests {
             options.remote_token_file.as_deref(),
             Some(Path::new("/tmp/openlight.token"))
         );
+    }
+
+    #[test]
+    fn mvr_flag_takes_a_path() {
+        let options = Options::parse(vec!["--mvr".into(), "rig.mvr".into()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(options.mvr.as_deref(), Some(Path::new("rig.mvr")));
     }
 
     #[test]

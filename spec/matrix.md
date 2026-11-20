@@ -777,7 +777,7 @@ Scope reasons and chapter dispositions: [`docs/COMPLETENESS.md`](../docs/COMPLET
 | `CX-PATCH-0002` | What are Fixtures | 2 | 1 | implemented |
 | `CX-PATCH-0003` | Add Fixtures to the Show | 8 | 1 | implemented |
 | `CX-PATCH-0004` | Add Multipatch Fixtures | 2 | 1 | not-started |
-| `CX-PATCH-0005` | My Virtual Rig (MVR) | 2 | 1 | not-started |
+| `CX-PATCH-0005` | My Virtual Rig (MVR) | 2 | 1 | in-progress |
 | `CX-PATCH-0006` | Live Patch | 1 | 1 | implemented |
 | `CX-PATCH-0007` | DMX Sheet | 3 | 1 | in-progress |
 | `CX-PATCH-0008` | DMX Universes | 2 | 1 | in-progress |
@@ -1429,14 +1429,14 @@ Scope reasons and chapter dispositions: [`docs/COMPLETENESS.md`](../docs/COMPLET
 | `CX-FIXTURE_TYPES-0002` | Import Fixture Types | 4 | 1 | implemented |
 | `CX-FIXTURE_TYPES-0003` | Import GDTF | 3 | 1 | implemented |
 | `CX-FIXTURE_TYPES-0004` | Conflicts in Fixture Types | 2 | 1 | in-progress |
-| `CX-FIXTURE_TYPES-0005` | Build Fixture Types | 1 | 1 | not-started |
-| `CX-FIXTURE_TYPES-0006` | Insert Fixture Types | 1 | 1 | not-started |
-| `CX-FIXTURE_TYPES-0007` | Insert Geometries | 1 | 1 | not-started |
-| `CX-FIXTURE_TYPES-0008` | Insert Models | 1 | 1 | not-started |
-| `CX-FIXTURE_TYPES-0009` | Link Models to Geometries | 2 | 1 | not-started |
-| `CX-FIXTURE_TYPES-0010` | Insert DMX Modes and DMX Channels | 8 | 1 | not-started |
+| `CX-FIXTURE_TYPES-0005` | Build Fixture Types | 1 | 1 | in-progress |
+| `CX-FIXTURE_TYPES-0006` | Insert Fixture Types | 1 | 1 | implemented |
+| `CX-FIXTURE_TYPES-0007` | Insert Geometries | 1 | 1 | out-of-scope |
+| `CX-FIXTURE_TYPES-0008` | Insert Models | 1 | 1 | out-of-scope |
+| `CX-FIXTURE_TYPES-0009` | Link Models to Geometries | 2 | 1 | out-of-scope |
+| `CX-FIXTURE_TYPES-0010` | Insert DMX Modes and DMX Channels | 8 | 1 | implemented |
 | `CX-FIXTURE_TYPES-0011` | Environmental Fixture Types | 1 | 1 | out-of-scope |
-| `CX-FIXTURE_TYPES-0012` | Export Fixture Types | 1 | 1 | not-started |
+| `CX-FIXTURE_TYPES-0012` | Export Fixture Types | 1 | 1 | implemented |
 
 ## File Management
 

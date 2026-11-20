@@ -49347,7 +49347,7 @@
    "module": "patch",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "patch_mvr",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/patch_mvr.html",
@@ -77330,7 +77330,7 @@
    "module": "fixturetypes",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "ft_build",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/ft_build.html",
@@ -77374,7 +77374,7 @@
    "module": "fixturetypes",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "ft_insert_fixture_types",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/ft_insert_fixture_types.html",
@@ -77421,7 +77421,7 @@
    "module": "fixturetypes",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "out-of-scope",
    "source": {
     "ext_id": "ft_insert_geometries",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/ft_insert_geometries.html",
@@ -77474,7 +77474,7 @@
    "module": "fixturetypes",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "out-of-scope",
    "source": {
     "ext_id": "ft_insert_models",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/ft_insert_models.html",
@@ -77531,7 +77531,7 @@
    "module": "fixturetypes",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "out-of-scope",
    "source": {
     "ext_id": "ft_link_models_geometries",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/ft_link_models_geometries.html",
@@ -77599,7 +77599,7 @@
    "module": "fixturetypes",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "ft_insert_dmx",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/ft_insert_dmx.html",
@@ -77829,7 +77829,7 @@
    "module": "fixturetypes",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "ft_export",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/ft_export.html",

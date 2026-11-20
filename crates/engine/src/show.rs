@@ -224,9 +224,18 @@ impl Show {
         {
             return *level;
         }
-        let Ok((_, mode)) = self.mode_for(fixture) else {
+        let Ok((fixture_type, mode)) = self.mode_for(fixture) else {
             return 0.0;
         };
+        if mode.channel_for(attribute).is_some() {
+            if let Some((_, level)) = fixture_type
+                .home
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(attribute))
+            {
+                return *level;
+            }
+        }
         mode.channel_for(attribute)
             .map(|channel| channel.level_from_raw(channel.default_raw))
             .unwrap_or(0.0)
@@ -311,6 +320,18 @@ impl Show {
             }
             if fixture_type.modes.is_empty() {
                 problems.push(format!("fixture type `{key}`: no DMX modes"));
+            }
+            for (attribute, level) in &fixture_type.home {
+                if fixture_type.attribute(attribute).is_none() {
+                    problems.push(format!(
+                        "fixture type `{key}`: home for undeclared attribute `{attribute}`"
+                    ));
+                }
+                if !level.is_finite() || !(0.0..=1.0).contains(level) {
+                    problems.push(format!(
+                        "fixture type `{key}`: home `{attribute}` is {level}, expected 0..=1"
+                    ));
+                }
             }
             let mut mode_names = BTreeSet::new();
             for mode in &fixture_type.modes {

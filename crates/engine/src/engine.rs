@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::builder::FixtureTypeFile;
 use crate::command::{
     self, Command, CommandError, EffectRate, Level, LevelSource, PlaybackRef, ReportKind,
     SetTarget, StoreMode, TimecodeAction, TriggerArg,
@@ -21,7 +22,7 @@ use crate::effect::{
     BeatDivision, Effect, EffectTarget, Effects, Tempo, Waveform, MAX_BPM, MAX_RATE_HZ,
     MAX_SPREAD_DEGREES, MIN_BPM,
 };
-use crate::fixture_type::{Channel, FixtureType, SetSelector, DIMMER};
+use crate::fixture_type::{split_key, Channel, FixtureType, SetSelector, DIMMER};
 use crate::gdtf;
 use crate::history::{History, Snapshot};
 use crate::journal::ReplayFrom;
@@ -487,6 +488,18 @@ impl Engine {
             Command::PatchCheck => Ok(self.patch_check()),
             Command::ImportPatch { path } => self.import_patch(&path),
             Command::ImportGdtf { path } => self.import_gdtf(&path),
+            Command::ImportMvr { path } => self.import_mvr(&path),
+            Command::ImportType { path } => self.import_type(&path),
+            Command::ExportType { type_key, path } => self.export_type(&type_key, &path),
+            Command::CopyType { type_key, new_key } => self.copy_type(&type_key, &new_key),
+            Command::TypeNew { key } => self.type_new(&key),
+            Command::TypeMode { type_key, mode } => self.type_mode(&type_key, &mode),
+            Command::TypeChannel {
+                type_key,
+                offset,
+                attribute,
+                name,
+            } => self.type_channel(&type_key, offset, &attribute, name.as_deref()),
             Command::New { name } => {
                 let outcome = self.new_show(name)?;
                 self.history.clear();
@@ -1625,6 +1638,229 @@ impl Engine {
                 .map(|warning| format!("Warning: {warning}")),
         );
         Ok(CommandOutcome::with_lines(lines))
+    }
+
+    fn import_mvr(&mut self, path: &str) -> Result<CommandOutcome, CommandError> {
+        let mut report = None;
+        let message = self.mutate(|show| {
+            let imported = show
+                .import_mvr(Path::new(path))
+                .map_err(|error| CommandError::new(error.to_string()))?;
+            let summary = format!(
+                "Imported {} fixture{}, {} type{}, {} GDTF archive{} from {path}",
+                imported.fixtures,
+                if imported.fixtures == 1 { "" } else { "s" },
+                imported.types,
+                if imported.types == 1 { "" } else { "s" },
+                imported.archives,
+                if imported.archives == 1 { "" } else { "s" }
+            );
+            report = Some(imported);
+            Ok(summary)
+        })?;
+        let report = report.expect("MVR import report");
+        let mut lines = vec![message];
+        lines.extend(
+            report
+                .warnings
+                .into_iter()
+                .map(|warning| format!("Warning: {warning}")),
+        );
+        Ok(CommandOutcome::with_lines(lines))
+    }
+
+    fn import_type(&mut self, path: &str) -> Result<CommandOutcome, CommandError> {
+        let file = FixtureTypeFile::from_file(Path::new(path)).map_err(CommandError::new)?;
+        let key = file.key();
+        let fixture_type = file.into_type();
+        let mut used = 0usize;
+        let message = self.mutate(|show| {
+            used = show
+                .fixtures
+                .iter()
+                .filter(|fixture| fixture.type_key.eq_ignore_ascii_case(&key))
+                .count();
+            match show
+                .fixture_types
+                .iter()
+                .position(|existing| existing.key().eq_ignore_ascii_case(&key))
+            {
+                Some(index) => show.fixture_types[index] = fixture_type.clone(),
+                None => show.fixture_types.push(fixture_type.clone()),
+            }
+            Ok(format!("Imported fixture type `{key}`"))
+        })?;
+        let mut lines = vec![message];
+        if used > 0 {
+            lines.push(format!(
+                "Warning: replacing `{key}` changes {used} patched fixture{}",
+                if used == 1 { "" } else { "s" }
+            ));
+        }
+        Ok(CommandOutcome::with_lines(lines))
+    }
+
+    fn export_type(&mut self, key: &str, path: &str) -> Result<CommandOutcome, CommandError> {
+        let fixture_type = self.show.find_type(key).cloned().ok_or_else(|| {
+            CommandError::with_hint(
+                format!("unknown fixture type `{key}`"),
+                "type `Help` for the fixture type commands",
+            )
+        })?;
+        FixtureTypeFile::from_type(&fixture_type)
+            .to_file(Path::new(path))
+            .map_err(CommandError::new)?;
+        Ok(CommandOutcome::message(format!(
+            "Exported fixture type `{}` to {path}",
+            fixture_type.key()
+        )))
+    }
+
+    fn copy_type(&mut self, key: &str, new_key: &str) -> Result<CommandOutcome, CommandError> {
+        let source = self.show.find_type(key).cloned().ok_or_else(|| {
+            CommandError::with_hint(
+                format!("unknown fixture type `{key}`"),
+                "type `Help` for the fixture type commands",
+            )
+        })?;
+        let (manufacturer, name) = split_key(new_key);
+        if manufacturer.is_empty() && name.is_empty() {
+            return Err(CommandError::new("the new fixture type key is empty"));
+        }
+        let new_key = format!("{manufacturer} {name}").trim().to_string();
+        if self.show.find_type(&new_key).is_some() {
+            return Err(CommandError::new(format!(
+                "fixture type `{new_key}` already exists"
+            )));
+        }
+        let mut copy = source;
+        copy.manufacturer = manufacturer;
+        copy.name = name;
+        let message = self.mutate(|show| {
+            show.fixture_types.push(copy.clone());
+            Ok(format!("Copied fixture type `{key}` to `{new_key}`"))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn type_new(&mut self, key: &str) -> Result<CommandOutcome, CommandError> {
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(CommandError::new("the fixture type key is empty"));
+        }
+        if self.show.find_type(key).is_some() {
+            return Err(CommandError::new(format!(
+                "fixture type `{key}` already exists"
+            )));
+        }
+        let (manufacturer, name) = split_key(key);
+        let fixture_type = crate::builder::new_type(&manufacturer, &name);
+        let message = self.mutate(|show| {
+            show.fixture_types.push(fixture_type.clone());
+            Ok(format!("Created fixture type `{key}`"))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn type_mode(&mut self, key: &str, mode_name: &str) -> Result<CommandOutcome, CommandError> {
+        let message = self.mutate(|show| {
+            let fixture_type = show
+                .fixture_types
+                .iter_mut()
+                .find(|fixture_type| fixture_type.key().eq_ignore_ascii_case(key))
+                .ok_or_else(|| {
+                    CommandError::with_hint(
+                        format!("unknown fixture type `{key}`"),
+                        "create one with `Type New \"<name>\"`",
+                    )
+                })?;
+            if fixture_type
+                .modes
+                .iter()
+                .any(|mode| mode.name.eq_ignore_ascii_case(mode_name))
+            {
+                return Err(CommandError::new(format!(
+                    "fixture type `{}` already has mode `{mode_name}`",
+                    fixture_type.key()
+                )));
+            }
+            if fixture_type.modes.len() == 1
+                && fixture_type.modes[0].name.eq_ignore_ascii_case("Default")
+            {
+                fixture_type.modes[0].name = mode_name.to_string();
+            } else if let Some(first) = fixture_type.modes.first().cloned() {
+                let mut mode = first;
+                mode.name = mode_name.to_string();
+                fixture_type.modes.push(mode);
+            } else {
+                return Err(CommandError::new(format!(
+                    "`{}` has no modes to copy",
+                    fixture_type.key()
+                )));
+            }
+            Ok(format!(
+                "Fixture type `{}` mode `{mode_name}`",
+                fixture_type.key()
+            ))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn type_channel(
+        &mut self,
+        key: &str,
+        offset: u16,
+        attribute: &str,
+        name: Option<&str>,
+    ) -> Result<CommandOutcome, CommandError> {
+        if offset == 0 || offset > crate::show::MAX_UNIVERSE_SIZE {
+            return Err(CommandError::new(format!(
+                "channel offset {offset} is outside 1..={}",
+                crate::show::MAX_UNIVERSE_SIZE
+            )));
+        }
+        let attribute = attribute.trim();
+        if attribute.is_empty() {
+            return Err(CommandError::new("the channel attribute is empty"));
+        }
+        let message = self.mutate(|show| {
+            let fixture_type = show
+                .fixture_types
+                .iter_mut()
+                .find(|fixture_type| fixture_type.key().eq_ignore_ascii_case(key))
+                .ok_or_else(|| {
+                    CommandError::with_hint(
+                        format!("unknown fixture type `{key}`"),
+                        "create one with `Type New \"<name>\"`",
+                    )
+                })?;
+            let type_key = fixture_type.key();
+            if fixture_type.attribute(attribute).is_none() {
+                fixture_type.attributes.push(crate::builder::attribute_for(
+                    attribute,
+                    name.unwrap_or(attribute),
+                ));
+            }
+            let mode = fixture_type
+                .modes
+                .last_mut()
+                .ok_or_else(|| CommandError::new(format!("`{key}` has no mode")))?;
+            let mode_name = mode.name.clone();
+            let channel = crate::builder::channel_for(offset, attribute, name.unwrap_or(""));
+            match mode
+                .channels
+                .iter_mut()
+                .find(|channel| channel.offset == offset)
+            {
+                Some(existing) => *existing = channel,
+                None => mode.channels.push(channel),
+            }
+            mode.channels.sort_by_key(|channel| channel.offset);
+            Ok(format!(
+                "Fixture type `{type_key}` mode `{mode_name}` channel {offset} `{attribute}`"
+            ))
+        })?;
+        Ok(CommandOutcome::message(message))
     }
 
     fn import_gdtf(&mut self, path: &str) -> Result<CommandOutcome, CommandError> {
@@ -6601,6 +6837,10 @@ pub const HELP: &[&str] = &[
     "Report Patch|Cues|Palettes|Status|Show [<sequence>] \"file\"",
     "Unpatch Fixture 1 Thru 3",
     "Import Gdtf \"file.gdtf\"                load a GDTF fixture type",
+    "Import Mvr \"rig.mvr\"                   import a rig and its profiles",
+    "Type New \"Generic 4ch\" / Import Type \"profile.olft\"",
+    "Type \"Generic 4ch\" Mode \"4ch\" / Channel 1 Dimmer \"Dimmer\"",
+    "Export Type \"Generic 4ch\" \"profile.olft\" / Copy Type \"A\" As \"B\"",
     "New [Show] [\"name\"]                    start an empty show",
     "Store Palette Color 1 \"Warm\"           capture the programmer in a pool",
     "Delete Palette Color 1 / Palette        delete or list palettes",
@@ -7095,6 +7335,144 @@ mod tests {
         );
         assert_eq!(engine.show.fixture_types.len(), 1);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn type_commands_create_a_patchable_profile() {
+        let mut engine = Engine::empty();
+        engine.execute(r#"Type New "Generic 4ch""#).unwrap();
+        engine.execute(r#"Type "Generic 4ch" Mode "4ch""#).unwrap();
+        assert!(engine.execute(r#"Type "Generic 4ch" Mode "4ch""#).is_err());
+        engine
+            .execute(r#"Type "Generic 4ch" Channel 1 Dimmer "Dimmer""#)
+            .unwrap();
+        engine
+            .execute(r#"Type "Generic 4ch" Channel 2 ColorAdd_R "Red""#)
+            .unwrap();
+        let fixture_type = engine.show.find_type("Generic 4ch").unwrap();
+        assert_eq!(fixture_type.modes[0].name, "4ch");
+        assert_eq!(fixture_type.modes[0].channels.len(), 2);
+        engine
+            .execute(r#"Patch Fixture 1 At 1.001 Type "Generic 4ch""#)
+            .unwrap();
+        assert_eq!(engine.show.fixtures[0].type_key, "Generic 4ch");
+    }
+
+    #[test]
+    fn a_builder_type_survives_save_load_and_still_renders() {
+        let mut engine = Engine::empty();
+        engine.execute(r#"Type New "Generic 4ch""#).unwrap();
+        engine.execute(r#"Type "Generic 4ch" Mode "4ch""#).unwrap();
+        engine
+            .execute(r#"Type "Generic 4ch" Channel 1 Dimmer "Dimmer""#)
+            .unwrap();
+        engine.show.fixture_types[0]
+            .home
+            .insert("Dimmer".into(), 0.5);
+        engine
+            .execute(r#"Patch Fixture 1 At 1.001 Type "Generic 4ch""#)
+            .unwrap();
+        let before = engine.render().slot(1, 1);
+        assert_eq!(before, Some(128));
+
+        let path = temp_path("builder-show.olshow");
+        engine
+            .execute(&format!("Save \"{}\"", path.display()))
+            .unwrap();
+        let mut other = Engine::empty();
+        other
+            .execute(&format!("Load \"{}\"", path.display()))
+            .unwrap();
+        assert_eq!(other.render().slot(1, 1), before);
+        assert_eq!(
+            other.show.home_level(&other.show.fixtures[0], "Dimmer"),
+            0.5
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn type_files_import_export_and_copy() {
+        let path = temp_path("builder.olft");
+        let mut engine = Engine::empty();
+        engine.execute(r#"Type New "Generic 4ch""#).unwrap();
+        engine
+            .execute(r#"Type "Generic 4ch" Channel 2 ColorAdd_R "Red""#)
+            .unwrap();
+        let exported = engine
+            .execute(&format!(
+                r#"Export Type "Generic 4ch" "{}""#,
+                path.display()
+            ))
+            .unwrap();
+        assert!(exported.lines[0].contains("Exported"), "{exported:?}");
+        assert!(FixtureTypeFile::from_file(&path).is_ok());
+        engine
+            .execute(r#"Copy Type "Generic 4ch" As "Generic Wide""#)
+            .unwrap();
+        assert!(engine.show.find_type("Generic Wide").is_some());
+        engine
+            .execute(r#"Patch Fixture 1 At 1.001 Type "Generic Wide""#)
+            .unwrap();
+        assert_eq!(engine.show.fixtures[0].type_key, "Generic Wide");
+
+        let mut fresh = Engine::empty();
+        fresh
+            .execute(&format!(r#"Import Type "{}""#, path.display()))
+            .unwrap();
+        assert!(fresh.show.find_type("Generic 4ch").is_some());
+        fresh
+            .execute(r#"Patch Fixture 1 At 1.001 Type "Generic 4ch""#)
+            .unwrap();
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_builder_type_home_survives_save_and_load() {
+        let type_path = temp_path("home.olft");
+        let show_path = temp_path("home.olshow.json");
+        let mut file = FixtureTypeFile::from_type(&demo_fixture_type());
+        file.home.insert("ColorAdd_R".into(), 1.0);
+        file.to_file(&type_path).unwrap();
+
+        let mut engine = Engine::empty();
+        engine
+            .execute(&format!(r#"Import Type "{}""#, type_path.display()))
+            .unwrap();
+        engine
+            .execute(r#"Patch Fixture 1 At 1.001 Type "OpenLight Demo Wash""#)
+            .unwrap();
+        assert_eq!(
+            engine
+                .show
+                .home_level(&engine.show.fixtures[0], "ColorAdd_R"),
+            1.0
+        );
+        engine.show.save(&show_path).unwrap();
+        let loaded = Show::load(&show_path).unwrap();
+        assert_eq!(loaded.fixture_types[0].home["ColorAdd_R"], 1.0);
+        assert_eq!(loaded.home_level(&loaded.fixtures[0], "ColorAdd_R"), 1.0);
+        let _ = std::fs::remove_file(type_path);
+        let _ = std::fs::remove_file(show_path);
+    }
+
+    #[test]
+    fn reimporting_a_used_type_warns_with_the_fixture_count() {
+        let path = temp_path("used.olft");
+        let mut engine = engine();
+        let file = FixtureTypeFile::from_type(&demo_fixture_type());
+        file.to_file(&path).unwrap();
+        let outcome = engine
+            .execute(&format!(r#"Import Type "{}""#, path.display()))
+            .unwrap();
+        assert!(
+            outcome
+                .lines
+                .iter()
+                .any(|line| line.contains("changes 1 patched fixture")),
+            "{outcome:?}"
+        );
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

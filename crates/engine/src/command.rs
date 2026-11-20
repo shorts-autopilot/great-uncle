@@ -20,6 +20,13 @@
 //! Patch Import "rig.csv"                  replace the patch from a spreadsheet
 //! Report Patch|Cues|Palettes|Status|Show [<sequence>] "file"
 //! Import Gdtf "file.gdtf"
+//! Import Mvr "rig.mvr"
+//! Import Type "profile.olft"
+//! Export Type "key" "profile.olft"
+//! Copy Type "key" As "new key"
+//! Type New "Generic 4ch"
+//! Type "Generic 4ch" Mode "4ch"
+//! Type "Generic 4ch" Channel 1 Dimmer "Dimmer"
 //! New [Show] ["name"]
 //! Store Palette <Feature> <n> ["name"]    capture the programmer
 //! Delete Palette <Feature> <n> | Palette
@@ -232,6 +239,40 @@ pub enum Command {
     },
     ImportGdtf {
         path: String,
+    },
+    /// `Import Mvr "rig.mvr"`: import a rig and its profiles.
+    ImportMvr {
+        path: String,
+    },
+    /// `Import Type "profile.olft"`: add or replace a portable profile.
+    ImportType {
+        path: String,
+    },
+    /// `Export Type "key" "profile.olft"`: write a portable profile.
+    ExportType {
+        type_key: String,
+        path: String,
+    },
+    /// `Copy Type "key" As "new key"`.
+    CopyType {
+        type_key: String,
+        new_key: String,
+    },
+    /// `Type New "Generic 4ch"`.
+    TypeNew {
+        key: String,
+    },
+    /// `Type "key" Mode "4ch"`.
+    TypeMode {
+        type_key: String,
+        mode: String,
+    },
+    /// `Type "key" Channel 1 Dimmer "Dimmer"`.
+    TypeChannel {
+        type_key: String,
+        offset: u16,
+        attribute: String,
+        name: Option<String>,
     },
     New {
         name: Option<String>,
@@ -590,6 +631,7 @@ impl Command {
             | Command::ListTimecodes { .. }
             | Command::Unlock { .. }
             | Command::PatchCheck
+            | Command::ExportType { .. }
             | Command::Report { .. } => false,
             // Listing a channel's sets changes nothing.
             Command::SetChannelSet { target: None, .. } => false,
@@ -968,10 +1010,38 @@ impl Parser<'_> {
             return Ok(Command::Unpatch { fixtures });
         }
         if word.eq_ignore_ascii_case("import") {
+            if self.eat_word("mvr") {
+                let path = self.path_token()?;
+                self.expect_end()?;
+                return Ok(Command::ImportMvr { path });
+            }
+            if self.eat_word("type") {
+                let path = self.path_token()?;
+                self.expect_end()?;
+                return Ok(Command::ImportType { path });
+            }
             self.eat_word("gdtf");
             let path = self.path_token()?;
             self.expect_end()?;
             return Ok(Command::ImportGdtf { path });
+        }
+        if word.eq_ignore_ascii_case("export") {
+            self.eat_word("type");
+            let type_key = self.name_token("fixture type")?;
+            let path = self.path_token()?;
+            self.expect_end()?;
+            return Ok(Command::ExportType { type_key, path });
+        }
+        if word.eq_ignore_ascii_case("copy") {
+            self.eat_word("type");
+            let type_key = self.name_token("fixture type")?;
+            self.eat_word("as");
+            let new_key = self.name_token("new fixture type")?;
+            self.expect_end()?;
+            return Ok(Command::CopyType { type_key, new_key });
+        }
+        if word.eq_ignore_ascii_case("type") {
+            return self.type_command();
         }
         if word.eq_ignore_ascii_case("new") {
             self.eat_word("show");
@@ -1520,6 +1590,36 @@ impl Parser<'_> {
     }
 
     /// `Clone Fixture <n> At <universe>.<address> [Count <k>] [Step <slots>]`.
+    fn type_command(&mut self) -> Result<Command, CommandError> {
+        if self.eat_word("new") {
+            let key = self.name_token("fixture type")?;
+            self.expect_end()?;
+            return Ok(Command::TypeNew { key });
+        }
+        let type_key = self.name_token("fixture type")?;
+        if self.eat_word("mode") {
+            let mode = self.name_token("mode")?;
+            self.expect_end()?;
+            return Ok(Command::TypeMode { type_key, mode });
+        }
+        if self.eat_word("channel") {
+            let offset = self.whole_number("channel offset")?;
+            let attribute = self.name_token("attribute")?;
+            let name = self.optional_name()?;
+            self.expect_end()?;
+            return Ok(Command::TypeChannel {
+                type_key,
+                offset,
+                attribute,
+                name,
+            });
+        }
+        Err(CommandError::with_hint(
+            format!("expected `Mode` or `Channel` after `{type_key}`"),
+            "type `Help` for the type commands",
+        ))
+    }
+
     fn clone_fixture(&mut self) -> Result<Command, CommandError> {
         self.eat_word("fixture");
         let fixture = self.fixture_number()?;
@@ -3366,6 +3466,61 @@ mod tests {
                 source: LevelSource::Level(Level::Percent(25.0))
             }
         );
+    }
+
+    #[test]
+    fn parses_mvr_and_fixture_type_commands() {
+        assert_eq!(
+            command(r#"Import Mvr "rig show.mvr""#),
+            Command::ImportMvr {
+                path: "rig show.mvr".into()
+            }
+        );
+        assert_eq!(
+            command(r#"Import Type "generic.olft""#),
+            Command::ImportType {
+                path: "generic.olft".into()
+            }
+        );
+        assert_eq!(
+            command(r#"Export Type "Generic 4ch" "generic.olft""#),
+            Command::ExportType {
+                type_key: "Generic 4ch".into(),
+                path: "generic.olft".into()
+            }
+        );
+        assert_eq!(
+            command(r#"Copy Type "Generic 4ch" As "Wide""#),
+            Command::CopyType {
+                type_key: "Generic 4ch".into(),
+                new_key: "Wide".into()
+            }
+        );
+        assert_eq!(
+            command(r#"Type New "Generic 4ch""#),
+            Command::TypeNew {
+                key: "Generic 4ch".into()
+            }
+        );
+        assert_eq!(
+            command(r#"Type "Generic 4ch" Mode "4ch""#),
+            Command::TypeMode {
+                type_key: "Generic 4ch".into(),
+                mode: "4ch".into()
+            }
+        );
+        assert_eq!(
+            command(r#"Type "Generic 4ch" Channel 2 ColorAdd_R "Red""#),
+            Command::TypeChannel {
+                type_key: "Generic 4ch".into(),
+                offset: 2,
+                attribute: "ColorAdd_R".into(),
+                name: Some("Red".into())
+            }
+        );
+        assert!(!command(r#"Export Type "Generic 4ch" "x.olft""#).mutates());
+        assert!(command(r#"Import Mvr "x.mvr""#).mutates());
+        assert!(command(r#"Type New "Generic 4ch""#).mutates());
     }
 
     #[test]

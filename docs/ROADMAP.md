@@ -3,7 +3,7 @@
 Phase 4 closed the first loop: the desk plays cues, follows timecode, moves in
 black and can undo. This document is the **design set for the next eighteen
 pieces of work**, ranked by value to a working desk. Each item has a design in
-[`docs/design/`](design/). Fourteen of them are built so far, in the order the
+[`docs/design/`](design/). Fifteen of them are built so far, in the order the
 designs ask for:
 
 | Item | State |
@@ -22,7 +22,8 @@ designs ask for:
 | 14 effects, BPM and multi-attribute waveforms | **built** — `EffectTarget` list with per-target size and phase, `BeatDivision` musical rates evaluated against desk tempo, `Tempo` / `Tap Tempo`, target/rate editing commands, show v11 |
 | 15 external timecode and tracks | **built** — timecode `source` (`Internal`, `Mtc "port"`, `Osc`), named tracks with cue/effect actions, markers, MTC quarter/full-frame decoding with drop-frame maths, ±2-frame following with locate/stall/stop, show v12 |
 | 12 OSC and web remote | **built** — inbound OSC 1.0 codec with bundles, ten address mappings plus OSC timecode, token-protected HTTP page/state/command/SSE, bounded dispatch queue, `Status` counters; no format change |
-| the other four | designed, not built |
+| 13 MVR and fixture builder | **built** — MVR zip scene walk, embedded GDTF extraction, per-fixture warnings, next-free numbering and re-import updates; `.olft` import/export/validation, `Type New`/`Mode`/`Channel`, `Copy Type`, `--mvr` |
+| the other three | designed, not built |
 
 The designs are written to be implemented one at a time. Every one names the
 files it touches, the command grammar it adds, the show/desk format change it
@@ -86,8 +87,8 @@ beneath everything (07), cue editing that cannot silently change other cues
 (10), a way to see what you are doing without the rig seeing it (09), and
 attributes that need more than one byte (08).
 
-The last four are reach: MVR and a fixture builder (13), the command line as a
-product (16), release engineering (17), and only then a native window (18).
+The last three are reach: the command line as a product (16), release
+engineering (17), and only then a native window (18).
 
 ## Three kinds of state
 

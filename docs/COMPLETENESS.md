@@ -10,10 +10,10 @@ This ledger records scope and implementation evidence; it does not claim that a 
 
 | Status | Rows | Meaning |
 |---|---|---|
-| implemented | 50 | Works and is covered by tests. |
-| in-progress | 83 | Part of the feature exists; the rest is deferred. |
-| not-started | 703 | Not built, or not designed yet. |
-| out-of-scope | 387 | Not a feature of this product; reason recorded below. |
+| implemented | 53 | Works and is covered by tests. |
+| in-progress | 85 | Part of the feature exists; the rest is deferred. |
+| not-started | 695 | Not built, or not designed yet. |
+| out-of-scope | 390 | Not a feature of this product; reason recorded below. |
 | verified | 0 | Implemented and proven on hardware. |
 
 Total: **1223 rows** from the Phase 0 crawl of the manual.
@@ -36,7 +36,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 5 | Networking | session | 16 | 16 out-of-scope | Networked sessions and multi-user collaboration are outside the single-operator design. |
 | 1 | DMX In and Out | output | 6 | 1 in-progress, 1 implemented, 4 out-of-scope | Output exists; DMX In and merge need a bidirectional transport design. |
 | 5 | Single User and Multi User Systems | users | 5 | 5 out-of-scope | User accounts, ownership and screen configuration are outside the single-operator design. |
-| 1 | Patch and Fixture Setup | patch | 21 | 6 not-started, 3 in-progress, 6 implemented, 6 out-of-scope | Item 11 adds patch tools; item 13 adds MVR; 3D rows are out of scope. |
+| 1 | Patch and Fixture Setup | patch | 21 | 5 not-started, 4 in-progress, 6 implemented, 6 out-of-scope | Item 11 adds patch tools; item 13 adds MVR; 3D rows are out of scope. |
 | 2 | Operate Fixtures | programmer | 24 | 20 not-started, 2 in-progress, 2 implemented | Selection/programmer exist; the sheet is partial; colour picker, gels and Align need designs. |
 | 4 | Scribbles | ui/assets | 5 | 5 out-of-scope | Bitmap scribble editor is outside the design set; text labels are supported. |
 | 7 | Images | media | 1 | 1 out-of-scope | Image assets are outside a serial-DMX desk. |
@@ -76,7 +76,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 5 | RDM (Remote Device Management) | io/rdm | 1 | 1 not-started | Needs a design; requires a read path in the DMX transport. |
 | 5 | Local Settings | system | 1 | 1 not-started | Needs a small settings design. |
 | 5 | Update the Software | platform | 8 | 8 out-of-scope | Vendor console/node update; the project has no auto-update. |
-| 1 | Fixture Types | fixturetypes | 12 | 7 not-started, 1 in-progress, 3 implemented, 1 out-of-scope | Item 13 adds the fixture builder/export; environmental types are out of scope. |
+| 1 | Fixture Types | fixturetypes | 12 | 2 in-progress, 6 implemented, 4 out-of-scope | Item 13 adds a profile builder and .olft export; geometry, models and environmental types are out of scope. |
 | 5 | File Management | showfile | 3 | 1 not-started, 2 out-of-scope | A file browser needs a design; SFTP/folder layout are out of scope. |
 | 6 | Show Creator | showtools | 7 | 7 not-started | Needs a design. |
 | 5 | Control other MA Devices | session/remotedesk | 4 | 4 out-of-scope | Controlling vendor devices and RemoteHID is outside the independent software scope. |
@@ -125,7 +125,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | Remote In and Out | `CX-REMOTE_INPUTS-0013`, `CX-REMOTE_INPUTS-0014` | PosiStageNet tracking and MVR-xchange are networked integrations outside the design set. |
 | Sound | `CX-SOUND-0001`, `CX-SOUND-0002`, `CX-SOUND-0003` | Sound playback is outside a serial-DMX desk. |
 | Update the Software | `CX-UPDATE-0001`, `CX-UPDATE-0002`, `CX-UPDATE-0003`, `CX-UPDATE-0004`, `CX-UPDATE-0005`, `CX-UPDATE-0006`, `CX-UPDATE-0007`, `CX-UPDATE-0008` | Vendor console/node update; the project has no auto-update. |
-| Fixture Types | `CX-FIXTURE_TYPES-0011` | Environmental fixture types depend on 3D/media, outside the design set. |
+| Fixture Types | `CX-FIXTURE_TYPES-0007`, `CX-FIXTURE_TYPES-0008`, `CX-FIXTURE_TYPES-0009`, `CX-FIXTURE_TYPES-0011` | Environmental fixture types depend on 3D/media, outside the design set. |
 | File Management | `CX-FILE_MANAGEMENT-0002`, `CX-FILE_MANAGEMENT-0003` | SFTP to a vendor console and its folder layout are outside the independent software scope. |
 | Control other MA Devices | `CX-CONTROL_OTHER_MA_DEVICES-0001`, `CX-CONTROL_OTHER_MA_DEVICES-0002`, `CX-CONTROL_OTHER_MA_DEVICES-0003`, `CX-CONTROL_OTHER_MA_DEVICES-0004` | Controlling vendor devices and RemoteHID is outside the independent software scope. |
 | Troubleshooting | `CX-TROUBLESHOOTING-0001`, `CX-TROUBLESHOOTING-0002`, `CX-TROUBLESHOOTING-0003`, `CX-TROUBLESHOOTING-0004`, `CX-TROUBLESHOOTING-0005` | Vendor troubleshooting and panic macro; the project has `Status` and docs. |
@@ -154,7 +154,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 2 | Command Syntax and Keywords | 376 | 49 | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
 | 1 | Windows, Views, and Menus | 14 | 2 | Windows/views/menus are item 18. |
 | 1 | DMX In and Out | 0 | 1 | Output exists; DMX In and merge need a bidirectional transport design. |
-| 1 | Patch and Fixture Setup | 6 | 3 | Item 11 adds patch tools; item 13 adds MVR; 3D rows are out of scope. |
+| 1 | Patch and Fixture Setup | 5 | 4 | Item 11 adds patch tools; item 13 adds MVR; 3D rows are out of scope. |
 | 2 | Operate Fixtures | 20 | 2 | Selection/programmer exist; the sheet is partial; colour picker, gels and Align need designs. |
 | 4 | Appearances | 4 | 0 | Pool appearance metadata needs a small design. |
 | 4 | Notes | 3 | 0 | Notes on objects and cues need a small design. |
@@ -183,7 +183,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 5 | Remote In and Out | 10 | 2 | Item 12 covers inbound OSC and a token-protected web remote; MIDI, DMX and DC remotes need designs. |
 | 5 | RDM (Remote Device Management) | 1 | 0 | Needs a design; requires a read path in the DMX transport. |
 | 5 | Local Settings | 1 | 0 | Needs a small settings design. |
-| 1 | Fixture Types | 7 | 1 | Item 13 adds the fixture builder/export; environmental types are out of scope. |
+| 1 | Fixture Types | 0 | 2 | Item 13 adds a profile builder and .olft export; geometry, models and environmental types are out of scope. |
 | 5 | File Management | 1 | 0 | A file browser needs a design; SFTP/folder layout are out of scope. |
 | 6 | Show Creator | 7 | 0 | Needs a design. |
 

@@ -44,6 +44,7 @@ pub fn demo_fixture_type() -> FixtureType {
                 channel(4, "ColorAdd_B"),
             ],
         }],
+        home: Default::default(),
     }
 }
 
@@ -92,6 +93,7 @@ pub fn demo_moving_type() -> FixtureType {
                 },
             ],
         }],
+        home: Default::default(),
     }
 }
 
