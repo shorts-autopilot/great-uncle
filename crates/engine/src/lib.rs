@@ -20,7 +20,8 @@
 //! * [`playback`] — cues, sequences, executors and running fades.
 //! * [`pools`] — groups, worlds and filters.
 //! * [`effect`] — stored waveforms and the running effect layer.
-//! * [`timecode`] — timecode shows, positions and the running player.
+//! * [`timecode`] — timecode tracks, markers and the running player.
+//! * [`mtc`] — MIDI Time Code decoding and the serial reader thread.
 //! * [`history`] — undo and redo over show snapshots.
 //! * [`journal`] — the crash journal and the autosave snapshot.
 //! * [`render`] — programmer, playback, effects and masters to DMX universes.
@@ -36,6 +37,7 @@ pub mod gdtf;
 pub mod history;
 pub mod journal;
 pub mod levels;
+pub mod mtc;
 pub mod output;
 pub mod palette;
 pub mod patch;
@@ -61,4 +63,7 @@ pub use palette::Palette;
 pub use playback::{Cue, Executor, Playback, Sequence, Target};
 pub use pools::{Filter, Group, World};
 pub use show::{DeskSeed, Fixture, LoadReport, Show, Universe};
-pub use timecode::{TimecodeEvent, TimecodePlayer, TimecodeShow};
+pub use timecode::{
+    Action as TimecodeAction, Event as TimecodeEvent, Marker as TimecodeMarker, TimecodePlayer,
+    TimecodeShow, TimecodeSource, Track as TimecodeTrack,
+};

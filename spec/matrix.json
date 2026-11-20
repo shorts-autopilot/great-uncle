@@ -60834,7 +60834,7 @@
    "module": "timecode",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "timecode_markers",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/timecode_markers.html",
@@ -60885,7 +60885,7 @@
    "module": "timecode",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "timecode_tracks",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/timecode_tracks.html",
@@ -61451,7 +61451,7 @@
    "module": "timecode",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "timecode_external_connections",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/timecode_external_connections.html",

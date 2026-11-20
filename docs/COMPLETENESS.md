@@ -11,8 +11,8 @@ This ledger records scope and implementation evidence; it does not claim that a 
 | Status | Rows | Meaning |
 |---|---|---|
 | implemented | 50 | Works and is covered by tests. |
-| in-progress | 78 | Part of the feature exists; the rest is deferred. |
-| not-started | 708 | Not built, or not designed yet. |
+| in-progress | 81 | Part of the feature exists; the rest is deferred. |
+| not-started | 705 | Not built, or not designed yet. |
 | out-of-scope | 387 | Not a feature of this product; reason recorded below. |
 | verified | 0 | Implemented and proven on hardware. |
 
@@ -65,7 +65,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 3 | Macros | cmd/macro | 9 | 9 not-started | Item 16 adds macros. |
 | 3 | Agenda | timecode | 5 | 5 not-started | Needs a design. |
 | 3 | Timers | timecode | 3 | 3 not-started | Needs a design. |
-| 3 | Timecode Show | timecode | 11 | 5 not-started, 4 in-progress, 2 implemented | Item 15 adds tracks, markers and external sources. |
+| 3 | Timecode Show | timecode | 11 | 2 not-started, 7 in-progress, 2 implemented | Item 15 adds tracks, markers and MTC; OSC ingestion and track groups still need designs. |
 | 4 | Layouts | ui/layout | 8 | 8 not-started | Item 18 GUI; layouts have no design yet. |
 | 6 | Plugins | script | 164 | 164 not-started | Largest undecided chapter: embedded Lua host vs native plugin API; needs a scope decision and design. |
 | 4 | Quickeys | ui/pools | 4 | 4 not-started | Needs a design (GUI/CLI shortcuts). |
@@ -174,7 +174,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 3 | Macros | 9 | 0 | Item 16 adds macros. |
 | 3 | Agenda | 5 | 0 | Needs a design. |
 | 3 | Timers | 3 | 0 | Needs a design. |
-| 3 | Timecode Show | 5 | 4 | Item 15 adds tracks, markers and external sources. |
+| 3 | Timecode Show | 2 | 7 | Item 15 adds tracks, markers and MTC; OSC ingestion and track groups still need designs. |
 | 4 | Layouts | 8 | 0 | Item 18 GUI; layouts have no design yet. |
 | 6 | Plugins | 164 | 0 | Largest undecided chapter: embedded Lua host vs native plugin API; needs a scope decision and design. |
 | 4 | Quickeys | 4 | 0 | Needs a design (GUI/CLI shortcuts). |
@@ -197,7 +197,7 @@ These are the gaps that a chapter-by-chapter audit would otherwise hide. Ranked 
 4. **MAtricks, Shuffle and Align** — Programming speed for multi-fixture edits; the whole `matricks` chapter and `Align` are unbuilt.
 5. **Recipes and Generator** — Look generation beyond a single waveform; `recipes`, `generator` and recipe presets are unbuilt.
 6. **Executor pages and special executors** — The executor list is flat; pages, assignments and special executors are missing.
-7. **Timecode depth** — Tracks, markers and external MTC/OSC sources are item 15; the current player is an internal clock.
+7. **Timecode depth** — Tracks, markers, MTC and an OSC feed hook landed with item 15; OSC ingestion and track groups remain.
 8. **Macros and CLI ergonomics** — Macros, variables, transaction undo and machine-readable status are item 16.
 9. **Layouts, Quickeys and windows** — Layouts/Quickeys have no design; the five-pane GUI is item 18.
 10. **Agenda and timers** — Scheduled events, stopwatch and countdown are unbuilt.

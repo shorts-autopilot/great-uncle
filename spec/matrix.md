@@ -1129,14 +1129,14 @@ Scope reasons and chapter dispositions: [`docs/COMPLETENESS.md`](../docs/COMPLET
 | `CX-TIMECODE-0001` | Timecode Show | 1 | 3 | implemented |
 | `CX-TIMECODE-0002` | Timecode Viewer | 19 | 3 | in-progress |
 | `CX-TIMECODE-0003` | Track Groups | 1 | 3 | not-started |
-| `CX-TIMECODE-0004` | Markers | 2 | 3 | not-started |
-| `CX-TIMECODE-0005` | Tracks | 3 | 3 | not-started |
+| `CX-TIMECODE-0004` | Markers | 2 | 3 | in-progress |
+| `CX-TIMECODE-0005` | Tracks | 3 | 3 | in-progress |
 | `CX-TIMECODE-0006` | Time Ranges | 1 | 3 | not-started |
 | `CX-TIMECODE-0007` | Events | 1 | 3 | in-progress |
 | `CX-TIMECODE-0008` | Timecode Slots | 9 | 3 | in-progress |
 | `CX-TIMECODE-0009` | Create a Timecode Show | 8 | 3 | implemented |
 | `CX-TIMECODE-0010` | Timecode Settings | 9 | 3 | in-progress |
-| `CX-TIMECODE-0011` | External Connections | 3 | 3 | not-started |
+| `CX-TIMECODE-0011` | External Connections | 3 | 3 | in-progress |
 
 ## Layouts
 

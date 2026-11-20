@@ -15,7 +15,9 @@
 //! rippling through the rest of the list. Version 10 adds a fine DMX offset to
 //! each channel, turning a profile's second byte into real 16-bit precision.
 //! Version 11 gives effects several targets with per-target phase and size, and
-//! an optional musical rate evaluated against the desk tempo. Older files still
+//! an optional musical rate evaluated against the desk tempo. Version 12 turns
+//! each timecode's flat event list into tracks, adds effect actions, markers and
+//! an external source. Older files still
 //! load: new sections default to empty, a missing fine offset means 8-bit, the
 //! v5 upgrade hands the
 //! values it finds in an old file to the desk through a [`LoadReport`], and the
@@ -34,12 +36,15 @@ use crate::palette::Palette;
 use crate::patch::{self, PatchRange};
 use crate::playback::{format_cue_number, Executor, Sequence, MAX_CUE_NUMBER, MAX_TIME};
 use crate::pools::{Filter, Group, World, MAX_GROUP_FIXTURES, MAX_POOL_OBJECTS};
-use crate::timecode::{self, TimecodeShow, MAX_FPS, MAX_TIMECODES, MAX_TIMECODE_EVENTS, MIN_FPS};
+use crate::timecode::{
+    self, Action, TimecodeShow, TimecodeSource, MAX_FPS, MAX_TIMECODES, MAX_TIMECODE_EVENTS,
+    MAX_TIMECODE_TRACKS, MIN_FPS,
+};
 
 pub const SHOW_FORMAT: &str = "openlight-show";
-pub const SHOW_VERSION: u32 = 11;
+pub const SHOW_VERSION: u32 = 12;
 /// Older documents that still load, oldest first.
-pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 /// Fastest rate master accepted, as a factor (400%).
 pub const MAX_RATE_MASTER: f64 = 4.0;
 pub const MAX_UNIVERSE_SIZE: u16 = 512;
@@ -938,55 +943,130 @@ impl Show {
                     timecode.number, timecode.fps
                 ));
             }
-            if timecode.events.len() > MAX_TIMECODE_EVENTS {
+            if let TimecodeSource::Mtc { port } = &timecode.source {
+                if port.trim().is_empty() {
+                    problems.push(format!(
+                        "timecode {}: MTC source has no serial port",
+                        timecode.number
+                    ));
+                }
+            }
+            if timecode.tracks.len() > MAX_TIMECODE_TRACKS {
+                problems.push(format!(
+                    "timecode {}: {} tracks, the limit is {MAX_TIMECODE_TRACKS}",
+                    timecode.number,
+                    timecode.tracks.len()
+                ));
+            }
+            if timecode.event_count() > MAX_TIMECODE_EVENTS {
                 problems.push(format!(
                     "timecode {}: {} events, the limit is {MAX_TIMECODE_EVENTS}",
                     timecode.number,
-                    timecode.events.len()
+                    timecode.event_count()
                 ));
             }
             let fps = timecode.frame_rate();
-            let mut seen = BTreeSet::new();
-            let mut previous = None;
-            for event in &timecode.events {
-                let frames = match timecode::parse(&event.at, fps) {
-                    Ok(frames) => frames,
-                    Err(error) => {
-                        problems.push(format!("timecode {}: {error}", timecode.number));
-                        continue;
-                    }
-                };
-                if !seen.insert(frames) {
+            let mut track_numbers = BTreeSet::new();
+            for track in &timecode.tracks {
+                if track.number == 0 {
                     problems.push(format!(
-                        "timecode {}: two events at {}",
-                        timecode.number, event.at
+                        "timecode {}: track number 0 is not allowed",
+                        timecode.number
                     ));
                 }
-                if let Some(previous) = previous {
-                    if frames < previous {
+                if !track_numbers.insert(track.number) {
+                    problems.push(format!(
+                        "timecode {}: track {} is listed twice",
+                        timecode.number, track.number
+                    ));
+                }
+                let mut seen = BTreeSet::new();
+                let mut previous = None;
+                for event in &track.events {
+                    let frames = match timecode::parse(&event.at, fps) {
+                        Ok(frames) => frames,
+                        Err(error) => {
+                            problems.push(format!(
+                                "timecode {} track {}: {error}",
+                                timecode.number, track.number
+                            ));
+                            continue;
+                        }
+                    };
+                    if !seen.insert(frames) {
                         problems.push(format!(
-                            "timecode {}: event {} is not in ascending order",
-                            timecode.number, event.at
+                            "timecode {} track {}: two events at {}",
+                            timecode.number, track.number, event.at
                         ));
                     }
-                }
-                previous = Some(frames);
-                match self.sequence(event.sequence) {
-                    None => problems.push(format!(
-                        "timecode {}: event {} references sequence {} which is not in the show",
-                        timecode.number, event.at, event.sequence
-                    )),
-                    Some(sequence) => {
-                        if sequence.cue_index(event.cue).is_none() {
+                    if let Some(previous) = previous {
+                        if frames < previous {
                             problems.push(format!(
-                                "timecode {}: event {} references cue {} which sequence {} does not have",
-                                timecode.number,
-                                event.at,
-                                format_cue_number(event.cue),
-                                sequence.number
+                                "timecode {} track {}: event {} is not in ascending order",
+                                timecode.number, track.number, event.at
                             ));
                         }
                     }
+                    previous = Some(frames);
+                    match &event.action {
+                        Action::Cue { sequence, cue } => match self.sequence(*sequence) {
+                            None => problems.push(format!(
+                                "timecode {} track {}: event {} references sequence {} which is not in the show",
+                                timecode.number, track.number, event.at, sequence
+                            )),
+                            Some(sequence) => {
+                                if sequence.cue_index(*cue).is_none() {
+                                    problems.push(format!(
+                                        "timecode {} track {}: event {} references cue {} which sequence {} does not have",
+                                        timecode.number,
+                                        track.number,
+                                        event.at,
+                                        format_cue_number(*cue),
+                                        sequence.number
+                                    ));
+                                }
+                            }
+                        },
+                        Action::Effect {
+                            effect,
+                            fixtures,
+                            ..
+                        } => {
+                            if self.effect(*effect).is_none() {
+                                problems.push(format!(
+                                    "timecode {} track {}: event {} references effect {} which is not in the show",
+                                    timecode.number, track.number, event.at, effect
+                                ));
+                            }
+                            if let Some(fixtures) = fixtures {
+                                if fixtures.is_empty() {
+                                    problems.push(format!(
+                                        "timecode {} track {}: event {} names no fixtures",
+                                        timecode.number, track.number, event.at
+                                    ));
+                                }
+                                for fixture in fixtures {
+                                    if self.fixture(*fixture).is_none() {
+                                        problems.push(format!(
+                                            "timecode {} track {}: event {} names fixture {} which is not patched",
+                                            timecode.number, track.number, event.at, fixture
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            for marker in &timecode.markers {
+                if let Err(error) = timecode::parse(&marker.at, fps) {
+                    problems.push(format!("timecode {}: marker {error}", timecode.number));
+                }
+                if marker.name.trim().is_empty() {
+                    problems.push(format!(
+                        "timecode {}: marker at {} has no name",
+                        timecode.number, marker.at
+                    ));
                 }
             }
         }
@@ -1299,7 +1379,7 @@ mod tests {
             .read_to_string(&mut text)
             .unwrap();
         assert!(text.contains("\"format\": \"openlight-show\""));
-        assert!(text.contains("\"version\": 11"));
+        assert!(text.contains("\"version\": 12"));
         assert!(text.contains("OpenLight Demo Wash"), "types are embedded");
         let _ = fs::remove_file(&path);
     }
@@ -1309,13 +1389,13 @@ mod tests {
         let path = temp_path("future");
         fs::write(
             &path,
-            r#"{"format":"openlight-show","version":12,"name":"x","fixture_types":[],"universes":[],"fixtures":[]}"#,
+            r#"{"format":"openlight-show","version":13,"name":"x","fixture_types":[],"universes":[],"fixtures":[]}"#,
         )
         .unwrap();
         let error = Show::load(&path).unwrap_err();
         assert!(matches!(
             error,
-            ShowError::UnsupportedVersion { found: 12, .. }
+            ShowError::UnsupportedVersion { found: 13, .. }
         ));
         let _ = fs::remove_file(&path);
     }
@@ -1539,44 +1619,55 @@ mod tests {
 
     #[test]
     fn timecode_events_are_validated() {
-        use crate::timecode::{TimecodeEvent, TimecodeShow};
+        use crate::timecode::{Action, Event, Marker, TimecodeShow, TimecodeSource, Track};
 
+        let event = |at: &str| Event {
+            at: at.into(),
+            action: Action::Cue {
+                sequence: 9,
+                cue: 1.0,
+            },
+        };
         let mut show = demo_show();
         show.timecodes.push(TimecodeShow {
             number: 0,
             name: String::new(),
             fps: 0,
-            events: vec![
-                TimecodeEvent {
-                    at: "00:00:02:00".into(),
-                    sequence: 9,
-                    cue: 1.0,
+            source: TimecodeSource::Mtc { port: " ".into() },
+            tracks: vec![
+                Track {
+                    number: 0,
+                    name: String::new(),
+                    events: vec![
+                        event("00:00:02:00"),
+                        event("00:00:02:00"),
+                        event("00:00:01:00"),
+                        event("nope"),
+                    ],
                 },
-                TimecodeEvent {
-                    at: "00:00:02:00".into(),
-                    sequence: 9,
-                    cue: 1.0,
-                },
-                TimecodeEvent {
-                    at: "00:00:01:00".into(),
-                    sequence: 9,
-                    cue: 1.0,
-                },
-                TimecodeEvent {
-                    at: "nope".into(),
-                    sequence: 9,
-                    cue: 1.0,
+                Track {
+                    number: 0,
+                    name: "Again".into(),
+                    events: Vec::new(),
                 },
             ],
+            markers: vec![Marker {
+                at: "00:00:00:00".into(),
+                name: " ".into(),
+            }],
         });
         let problems = show.validate();
         for expected in [
             "timecode number 0",
             "0 fps",
+            "MTC source has no serial port",
+            "track number 0 is not allowed",
+            "track 0 is listed twice",
             "two events at 00:00:02:00",
             "not in ascending order",
             "is not a timecode",
             "sequence 9 which is not in the show",
+            "marker at 00:00:00:00 has no name",
         ] {
             assert!(
                 problems.iter().any(|problem| problem.contains(expected)),
@@ -1588,7 +1679,7 @@ mod tests {
     #[test]
     fn timecode_events_must_name_a_stored_cue() {
         use crate::playback::{Cue, Sequence, Trigger};
-        use crate::timecode::{TimecodeEvent, TimecodeShow};
+        use crate::timecode::{Action, Event, TimecodeShow, Track};
 
         let mut show = demo_show();
         show.sequences.push(Sequence {
@@ -1613,11 +1704,19 @@ mod tests {
             number: 1,
             name: "Song".into(),
             fps: 25,
-            events: vec![TimecodeEvent {
-                at: "00:00:00:00".into(),
-                sequence: 1,
-                cue: 2.0,
+            source: crate::timecode::TimecodeSource::Internal,
+            tracks: vec![Track {
+                number: 1,
+                name: "Cues".into(),
+                events: vec![Event {
+                    at: "00:00:00:00".into(),
+                    action: Action::Cue {
+                        sequence: 1,
+                        cue: 2.0,
+                    },
+                }],
             }],
+            markers: Vec::new(),
         });
         let problems = show.validate();
         assert!(
@@ -1626,6 +1725,111 @@ mod tests {
                 .any(|problem| problem.contains("cue 2 which sequence 1 does not have")),
             "{problems:#?}"
         );
+    }
+
+    #[test]
+    fn timecode_effect_actions_must_name_a_stored_effect_and_patched_fixtures() {
+        use crate::timecode::{Action, Event, TimecodeShow, Track};
+
+        let mut show = demo_show();
+        show.timecodes.push(TimecodeShow {
+            number: 1,
+            name: "Song".into(),
+            fps: 25,
+            source: crate::timecode::TimecodeSource::Internal,
+            tracks: vec![Track {
+                number: 1,
+                name: "FX".into(),
+                events: vec![Event {
+                    at: "00:00:00:00".into(),
+                    action: Action::Effect {
+                        effect: 99,
+                        fixtures: Some(vec![99]),
+                        on: true,
+                    },
+                }],
+            }],
+            markers: Vec::new(),
+        });
+        let problems = show.validate();
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("effect 99 which is not in the show")),
+            "{problems:#?}"
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("fixture 99 which is not patched")),
+            "{problems:#?}"
+        );
+    }
+
+    #[test]
+    fn version_eleven_timecode_events_become_track_one() {
+        let mut path = std::env::temp_dir();
+        path.push(format!("openlight-{}-v11.olshow", std::process::id()));
+        fs::write(
+            &path,
+            r#"{
+                "format": "openlight-show",
+                "version": 11,
+                "name": "Old",
+                "sequences": [{"number": 1, "cues": [{"number": 1}]}],
+                "timecodes": [{
+                    "number": 1,
+                    "name": "Song",
+                    "fps": 25,
+                    "events": [{"at": "00:00:02:00", "sequence": 1, "cue": 1}]
+                }]
+            }"#,
+        )
+        .unwrap();
+        let (show, report) = Show::load_with_report(&path).unwrap();
+        assert_eq!(show.version, SHOW_VERSION);
+        assert!(report.warnings.is_empty(), "{report:#?}");
+        assert_eq!(show.timecodes[0].tracks.len(), 1);
+        assert_eq!(show.timecodes[0].tracks[0].number, 1);
+        assert_eq!(show.timecodes[0].tracks[0].name, "Cues");
+        assert_eq!(
+            show.timecodes[0].tracks[0].events[0].action,
+            crate::timecode::Action::Cue {
+                sequence: 1,
+                cue: 1.0
+            }
+        );
+        assert!(show.validate().is_empty());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn timecode_sources_round_trip() {
+        use crate::timecode::{TimecodeShow, TimecodeSource};
+
+        let mut show = demo_show();
+        show.timecodes.push(TimecodeShow {
+            number: 1,
+            name: "Song".into(),
+            fps: 25,
+            source: TimecodeSource::Mtc {
+                port: "/dev/ttyACM0".into(),
+            },
+            tracks: Vec::new(),
+            markers: Vec::new(),
+        });
+        let mut path = std::env::temp_dir();
+        path.push(format!("openlight-{}-source.olshow", std::process::id()));
+        show.save(&path).unwrap();
+        let (loaded, report) = Show::load_with_report(&path).unwrap();
+        assert!(report.warnings.is_empty(), "{report:#?}");
+        assert_eq!(
+            loaded.timecodes[0].source,
+            TimecodeSource::Mtc {
+                port: "/dev/ttyACM0".into()
+            }
+        );
+        let _ = fs::remove_file(&path);
     }
 
     #[test]

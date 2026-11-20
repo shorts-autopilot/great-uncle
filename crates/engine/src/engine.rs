@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use crate::command::{
     self, Command, CommandError, EffectRate, Level, LevelSource, PlaybackRef, ReportKind,
-    SetTarget, StoreMode, TriggerArg,
+    SetTarget, StoreMode, TimecodeAction, TriggerArg,
 };
 use crate::csv;
 use crate::desk::{Desk, Masters, Preview, RunState};
@@ -26,6 +26,7 @@ use crate::gdtf;
 use crate::history::{History, Snapshot};
 use crate::journal::ReplayFrom;
 use crate::levels::Levels;
+use crate::mtc::{MtcMessage, MtcPosition, MtcReader};
 use crate::output::{lock, OutputStatus};
 use crate::palette::{self, Palette};
 use crate::patch::{self, PatchRange};
@@ -36,7 +37,9 @@ use crate::playback::{
 use crate::pools::{Filter, Group, World};
 use crate::render::{self, Highlight, OutputFrame, Stage};
 use crate::show::{Fixture, Show, MAX_FIXTURES, MAX_RATE_MASTER};
-use crate::timecode::{self, TimecodeEvent, TimecodePlayer, TimecodeShow, MAX_FPS, MIN_FPS};
+use crate::timecode::{
+    self, Action, Event, Marker, TimecodePlayer, TimecodeShow, TimecodeSource, MAX_FPS, MIN_FPS,
+};
 
 /// Everything `Store Cue` carries before defaults are applied.
 struct CueSpec {
@@ -147,6 +150,8 @@ pub struct Engine {
     pub effects: Effects,
     /// Timecode playhead. Not part of the show file.
     pub timecode: TimecodePlayer,
+    /// External MTC reader, open only while an MTC show is playing.
+    mtc: Option<MtcReader>,
     /// Show snapshots for `Undo` and `Redo`.
     history: History,
     /// The statement being dispatched, recorded as its undo label.
@@ -184,6 +189,7 @@ impl Engine {
             playback: Playback::new(),
             effects: Effects::default(),
             timecode: TimecodePlayer::default(),
+            mtc: None,
             history: History::default(),
             label: String::new(),
             journal: None,
@@ -207,11 +213,12 @@ impl Engine {
         self.clock = now;
         // Timecode events start cues before the playback is sampled, so a cue
         // that begins on this frame is already in the output.
-        let fired = self.timecode_events(now);
+        let (fired, external_changed) = self.timecode_events(now);
         let mut started = BTreeSet::new();
         for event in &fired {
-            started.insert(Target::Sequence(event.sequence));
-            self.fire_timecode_event(event, now);
+            if let Action::Cue { sequence, .. } = &event.action {
+                started.insert(Target::Sequence(*sequence));
+            }
         }
         // A `Follow` or `Time` trigger that came due starts through the same
         // path, so a chained cue is already in this frame. A target timecode
@@ -230,6 +237,7 @@ impl Engine {
         let changed = advanced
             || !fired.is_empty()
             || chained
+            || external_changed
             || self.effects.is_running()
             || self.timecode.is_running();
         if changed {
@@ -303,7 +311,7 @@ impl Engine {
         self.desk = desk;
         self.playback = Playback::new();
         self.effects.stop_all();
-        self.timecode.stop();
+        self.stop_timecode_source();
         self.history = History::default();
         self.restore_desk_runs();
         self.revision += 1;
@@ -647,16 +655,31 @@ impl Engine {
             Command::SetEffectFreeRate { effect } => self.set_effect_free_rate(effect),
             Command::SetTempo { bpm } => self.set_tempo(bpm),
             Command::TapTempo => self.tap_tempo(),
-            Command::StoreTimecode { number, name, fps } => self.store_timecode(number, name, fps),
+            Command::StoreTimecode {
+                number,
+                name,
+                fps,
+                source,
+            } => self.store_timecode(number, name, fps, source),
             Command::DeleteTimecode { number } => self.delete_timecode(number),
+            Command::TimecodeTrack {
+                timecode,
+                track,
+                name,
+            } => self.timecode_track(timecode, track, name),
             Command::AddTimecodeEvent {
                 timecode,
+                track,
                 at,
-                sequence,
-                cue,
-            } => self.add_timecode_event(timecode, at, sequence, cue),
-            Command::RemoveTimecodeEvent { timecode, at } => {
-                self.remove_timecode_event(timecode, at)
+                action,
+            } => self.add_timecode_event(timecode, track, at, action),
+            Command::RemoveTimecodeEvent {
+                timecode,
+                track,
+                at,
+            } => self.remove_timecode_event(timecode, track, at),
+            Command::TimecodeMarker { timecode, at, name } => {
+                self.add_timecode_marker(timecode, at, name)
             }
             Command::StartTimecode { timecode } => self.start_timecode(timecode),
             Command::PauseTimecode { timecode } => self.pause_timecode(timecode),
@@ -1052,7 +1075,7 @@ impl Engine {
         self.desk.clear();
         self.playback.clear();
         self.effects.stop_all();
-        self.timecode.stop();
+        self.stop_timecode_source();
         self.revision += 1;
         // `New` replaces the document, so replay has to replace it too.
         self.note(crate::journal::EntryKind::Show);
@@ -3383,18 +3406,28 @@ impl Engine {
         // The generic validation failure says the show would be invalid; this
         // says which event depends on the cue and how to remove it.
         for timecode in &self.show.timecodes {
-            if let Some(event) = timecode.events.iter().find(|event| {
-                event.sequence == sequence_number && (event.cue - number).abs() < 1e-9
-            }) {
-                return Err(CommandError::with_hint(
-                    format!(
-                        "cue {} is started by timecode {} at {}; remove the event first",
-                        format_cue_number(number),
-                        timecode.number,
-                        event.at
-                    ),
-                    format!("`Timecode {} Remove {}`", timecode.number, event.at),
-                ));
+            for track in &timecode.tracks {
+                if let Some(event) = track.events.iter().find(|event| {
+                    matches!(
+                        &event.action,
+                        Action::Cue { sequence, cue }
+                            if *sequence == sequence_number && (*cue - number).abs() < 1e-9
+                    )
+                }) {
+                    return Err(CommandError::with_hint(
+                        format!(
+                            "cue {} is started by timecode {} track {} at {}; remove the event first",
+                            format_cue_number(number),
+                            timecode.number,
+                            track.number,
+                            event.at
+                        ),
+                        format!(
+                            "`Timecode {} Track {} Remove {}`",
+                            timecode.number, track.number, event.at
+                        ),
+                    ));
+                }
             }
         }
         let message = self.mutate(|show| {
@@ -5546,6 +5579,32 @@ impl Engine {
         missing
     }
 
+    /// Stop the player and release an MTC port if one is open. External and
+    /// internal clocks are never allowed to run together.
+    fn stop_timecode_source(&mut self) {
+        self.mtc = None;
+        self.timecode.stop();
+    }
+
+    fn action_label(action: &Action) -> String {
+        match action {
+            Action::Cue { sequence, cue } => {
+                format!("Sequence {} Cue {}", sequence, format_cue_number(*cue))
+            }
+            Action::Effect {
+                effect,
+                fixtures,
+                on,
+            } => {
+                let mut label = format!("Effect {} {}", effect, if *on { "On" } else { "Off" });
+                if let Some(fixtures) = fixtures {
+                    label.push_str(&format!(" ({})", format_fixture_list(fixtures)));
+                }
+                label
+            }
+        }
+    }
+
     /// Everything the timecode player and its active show are doing.
     pub fn timecode_status(&self) -> String {
         let Some(number) = self.timecode.active() else {
@@ -5554,6 +5613,9 @@ impl Engine {
         let Some(timecode) = self.show.timecode(number) else {
             return "idle".to_string();
         };
+        if let Some(error) = self.timecode.source_error() {
+            return format!("timecode {number} source unavailable: {error}");
+        }
         let position = self.timecode.position_at(timecode, self.clock);
         let state = if self.timecode.is_running() {
             "running"
@@ -5562,11 +5624,19 @@ impl Engine {
         } else {
             "stopped"
         };
-        format!(
-            "timecode {number} {state} {} ({} fps)",
+        let mut status = format!(
+            "timecode {number} {state} {} ({} fps, {})",
             timecode::format(position, timecode.frame_rate()),
-            timecode.frame_rate()
-        )
+            timecode.frame_rate(),
+            timecode.source.label()
+        );
+        if self.timecode.is_external() && self.timecode.is_stalled() {
+            status.push_str(", stalled");
+        }
+        if let Some(notice) = self.timecode.notice() {
+            status.push_str(&format!(" — {notice}"));
+        }
+        status
     }
 
     fn store_timecode(
@@ -5574,6 +5644,7 @@ impl Engine {
         number: u16,
         name: Option<String>,
         fps: Option<u8>,
+        source: Option<TimecodeSource>,
     ) -> Result<CommandOutcome, CommandError> {
         if number == 0 {
             return Err(CommandError::new("timecode number 0 is not allowed"));
@@ -5590,8 +5661,17 @@ impl Engine {
                 return Err(CommandError::new("timecode name is empty"));
             }
         }
+        if let Some(TimecodeSource::Mtc { port }) = &source {
+            if port.trim().is_empty() {
+                return Err(CommandError::new("the MTC port is empty"));
+            }
+        }
         let existed = self.show.timecode(number).is_some();
         let previous_fps = self.show.timecode(number).map(TimecodeShow::frame_rate);
+        let previous_source = self
+            .show
+            .timecode(number)
+            .map(|timecode| timecode.source.clone());
         let mut message = self.mutate(|show| {
             match show
                 .timecodes
@@ -5605,6 +5685,9 @@ impl Engine {
                     if let Some(fps) = fps {
                         timecode.fps = fps;
                     }
+                    if let Some(source) = &source {
+                        timecode.source = source.clone();
+                    }
                 }
                 None => {
                     let mut timecode = TimecodeShow::new(number);
@@ -5614,6 +5697,9 @@ impl Engine {
                     if let Some(fps) = fps {
                         timecode.fps = fps;
                     }
+                    if let Some(source) = &source {
+                        timecode.source = source.clone();
+                    }
                     show.timecodes.push(timecode);
                     show.timecodes.sort_by_key(|timecode| timecode.number);
                 }
@@ -5622,20 +5708,33 @@ impl Engine {
                 .timecode(number)
                 .ok_or_else(|| CommandError::new(format!("timecode {number} does not exist")))?;
             Ok(format!(
-                "{} {} ({} fps, {})",
+                "{} {} ({} fps, {}, {}, {})",
                 if existed { "Updated" } else { "Stored" },
                 timecode.display_name(),
                 timecode.frame_rate(),
-                count(timecode.events.len(), "event")
+                timecode.source.label(),
+                count(timecode.tracks.len(), "track"),
+                count(timecode.event_count(), "event")
             ))
         })?;
 
         // Frame counts mean different times when the rate changes, so a player
         // on this show stops instead of firing events at the wrong moment.
         let current_fps = self.show.timecode(number).map(TimecodeShow::frame_rate);
-        if previous_fps != current_fps && self.timecode.active() == Some(number) {
-            self.timecode.stop();
-            message.push_str("; the player was stopped because the frame rate changed");
+        let current_source = self
+            .show
+            .timecode(number)
+            .map(|timecode| timecode.source.clone());
+        if self.timecode.active() == Some(number)
+            && (previous_fps != current_fps || previous_source.as_ref() != current_source.as_ref())
+        {
+            let reason = if previous_fps != current_fps {
+                "the frame rate changed"
+            } else {
+                "the source changed"
+            };
+            self.stop_timecode_source();
+            message.push_str(&format!("; the player was stopped because {reason}"));
         }
         Ok(CommandOutcome::message(message))
     }
@@ -5652,18 +5751,97 @@ impl Engine {
             Ok(format!("Deleted timecode {number}"))
         })?;
         if self.timecode.active() == Some(number) {
-            self.timecode.stop();
+            self.stop_timecode_source();
         }
         Ok(CommandOutcome::message(message))
+    }
+
+    fn timecode_track(
+        &mut self,
+        number: u16,
+        track: u8,
+        name: Option<String>,
+    ) -> Result<CommandOutcome, CommandError> {
+        if track == 0 {
+            return Err(CommandError::new("track number 0 is not allowed"));
+        }
+        let Some(timecode) = self.show.timecode(number).cloned() else {
+            return Err(CommandError::with_hint(
+                format!("timecode {number} does not exist"),
+                "`Timecode` lists the timecode shows",
+            ));
+        };
+        if let Some(name) = &name {
+            if name.trim().is_empty() {
+                return Err(CommandError::new("track name is empty"));
+            }
+        }
+        if name.is_none() {
+            if timecode.track(track).is_none() {
+                return Err(CommandError::with_hint(
+                    format!("timecode {number} track {track} does not exist"),
+                    format!("create it with `Timecode {number} Track {track} \"<name>\"`"),
+                ));
+            }
+            return Ok(self.timecode_track_list(number, track));
+        }
+        let name = name.expect("a track name was checked above");
+        let message = self.mutate(|show| {
+            let timecode = show
+                .timecodes
+                .iter_mut()
+                .find(|timecode| timecode.number == number)
+                .ok_or_else(|| CommandError::new(format!("timecode {number} does not exist")))?;
+            let created = timecode.track(track).is_none();
+            timecode.ensure_track(track).name = name.clone();
+            Ok(format!(
+                "{} track {track} \"{name}\" on timecode {number}",
+                if created { "Created" } else { "Renamed" }
+            ))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn timecode_track_list(&self, number: u16, track: u8) -> CommandOutcome {
+        let Some(timecode) = self.show.timecode(number) else {
+            return CommandOutcome::message(format!("Timecode {number} does not exist."));
+        };
+        let Some(track_show) = timecode.track(track) else {
+            return CommandOutcome::message(format!(
+                "Timecode {number} track {track} does not exist."
+            ));
+        };
+        let mut lines = vec![format!(
+            "Timecode {number} track {track} \"{}\" — {}",
+            track_show.name,
+            count(track_show.events.len(), "event")
+        )];
+        if track_show.events.is_empty() {
+            lines.push("No events on this track.".to_string());
+        } else {
+            lines.push(format!("{:<14}  {}", "Time", "Action"));
+            for event in &track_show.events {
+                lines.push(format!(
+                    "{:<14}  {}",
+                    event.at,
+                    Self::action_label(&event.action)
+                ));
+            }
+        }
+        CommandOutcome::with_lines(lines)
     }
 
     fn add_timecode_event(
         &mut self,
         number: u16,
+        track: Option<u8>,
         at: String,
-        sequence_number: u16,
-        cue: f64,
+        action: TimecodeAction,
     ) -> Result<CommandOutcome, CommandError> {
+        let track = track.unwrap_or(1);
+        if track == 0 {
+            return Err(CommandError::new("track number 0 is not allowed"));
+        }
         let Some(timecode) = self.show.timecode(number).cloned() else {
             return Err(CommandError::with_hint(
                 format!("timecode {number} does not exist"),
@@ -5671,21 +5849,64 @@ impl Engine {
             ));
         };
         let frames = timecode::parse(&at, timecode.frame_rate()).map_err(CommandError::new)?;
-        let Some(sequence) = self.show.sequence(sequence_number) else {
-            return Err(CommandError::with_hint(
-                format!("sequence {sequence_number} does not exist"),
-                "store a cue first: `Store Cue 1`",
-            ));
+        let action = match action {
+            TimecodeAction::Cue { sequence, cue } => {
+                let Some(found) = self.show.sequence(sequence) else {
+                    return Err(CommandError::with_hint(
+                        format!("sequence {sequence} does not exist"),
+                        "store a cue first: `Store Cue 1`",
+                    ));
+                };
+                if found.cue_index(cue).is_none() {
+                    return Err(CommandError::with_hint(
+                        format!("sequence {sequence} has no cue {}", format_cue_number(cue)),
+                        format!("`Sequence {sequence}` lists its cues"),
+                    ));
+                }
+                Action::Cue { sequence, cue }
+            }
+            TimecodeAction::Effect {
+                effect,
+                fixtures,
+                group,
+                on,
+            } => {
+                if self.show.effect(effect).is_none() {
+                    return Err(CommandError::with_hint(
+                        format!("effect {effect} does not exist"),
+                        "`Effect` lists the stored effects",
+                    ));
+                }
+                let fixtures = if on {
+                    match (group, fixtures) {
+                        (Some(group), _) => Some(self.group_targets(group)?),
+                        (None, Some(fixtures)) => {
+                            let missing = self.missing_fixtures(&fixtures);
+                            if !missing.is_empty() {
+                                return Err(CommandError::new(format!(
+                                    "fixture {} is not patched",
+                                    format_fixture_list(&missing)
+                                )));
+                            }
+                            if fixtures.is_empty() {
+                                return Err(CommandError::new(
+                                    "the effect action names no fixtures",
+                                ));
+                            }
+                            Some(fixtures)
+                        }
+                        (None, None) => None,
+                    }
+                } else {
+                    None
+                };
+                Action::Effect {
+                    effect,
+                    fixtures,
+                    on,
+                }
+            }
         };
-        if sequence.cue_index(cue).is_none() {
-            return Err(CommandError::with_hint(
-                format!(
-                    "sequence {sequence_number} has no cue {}",
-                    format_cue_number(cue)
-                ),
-                format!("`Sequence {sequence_number}` lists its cues"),
-            ));
-        }
 
         let message = self.mutate(|show| {
             let Some(timecode) = show
@@ -5698,27 +5919,27 @@ impl Engine {
                 )));
             };
             let fps = timecode.frame_rate();
-            if timecode
+            let track_show = timecode.ensure_track(track);
+            if track_show
                 .events
                 .iter()
                 .any(|event| timecode::parse(&event.at, fps).ok() == Some(frames))
             {
                 return Err(CommandError::new(format!(
-                    "timecode {number} already has an event at {at}"
+                    "timecode {number} track {track} already has an event at {at}"
                 )));
             }
-            timecode.events.push(TimecodeEvent {
+            track_show.events.push(Event {
                 at: at.clone(),
-                sequence: sequence_number,
-                cue,
+                action: action.clone(),
             });
-            timecode
+            track_show
                 .events
                 .sort_by_key(|event| timecode::parse(&event.at, fps).unwrap_or(u64::MAX));
             Ok(format!(
-                "Added cue {} at {at} to timecode {number} ({})",
-                format_cue_number(cue),
-                count(timecode.events.len(), "event")
+                "Added {} at {at} to timecode {number} track {track} ({})",
+                Self::action_label(&action),
+                count(timecode.event_count(), "event")
             ))
         })?;
         Ok(CommandOutcome::message(message))
@@ -5727,8 +5948,13 @@ impl Engine {
     fn remove_timecode_event(
         &mut self,
         number: u16,
+        track: Option<u8>,
         at: String,
     ) -> Result<CommandOutcome, CommandError> {
+        let track = track.unwrap_or(1);
+        if track == 0 {
+            return Err(CommandError::new("track number 0 is not allowed"));
+        }
         let Some(timecode) = self.show.timecode(number).cloned() else {
             return Err(CommandError::with_hint(
                 format!("timecode {number} does not exist"),
@@ -5747,22 +5973,71 @@ impl Engine {
                 )));
             };
             let fps = timecode.frame_rate();
-            let before = timecode.events.len();
-            timecode
+            let Some(track_show) = timecode.track_mut(track) else {
+                return Err(CommandError::new(format!(
+                    "timecode {number} track {track} does not exist"
+                )));
+            };
+            let before = track_show.events.len();
+            track_show
                 .events
                 .retain(|event| timecode::parse(&event.at, fps).ok() != Some(frames));
-            if timecode.events.len() == before {
+            if track_show.events.len() == before {
                 return Err(CommandError::new(format!(
-                    "timecode {number} has no event at {at}"
+                    "timecode {number} track {track} has no event at {at}"
                 )));
             }
-            Ok(format!("Removed the event at {at} from timecode {number}"))
+            Ok(format!(
+                "Removed the event at {at} from timecode {number} track {track}"
+            ))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn add_timecode_marker(
+        &mut self,
+        number: u16,
+        at: String,
+        name: String,
+    ) -> Result<CommandOutcome, CommandError> {
+        if name.trim().is_empty() {
+            return Err(CommandError::new("marker name is empty"));
+        }
+        let Some(timecode) = self.show.timecode(number).cloned() else {
+            return Err(CommandError::with_hint(
+                format!("timecode {number} does not exist"),
+                "`Timecode` lists the timecode shows",
+            ));
+        };
+        timecode::parse(&at, timecode.frame_rate()).map_err(CommandError::new)?;
+        let message = self.mutate(|show| {
+            let Some(timecode) = show
+                .timecodes
+                .iter_mut()
+                .find(|timecode| timecode.number == number)
+            else {
+                return Err(CommandError::new(format!(
+                    "timecode {number} does not exist"
+                )));
+            };
+            timecode.markers.push(Marker {
+                at: at.clone(),
+                name: name.clone(),
+            });
+            let fps = timecode.frame_rate();
+            timecode
+                .markers
+                .sort_by_key(|marker| timecode::parse(&marker.at, fps).unwrap_or(u64::MAX));
+            Ok(format!(
+                "Added marker \"{name}\" at {at} to timecode {number} ({})",
+                count(timecode.markers.len(), "marker")
+            ))
         })?;
         Ok(CommandOutcome::message(message))
     }
 
     fn start_timecode(&mut self, number: u16) -> Result<CommandOutcome, CommandError> {
-        let Some(timecode) = self.show.timecode(number) else {
+        let Some(timecode) = self.show.timecode(number).cloned() else {
             return Err(CommandError::with_hint(
                 format!("timecode {number} does not exist"),
                 "store one first: `Store Timecode 1 \"Song\"`",
@@ -5770,14 +6045,40 @@ impl Engine {
         };
         let resume = self.timecode.is_paused() && self.timecode.active() == Some(number);
         let from = if resume { self.timecode.position() } else { 0 };
-        self.timecode.start(number, from, self.clock);
-        self.revision += 1;
-        Ok(CommandOutcome::message(format!(
+        self.stop_timecode_source();
+        let mut message = format!(
             "{} {} at {}",
             if resume { "Resumed" } else { "Started" },
             timecode.display_name(),
             timecode::format(from, timecode.frame_rate())
-        )))
+        );
+        match &timecode.source {
+            TimecodeSource::Internal => self.timecode.start(number, from, self.clock),
+            TimecodeSource::Mtc { port } => match MtcReader::open(port) {
+                Ok(reader) => {
+                    self.mtc = Some(reader);
+                    self.timecode.start_external(number, from, self.clock);
+                    message.push_str(&format!(", waiting for MTC on {port}"));
+                }
+                Err(error) => {
+                    self.timecode.start_external(number, from, self.clock);
+                    self.timecode
+                        .fail_source(format!("cannot open {port}: {error}"));
+                    message = format!(
+                        "Timecode {number} source unavailable: cannot open {port}: {error}"
+                    );
+                }
+            },
+            TimecodeSource::Osc => {
+                self.timecode.start_external(number, from, self.clock);
+                self.timecode.set_notice(
+                    "waiting for positions through the OSC feed; the UDP listener is part of the web remote",
+                );
+                message.push_str(", waiting for OSC positions");
+            }
+        }
+        self.revision += 1;
+        Ok(CommandOutcome::message(message))
     }
 
     fn pause_timecode(&mut self, number: u16) -> Result<CommandOutcome, CommandError> {
@@ -5793,6 +6094,7 @@ impl Engine {
             )));
         }
         self.timecode.pause(&timecode, self.clock);
+        self.mtc = None;
         self.revision += 1;
         Ok(CommandOutcome::message(format!(
             "Paused timecode {number} at {}",
@@ -5812,7 +6114,7 @@ impl Engine {
                 "Timecode {number} is not running"
             )));
         }
-        self.timecode.stop();
+        self.stop_timecode_source();
         self.revision += 1;
         Ok(CommandOutcome::message(format!(
             "Stopped timecode {number} at 00:00:00:00"
@@ -5843,24 +6145,39 @@ impl Engine {
                     return CommandOutcome::message(format!("Timecode {number} does not exist."));
                 };
                 let mut lines = vec![format!(
-                    "{} — {} fps, {} events",
+                    "{} — {} fps, {}, {}, {}",
                     timecode.display_name(),
                     timecode.frame_rate(),
-                    timecode.events.len()
+                    timecode.source.label(),
+                    count(timecode.tracks.len(), "track"),
+                    count(timecode.event_count(), "event")
                 )];
-                if timecode.events.is_empty() {
+                if timecode.event_count() == 0 {
                     lines.push(format!(
                         "No events. Add one with `Timecode {number} Add 00:00:00:00 Sequence 1 Cue 1`."
                     ));
                 } else {
-                    lines.push(format!("{:<14} {:>8} {:>6}", "Time", "Sequence", "Cue"));
-                    for event in &timecode.events {
+                    for track in &timecode.tracks {
                         lines.push(format!(
-                            "{:<14} {:>8} {:>6}",
-                            event.at,
-                            event.sequence,
-                            format_cue_number(event.cue)
+                            "Track {} \"{}\" ({})",
+                            track.number,
+                            track.name,
+                            count(track.events.len(), "event")
                         ));
+                        lines.push(format!("  {:<14}  {}", "Time", "Action"));
+                        for event in &track.events {
+                            lines.push(format!(
+                                "  {:<14}  {}",
+                                event.at,
+                                Self::action_label(&event.action)
+                            ));
+                        }
+                    }
+                }
+                if !timecode.markers.is_empty() {
+                    lines.push("Markers:".to_string());
+                    for marker in &timecode.markers {
+                        lines.push(format!("  {:<14}  \"{}\"", marker.at, marker.name));
                     }
                 }
                 if self.timecode.active() == Some(number) {
@@ -5875,16 +6192,18 @@ impl Engine {
                     );
                 }
                 let mut lines = vec![format!(
-                    "{:<4} {:<20} {:>4} {:>7}",
-                    "No.", "Name", "Fps", "Events"
+                    "{:<4} {:<20} {:>4} {:<24} {:>6} {:>7}",
+                    "No.", "Name", "Fps", "Source", "Tracks", "Events"
                 )];
                 for timecode in &self.show.timecodes {
                     lines.push(format!(
-                        "{:<4} {:<20} {:>4} {:>7}",
+                        "{:<4} {:<20} {:>4} {:<24} {:>6} {:>7}",
                         timecode.number,
                         truncate(&timecode.name, 20),
                         timecode.frame_rate(),
-                        timecode.events.len()
+                        truncate(&timecode.source.label(), 24),
+                        timecode.tracks.len(),
+                        timecode.event_count()
                     ));
                 }
                 if self.timecode.active().is_some() {
@@ -5895,33 +6214,145 @@ impl Engine {
         }
     }
 
-    fn timecode_events(&mut self, now: Instant) -> Vec<TimecodeEvent> {
+    /// Handle reader messages and signal timeouts. Returns fired events and
+    /// whether the external state changed (stall, stop or failure).
+    fn timecode_events(&mut self, now: Instant) -> (Vec<Event>, bool) {
         if !self.timecode.is_running() {
-            return Vec::new();
+            return (Vec::new(), false);
         }
+        let Some(number) = self.timecode.active() else {
+            return (Vec::new(), false);
+        };
+        let Some(timecode) = self.show.timecode(number) else {
+            self.stop_timecode_source();
+            return (Vec::new(), false);
+        };
+        let mut changed = false;
+        let mut fired = Vec::new();
+        if self.timecode.is_external() {
+            let messages = self.mtc.as_ref().map(MtcReader::drain).unwrap_or_default();
+            for message in messages {
+                match message {
+                    MtcMessage::Position(position) => {
+                        let events = self.accept_mtc_position(position, now);
+                        if !events.is_empty() {
+                            changed = true;
+                            fired.extend(events);
+                        }
+                        if self.timecode.source_error().is_some() {
+                            changed = true;
+                            break;
+                        }
+                    }
+                    MtcMessage::Warning(warning) => {
+                        self.timecode.set_notice(warning);
+                        changed = true;
+                    }
+                    MtcMessage::Unavailable(error) => {
+                        self.timecode.fail_source(error);
+                        self.mtc = None;
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+            if self.timecode.is_running() {
+                if let Some(age) = self.timecode.signal_age(now) {
+                    if age > Duration::from_secs(5) {
+                        self.stop_timecode_source();
+                        self.timecode.set_notice(
+                            "external timecode signal was lost for more than 5 s; stopped",
+                        );
+                        changed = true;
+                    } else if age > Duration::from_millis(500) && !self.timecode.is_stalled() {
+                        self.timecode.mark_stalled();
+                        changed = true;
+                    }
+                }
+            }
+        } else {
+            fired = self.timecode.advance(timecode, now);
+        }
+        let now = if now > self.clock { now } else { self.clock };
+        self.clock = now;
+        for event in &fired {
+            self.apply_action(&event.action, now);
+        }
+        (fired, changed)
+    }
+
+    /// Accept one decoded MTC position, rejecting a rate that does not match
+    /// the show. A mismatch stops the follower rather than running fast or slow.
+    fn accept_mtc_position(&mut self, position: MtcPosition, now: Instant) -> Vec<Event> {
         let Some(number) = self.timecode.active() else {
             return Vec::new();
         };
         let Some(timecode) = self.show.timecode(number) else {
-            self.timecode.stop();
             return Vec::new();
         };
-        // Borrowing the show and the player as separate fields keeps the
-        // 60 Hz tick from cloning the event list on every frame.
-        self.timecode.advance(timecode, now)
+        if position.rate.fps() != timecode.frame_rate() {
+            let reason = format!(
+                "MTC source is {}, but timecode {number} is {} fps",
+                position.rate.label(),
+                timecode.frame_rate()
+            );
+            self.timecode.fail_source(reason);
+            self.mtc = None;
+            return Vec::new();
+        }
+        self.timecode
+            .follow_external(timecode, position.frames, now)
     }
 
-    /// Start the cue a timecode event names. Events that point at a cue that has
-    /// since been deleted are skipped rather than stopping the track.
-    fn fire_timecode_event(&mut self, event: &TimecodeEvent, now: Instant) {
-        let Some(index) = self
-            .show
-            .sequence(event.sequence)
-            .and_then(|sequence| sequence.cue_index(event.cue))
-        else {
-            return;
+    /// Feed a position from a transport that is not MTC (the OSC listener
+    /// planned for item 12 uses this). Returns the number of events fired.
+    pub fn feed_timecode_position(&mut self, frames: u64) -> usize {
+        if !self.timecode.is_running() || !self.timecode.is_external() {
+            return 0;
+        }
+        let Some(number) = self.timecode.active() else {
+            return 0;
         };
-        self.start_cue(Target::Sequence(event.sequence), event.sequence, index, now);
+        let Some(timecode) = self.show.timecode(number) else {
+            return 0;
+        };
+        let now = self.clock;
+        let fired = self.timecode.follow_external(timecode, frames, now);
+        for event in &fired {
+            self.apply_action(&event.action, now);
+        }
+        if !fired.is_empty() {
+            self.revision += 1;
+        }
+        fired.len()
+    }
+
+    /// Apply a stored action through the same engine methods the command line
+    /// uses. A cue that has since been deleted is skipped, not fatal.
+    fn apply_action(&mut self, action: &Action, now: Instant) {
+        match action {
+            Action::Cue { sequence, cue } => {
+                let Some(index) = self
+                    .show
+                    .sequence(*sequence)
+                    .and_then(|sequence| sequence.cue_index(*cue))
+                else {
+                    return;
+                };
+                self.start_cue(Target::Sequence(*sequence), *sequence, index, now);
+            }
+            Action::Effect {
+                effect,
+                fixtures,
+                on,
+            } => {
+                if *on {
+                    let _ = self.effect_on(*effect, fixtures.clone());
+                } else {
+                    let _ = self.effect_off(Some(*effect));
+                }
+            }
+        }
     }
 
     /// Start one cue on one target.
@@ -5999,6 +6430,16 @@ impl Engine {
             .collect();
         for number in stale {
             self.effects.stop(number);
+        }
+        // Undo can remove the active timecode show or change its source; the
+        // running player must not keep following a timeline that is gone.
+        if let Some(active) = self.timecode.active() {
+            let still_valid = self.show.timecode(active).is_some_and(|timecode| {
+                timecode.source.is_external() == self.timecode.is_external()
+            });
+            if !still_valid {
+                self.stop_timecode_source();
+            }
         }
         self.playback.refresh(&self.desk, self.clock);
         self.revision += 1;
@@ -6100,8 +6541,10 @@ pub const HELP: &[&str] = &[
     "Home / Fixture 1 Home / Group 1 Home   recall the base look into the programmer",
     "Delete Cue 1 [Sequence 2] / Sequence [2]  delete or list cues",
     "Undo / Redo                            step through show edits",
-    "Store Timecode 1 \"Song\" [Fps 25]       create a timecode show",
+    "Store Timecode 1 \"Song\" [Fps 25] [Source Mtc \"port\" | Osc]",
     "Timecode 1 Add 00:00:10:00 Sequence 1 Cue 2",
+    "Timecode 1 Track 2 \"FX\" / Track 2 Add 00:00:10:00 Effect 3 On Group 2",
+    "Timecode 1 Marker 00:02:00:00 \"Chorus\"",
     "Timecode 1 Start / Pause / Stop / At 00:00:10:00",
     "Timecode [1] / Delete Timecode 1       list or delete timecode shows",
     "Assign Executor 1 Sequence 1            bind a cue list to a fader",
@@ -6982,7 +7425,7 @@ mod tests {
 
         let error = engine.execute("Delete Cue 1").unwrap_err();
         assert!(
-            error.message.contains("timecode 1 at 00:00:10:00"),
+            error.message.contains("timecode 1 track 1 at 00:00:10:00"),
             "{error}"
         );
         assert!(
@@ -6990,7 +7433,7 @@ mod tests {
                 .hint
                 .as_deref()
                 .unwrap_or_default()
-                .contains("Timecode 1 Remove 00:00:10:00"),
+                .contains("Timecode 1 Track 1 Remove 00:00:10:00"),
             "{error}"
         );
         assert!(engine.show.sequence(1).unwrap().cue(1.0).is_some());
@@ -8132,6 +8575,163 @@ mod tests {
     }
 
     #[test]
+    fn timecode_tracks_carry_cues_effects_and_markers() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Store Group 1").unwrap();
+        engine.execute("Store Effect 1").unwrap();
+        engine.execute("Store Timecode 1 Fps 25").unwrap();
+        engine.execute("Timecode 1 Track 2 \"FX\"").unwrap();
+        engine
+            .execute("Timecode 1 Track 2 Add 00:00:01:00 Effect 1 On Group 1")
+            .unwrap();
+        engine
+            .execute("Timecode 1 Add 00:00:00:00 Sequence 1 Cue 1")
+            .unwrap();
+        let marker = engine
+            .execute("Timecode 1 Marker 00:00:02:00 \"Chorus\"")
+            .unwrap();
+        assert!(marker.lines[0].contains("Chorus"), "{marker:?}");
+
+        let start = engine.clock();
+        engine.execute("Timecode 1 Start").unwrap();
+        engine.tick(start);
+        assert_eq!(engine.render().slot(1, 1), Some(255), "track 1 cue");
+        assert!(engine.effects.runs().next().is_none());
+        engine.tick(start + Duration::from_secs(1));
+        assert!(
+            engine.effects.runs().any(|(number, _)| number == 1),
+            "the effect action started effect 1"
+        );
+
+        let listing = engine.execute("Timecode 1").unwrap().lines.join("\n");
+        assert!(listing.contains("Track 1 \"Cues\""), "{listing}");
+        assert!(listing.contains("Track 2 \"FX\""), "{listing}");
+        assert!(listing.contains("Effect 1 On"), "{listing}");
+        assert!(
+            listing.contains("00:00:02:00") && listing.contains("\"Chorus\""),
+            "{listing}"
+        );
+        let track = engine
+            .execute("Timecode 1 Track 2")
+            .unwrap()
+            .lines
+            .join("\n");
+        assert!(track.contains("Effect 1 On"), "{track}");
+    }
+
+    #[test]
+    fn external_timecode_follows_small_moves_and_locates_on_a_jump() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine
+            .execute("Store Timecode 1 Fps 25 Source Osc")
+            .unwrap();
+        engine
+            .execute("Timecode 1 Add 00:00:00:02 Sequence 1 Cue 1")
+            .unwrap();
+        engine.execute("Clear All").unwrap();
+        let start = engine.clock();
+        engine.execute("Timecode 1 Start").unwrap();
+        assert_eq!(engine.feed_timecode_position(0), 0, "the first is a locate");
+        engine.tick(start + Duration::from_millis(40));
+        assert_eq!(
+            engine.feed_timecode_position(10),
+            0,
+            "a ten-frame jump locates"
+        );
+        assert_eq!(engine.render().slot(1, 1), Some(0));
+    }
+
+    #[test]
+    fn external_timecode_fires_events_within_the_window() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine
+            .execute("Store Timecode 1 Fps 25 Source Osc")
+            .unwrap();
+        engine
+            .execute("Timecode 1 Add 00:00:00:02 Sequence 1 Cue 1")
+            .unwrap();
+        engine.execute("Clear All").unwrap();
+        let start = engine.clock();
+        engine.execute("Timecode 1 Start").unwrap();
+        engine.feed_timecode_position(0);
+        engine.tick(start + Duration::from_millis(40));
+        assert_eq!(
+            engine.feed_timecode_position(2),
+            1,
+            "a two-frame move fires the event between"
+        );
+        engine.tick(start + Duration::from_millis(40));
+        assert_eq!(engine.render().slot(1, 1), Some(255));
+    }
+
+    #[test]
+    fn external_timecode_stalls_then_stops_when_the_signal_goes_away() {
+        let mut engine = engine();
+        engine.execute("Store Timecode 1 Source Osc").unwrap();
+        let start = engine.clock();
+        engine.execute("Timecode 1 Start").unwrap();
+        engine.tick(start + Duration::from_millis(600));
+        assert!(engine.timecode.is_stalled());
+        let status = engine.execute("Status").unwrap().lines.join("\n");
+        assert!(status.contains("stalled"), "{status}");
+
+        engine.tick(start + Duration::from_secs(6));
+        assert!(!engine.timecode.is_running());
+        let stopped = engine.execute("Timecode 1").unwrap().lines.join("\n");
+        assert!(stopped.contains("signal was lost"), "{stopped}");
+    }
+
+    #[test]
+    fn a_missing_mtc_port_is_reported_and_never_falls_back_to_the_internal_clock() {
+        let mut engine = engine();
+        engine
+            .execute("Store Timecode 1 Source Mtc \"/openlight/no-such-mtc-port\"")
+            .unwrap();
+        let started = engine.execute("Timecode 1 Start").unwrap();
+        assert!(
+            started.lines[0].contains("source unavailable"),
+            "{started:?}"
+        );
+        assert!(!engine.timecode.is_running());
+        assert_eq!(engine.timecode.active(), Some(1));
+        engine.tick(engine.clock() + Duration::from_secs(2));
+        assert!(!engine.timecode.is_running());
+        assert!(
+            engine.timecode_status().contains("source unavailable"),
+            "{}",
+            engine.timecode_status()
+        );
+    }
+
+    #[test]
+    fn an_mtc_rate_mismatch_is_reported_instead_of_running_at_the_wrong_speed() {
+        let mut engine = engine();
+        engine
+            .execute("Store Timecode 1 Fps 25 Source Osc")
+            .unwrap();
+        engine.execute("Timecode 1 Start").unwrap();
+        let fired = engine.accept_mtc_position(
+            MtcPosition {
+                rate: crate::mtc::MtcRate::Fps30,
+                frames: 0,
+            },
+            engine.clock(),
+        );
+        assert!(fired.is_empty());
+        assert!(!engine.timecode.is_running());
+        let status = engine.timecode_status();
+        assert!(status.contains("30 fps"), "{status}");
+        assert!(status.contains("25 fps"), "{status}");
+        assert!(status.contains("source unavailable"), "{status}");
+    }
+
+    #[test]
     fn timecode_shows_survive_save_and_load() {
         let mut engine = engine();
         engine.execute("Fixture 1 At Full").unwrap();
@@ -8154,7 +8754,10 @@ mod tests {
             .unwrap();
         assert_eq!(other.show.timecodes.len(), 1);
         assert_eq!(other.show.timecodes[0].fps, 30);
-        assert_eq!(other.show.timecodes[0].events[0].at, "00:00:02:00");
+        assert_eq!(
+            other.show.timecodes[0].tracks[0].events[0].at,
+            "00:00:02:00"
+        );
         assert!(!other.timecode.is_running(), "the player is not saved");
         let _ = std::fs::remove_file(&path);
     }

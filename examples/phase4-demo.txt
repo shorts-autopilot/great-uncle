@@ -33,6 +33,9 @@ Clear All
 Store Timecode 1 "Song" Fps 25
 Timecode 1 Add 00:00:00:00 Sequence 1 Cue 1
 Timecode 1 Add 00:00:01:00 Sequence 1 Cue 2
+Timecode 1 Track 2 "Cues"
+Timecode 1 Track 2 Add 00:00:00:12 Sequence 1 Cue 1
+Timecode 1 Marker 00:00:01:00 "Red"
 Timecode 1 Start
 Wait 2
 Timecode 1 Pause

@@ -220,6 +220,35 @@ sets the desk tempo directly and `Tap` (or `Tap Tempo`) averages the last taps,
 with a gap longer than two seconds starting a new count-in. Show v11; a v10
 effect becomes one target with its old size and phase 0.
 
+## External timecode and tracks (15)
+
+A timecode show can now follow an external clock. `Store Timecode 1 Source Mtc
+"/dev/ttyACM0"` opens a 31 250 8N1 MIDI port when the show starts; `Source Osc`
+arms the same follower for positions from the OSC listener, and `Source
+Internal` keeps the Phase 4 clock. Quarter-frame and full-frame MTC are decoded,
+song-position messages are ignored with a warning, and 29.97 drop-frame is
+converted with the two-frames-per-minute rule before the player sees it.
+
+```
+Store Timecode 1 "Song" Fps 25 Source Mtc "/dev/ttyACM0"
+Timecode 1 Track 2 "FX"
+Timecode 1 Track 2 Add 00:00:01:00 Effect 1 On Group 2
+Timecode 1 Add 00:00:00:00 Sequence 1 Cue 1
+Timecode 1 Marker 00:02:00:00 "Chorus"
+```
+
+Tracks are named, numbered and independent: `Timecode 1 Add …` still writes
+track 1, old v11 files become one track named `Cues`, and same-frame events fire
+in track order. An event is a cue or an effect on/off, and each action goes
+through the same engine method the command line uses. Markers are labels and
+have no behaviour.
+
+The follower treats a move within ±2 frames as the clock and fires the events
+in between; anything larger is a locate and fires nothing. A signal missing for
+more than 500 ms marks the player `stalled`, and more than five seconds stops
+it. A missing MTC port or a frame-rate mismatch is reported as `source
+unavailable` and never silently falls back to the internal clock. Show v12.
+
 ## Known limitations
 
 - **No DMX hardware in the test environment.** Timing is exercised against a
@@ -231,5 +260,9 @@ effect becomes one target with its old size and phase 0.
 - **Home is per fixture and attribute.** There is no per-mode home table, no
   park/default distinction and no automatic re-seed when a profile is
   re-imported.
-- **Only twelve of the eighteen roadmap designs are built.** The remaining
-  six are listed in [`ROADMAP.md`](ROADMAP.md).
+- **Only thirteen of the eighteen roadmap designs are built.** The remaining
+  five are listed in [`ROADMAP.md`](ROADMAP.md).
+- **MTC was tested with synthetic bytes, not hardware.** Quarter-frame and
+  full-frame decoding, drop-frame maths and the reader thread are covered by
+  unit tests; a real MIDI interface and the OSC UDP transport (item 12) are
+  still unverified.

@@ -205,8 +205,10 @@ PHASE4 = {
         "TIMECODE",
         [
             ("implemented", "1 9"),  # the pool and creating a show
-            ("in-progress", "2 7 8 10"),  # text viewer, cue events only, fps only
-            ("not-started", "3 4 5 6 11"),
+            # text viewer, tracks/markers, cue and effect events, sources; no
+            # track groups, time ranges or OSC ingestion yet
+            ("in-progress", "2 4 5 7 8 10 11"),
+            ("not-started", "3 6"),
         ],
     ),
     **expand("CUE_SEQUENCE", [("implemented", "16")]),  # move in black
@@ -435,7 +437,7 @@ CHAPTER_NOTES = {
     "macros": "Item 16 adds macros.",
     "agenda": "Needs a design.",
     "timers": "Needs a design.",
-    "timecode": "Item 15 adds tracks, markers and external sources.",
+    "timecode": "Item 15 adds tracks, markers and MTC; OSC ingestion and track groups still need designs.",
     "layouts": "Item 18 GUI; layouts have no design yet.",
     "plugins": "Largest undecided chapter: embedded Lua host vs native plugin API; needs a scope decision and design.",
     "quickeys": "Needs a design (GUI/CLI shortcuts).",
@@ -460,7 +462,7 @@ CROSS_CUTTING = [
     ("MAtricks, Shuffle and Align", "Programming speed for multi-fixture edits; the whole `matricks` chapter and `Align` are unbuilt."),
     ("Recipes and Generator", "Look generation beyond a single waveform; `recipes`, `generator` and recipe presets are unbuilt."),
     ("Executor pages and special executors", "The executor list is flat; pages, assignments and special executors are missing."),
-    ("Timecode depth", "Tracks, markers and external MTC/OSC sources are item 15; the current player is an internal clock."),
+    ("Timecode depth", "Tracks, markers, MTC and an OSC feed hook landed with item 15; OSC ingestion and track groups remain."),
     ("Macros and CLI ergonomics", "Macros, variables, transaction undo and machine-readable status are item 16."),
     ("Layouts, Quickeys and windows", "Layouts/Quickeys have no design; the five-pane GUI is item 18."),
     ("Agenda and timers", "Scheduled events, stopwatch and countdown are unbuilt."),

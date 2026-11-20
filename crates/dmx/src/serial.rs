@@ -50,6 +50,17 @@ impl SerialSettings {
             mark_after_break_us: 0,
         }
     }
+
+    /// MIDI Time Code: 31250 8N1, no break.
+    pub const fn mtc() -> Self {
+        Self {
+            baud: 31_250,
+            stop_bits: 1,
+            parity: Parity::None,
+            break_us: 0,
+            mark_after_break_us: 0,
+        }
+    }
 }
 
 /// A bidirectional byte link with explicit line control.
@@ -59,6 +70,13 @@ pub trait SerialLink: Send {
     fn send_break(&mut self, hold: Duration) -> DmxResult<()>;
     fn write_all(&mut self, bytes: &[u8]) -> DmxResult<()>;
     fn drain(&mut self) -> DmxResult<()>;
+    /// Read whatever bytes are available. `Ok(0)` means the port is idle; the
+    /// caller decides how long to wait before polling again.
+    fn read(&mut self, _buffer: &mut [u8]) -> DmxResult<usize> {
+        Err(crate::DmxError::Unsupported(
+            "this serial link cannot read".into(),
+        ))
+    }
     fn take_warning(&mut self) -> Option<String> {
         None
     }
@@ -240,9 +258,45 @@ mod platform {
             }
         }
 
+        fn read(&mut self, buffer: &mut [u8]) -> DmxResult<usize> {
+            loop {
+                let count = unsafe {
+                    libc::read(
+                        self.fd.as_raw_fd(),
+                        buffer.as_mut_ptr() as *mut libc::c_void,
+                        buffer.len(),
+                    )
+                };
+                if count >= 0 {
+                    return Ok(count as usize);
+                }
+                let error = std::io::Error::last_os_error();
+                match error.kind() {
+                    std::io::ErrorKind::Interrupted => continue,
+                    std::io::ErrorKind::WouldBlock => return Ok(0),
+                    _ => return Err(DmxError::io(&self.path, error)),
+                }
+            }
+        }
+
         fn take_warning(&mut self) -> Option<String> {
             self.warning.take()
         }
+    }
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::{Parity, SerialSettings};
+
+    #[test]
+    fn mtc_uses_midi_serial_settings() {
+        let settings = SerialSettings::mtc();
+        assert_eq!(settings.baud, 31_250);
+        assert_eq!(settings.stop_bits, 1);
+        assert_eq!(settings.parity, Parity::None);
+        assert_eq!(settings.break_us, 0);
+        assert_eq!(settings.mark_after_break_us, 0);
     }
 }
 
@@ -395,6 +449,11 @@ mod platform {
         }
         fn drain(&mut self) -> DmxResult<()> {
             Ok(())
+        }
+        fn read(&mut self, _buffer: &mut [u8]) -> DmxResult<usize> {
+            Err(crate::DmxError::Unsupported(
+                "serial input is only implemented for Linux in this build".into(),
+            ))
         }
     }
 }

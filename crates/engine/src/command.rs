@@ -53,8 +53,13 @@
 //! Effect 1 Rate 1/4 | Effect 1 Tempo Off | Tempo 128 | Tap Tempo
 //! Delete Effect 1 | Effect
 //! Undo | Redo
-//! Store Timecode 1 ["name"] [Fps 25] | Delete Timecode 1 | Timecode [1]
+//! Store Timecode 1 ["name"] [Fps 25] [Source Internal | Mtc "port" | Osc]
+//! Delete Timecode 1 | Timecode [1]
 //! Timecode 1 Add 00:00:10:00 Sequence 1 Cue 2
+//! Timecode 1 Track 2 "FX" | Timecode 1 Track 2
+//! Timecode 1 Track 2 Add 00:00:10:00 Effect 3 On Group 2
+//! Timecode 1 Track 2 Remove 00:00:10:00
+//! Timecode 1 Marker 00:02:00:00 "Chorus"
 //! Timecode 1 Remove 00:00:10:00 | Timecode 1 At 00:00:10:00
 //! Timecode 1 Start | Pause | Stop
 //! Blackout [Fade 2] | Blackout Off
@@ -71,6 +76,7 @@
 use std::fmt;
 
 use crate::playback::{Curve, ExecutorMode, Trigger};
+use crate::timecode::TimecodeSource;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -152,6 +158,21 @@ pub enum ReportKind {
 pub enum EffectRate {
     Hz(f64),
     Division(String),
+}
+
+/// An action on a timecode track.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TimecodeAction {
+    Cue {
+        sequence: u16,
+        cue: f64,
+    },
+    Effect {
+        effect: u16,
+        fixtures: Option<Vec<u16>>,
+        group: Option<u16>,
+        on: bool,
+    },
 }
 
 /// A channel set after an attribute: `Gobo 2` or `Gobo "Rotate CW"`.
@@ -443,19 +464,32 @@ pub enum Command {
         number: u16,
         name: Option<String>,
         fps: Option<u8>,
+        source: Option<TimecodeSource>,
     },
     DeleteTimecode {
         number: u16,
     },
+    /// `Timecode 1 Track 2 ["FX"]`: create, rename or list one track.
+    TimecodeTrack {
+        timecode: u16,
+        track: u8,
+        name: Option<String>,
+    },
     AddTimecodeEvent {
         timecode: u16,
+        track: Option<u8>,
         at: String,
-        sequence: u16,
-        cue: f64,
+        action: TimecodeAction,
     },
     RemoveTimecodeEvent {
         timecode: u16,
+        track: Option<u8>,
         at: String,
+    },
+    TimecodeMarker {
+        timecode: u16,
+        at: String,
+        name: String,
     },
     StartTimecode {
         timecode: u16,
@@ -790,6 +824,9 @@ const RESERVED: &[&str] = &[
     "update",
     "timecode",
     "fps",
+    "source",
+    "track",
+    "marker",
     "add",
     "remove",
     "start",
@@ -1797,28 +1834,23 @@ impl Parser<'_> {
         if self.at_end() {
             return Ok(Command::ListTimecodes { only: Some(number) });
         }
+        let mut track = None;
+        if self.eat_word("track") {
+            let value = self.whole_number("track number")?;
+            track = Some(
+                u8::try_from(value)
+                    .map_err(|_| CommandError::new(format!("track {value} is outside 1..=255")))?,
+            );
+        }
         if self.eat_word("add") {
             let at = self.timecode_token()?;
-            if !self.eat_word("sequence") {
-                return Err(CommandError::with_hint(
-                    "`Timecode <n> Add` needs a sequence",
-                    "`Timecode 1 Add 00:00:10:00 Sequence 1 Cue 2`",
-                ));
-            }
-            let sequence = self.whole_number("sequence number")?;
-            if !self.eat_word("cue") {
-                return Err(CommandError::with_hint(
-                    "`Timecode <n> Add` needs a cue",
-                    "`Timecode 1 Add 00:00:10:00 Sequence 1 Cue 2`",
-                ));
-            }
-            let cue = self.cue_number()?;
+            let action = self.timecode_action()?;
             self.expect_end()?;
             return Ok(Command::AddTimecodeEvent {
                 timecode: number,
+                track,
                 at,
-                sequence,
-                cue,
+                action,
             });
         }
         if self.eat_word("remove") {
@@ -1826,7 +1858,34 @@ impl Parser<'_> {
             self.expect_end()?;
             return Ok(Command::RemoveTimecodeEvent {
                 timecode: number,
+                track,
                 at,
+            });
+        }
+        if self.eat_word("marker") {
+            let at = self.timecode_token()?;
+            let name = self.name_token("marker name")?;
+            if name.trim().is_empty() {
+                return Err(CommandError::new("marker name is empty"));
+            }
+            self.expect_end()?;
+            return Ok(Command::TimecodeMarker {
+                timecode: number,
+                at,
+                name,
+            });
+        }
+        if let Some(track) = track {
+            let name = if self.at_end() {
+                None
+            } else {
+                Some(self.name_token("track name")?)
+            };
+            self.expect_end()?;
+            return Ok(Command::TimecodeTrack {
+                timecode: number,
+                track,
+                name,
             });
         }
         if self.eat_word("start") {
@@ -1854,7 +1913,68 @@ impl Parser<'_> {
                 "unexpected {}",
                 self.peek().cloned().unwrap_or(Token::Word(String::new()))
             ),
-            "use `Timecode 1 Add|Remove <timecode>`, `Start`, `Pause`, `Stop` or `At <timecode>`",
+            "use `Timecode 1 Add|Remove <timecode>`, `Track <n>`, `Marker`, `Start`, `Pause`, `Stop` or `At <timecode>`",
+        ))
+    }
+
+    fn timecode_action(&mut self) -> Result<TimecodeAction, CommandError> {
+        if self.eat_word("sequence") {
+            let sequence = self.whole_number("sequence number")?;
+            self.eat_word("cue");
+            let cue = self.cue_number()?;
+            return Ok(TimecodeAction::Cue { sequence, cue });
+        }
+        if self.eat_word("effect") {
+            let effect = self.whole_number("effect number")?;
+            let mut fixtures = None;
+            let mut group = None;
+            let on = if self.eat_word("off") {
+                false
+            } else {
+                self.eat_word("on");
+                if self.eat_word("group") {
+                    group = Some(self.whole_number("group number")?);
+                } else {
+                    fixtures = self.optional_fixture_list()?;
+                }
+                true
+            };
+            return Ok(TimecodeAction::Effect {
+                effect,
+                fixtures,
+                group,
+                on,
+            });
+        }
+        Err(CommandError::with_hint(
+            "a timecode event needs an action",
+            "use `Sequence <n> Cue <n>` or `Effect <n> On|Off`",
+        ))
+    }
+
+    fn timecode_source(&mut self) -> Result<TimecodeSource, CommandError> {
+        if self.eat_word("internal") {
+            return Ok(TimecodeSource::Internal);
+        }
+        if self.eat_word("mtc") {
+            let port = self.path_token()?;
+            if port.trim().is_empty() {
+                return Err(CommandError::new("the MTC port is empty"));
+            }
+            return Ok(TimecodeSource::Mtc { port });
+        }
+        if self.eat_word("osc") {
+            return Ok(TimecodeSource::Osc);
+        }
+        Err(CommandError::with_hint(
+            format!(
+                "`{}` is not a timecode source",
+                self.peek()
+                    .cloned()
+                    .map(|token| token.to_string())
+                    .unwrap_or_else(|| "end of command".into())
+            ),
+            "use `Internal`, `Mtc \"<port>\"` or `Osc`",
         ))
     }
 
@@ -1877,14 +1997,26 @@ impl Parser<'_> {
             let number = self.whole_number("timecode number")?;
             let name = self.optional_name()?;
             let mut fps = None;
-            if self.eat_word("fps") {
-                let value = self.whole_number("frame rate")?;
-                fps = Some(u8::try_from(value).map_err(|_| {
-                    CommandError::new(format!("frame rate {value} is outside 1..=60"))
-                })?);
+            let mut source = None;
+            loop {
+                if self.eat_word("fps") {
+                    let value = self.whole_number("frame rate")?;
+                    fps = Some(u8::try_from(value).map_err(|_| {
+                        CommandError::new(format!("frame rate {value} is outside 1..=60"))
+                    })?);
+                } else if self.eat_word("source") {
+                    source = Some(self.timecode_source()?);
+                } else {
+                    break;
+                }
             }
             self.expect_end()?;
-            return Ok(Command::StoreTimecode { number, name, fps });
+            return Ok(Command::StoreTimecode {
+                number,
+                name,
+                fps,
+                source,
+            });
         }
         if self.eat_word("group") {
             let number = self.whole_number("group number")?;
@@ -3454,21 +3586,112 @@ mod tests {
                 number: 2,
                 name: Some("Song".into()),
                 fps: Some(30),
+                source: None,
+            }
+        );
+        assert_eq!(
+            command("Store Timecode 2 Source Mtc \"/dev/ttyACM0\""),
+            Command::StoreTimecode {
+                number: 2,
+                name: None,
+                fps: None,
+                source: Some(TimecodeSource::Mtc {
+                    port: "/dev/ttyACM0".into()
+                }),
+            }
+        );
+        assert_eq!(
+            command("Store Timecode 2 Fps 25 Source Osc"),
+            Command::StoreTimecode {
+                number: 2,
+                name: None,
+                fps: Some(25),
+                source: Some(TimecodeSource::Osc),
+            }
+        );
+        assert_eq!(
+            command("Timecode 2 Track 3 \"FX\""),
+            Command::TimecodeTrack {
+                timecode: 2,
+                track: 3,
+                name: Some("FX".into()),
+            }
+        );
+        assert_eq!(
+            command("Timecode 2 Track 3 Add 00:01:30:12 Effect 4 On Group 5"),
+            Command::AddTimecodeEvent {
+                timecode: 2,
+                track: Some(3),
+                at: "00:01:30:12".into(),
+                action: TimecodeAction::Effect {
+                    effect: 4,
+                    fixtures: None,
+                    group: Some(5),
+                    on: true,
+                },
+            }
+        );
+        assert_eq!(
+            command("Timecode 2 Track 3 Add 00:01:31:00 Effect 4 Off"),
+            Command::AddTimecodeEvent {
+                timecode: 2,
+                track: Some(3),
+                at: "00:01:31:00".into(),
+                action: TimecodeAction::Effect {
+                    effect: 4,
+                    fixtures: None,
+                    group: None,
+                    on: false,
+                },
+            }
+        );
+        assert_eq!(
+            command("Timecode 2 Add 00:01:32:00 Effect 4 On Fixture 1 Thru 2"),
+            Command::AddTimecodeEvent {
+                timecode: 2,
+                track: None,
+                at: "00:01:32:00".into(),
+                action: TimecodeAction::Effect {
+                    effect: 4,
+                    fixtures: Some(vec![1, 2]),
+                    group: None,
+                    on: true,
+                },
+            }
+        );
+        assert_eq!(
+            command("Timecode 2 Track 3 Remove 00:01:31:00"),
+            Command::RemoveTimecodeEvent {
+                timecode: 2,
+                track: Some(3),
+                at: "00:01:31:00".into(),
+            }
+        );
+        assert_eq!(
+            command("Timecode 2 Marker 00:02:00:00 \"Chorus\""),
+            Command::TimecodeMarker {
+                timecode: 2,
+                at: "00:02:00:00".into(),
+                name: "Chorus".into(),
             }
         );
         assert_eq!(
             command("Timecode 2 Add 00:01:30:12 Sequence 3 Cue 4.5"),
             Command::AddTimecodeEvent {
                 timecode: 2,
+                track: None,
                 at: "00:01:30:12".into(),
-                sequence: 3,
-                cue: 4.5,
+                action: TimecodeAction::Cue {
+                    sequence: 3,
+                    cue: 4.5
+                },
             }
         );
         assert_eq!(
             command("Timecode 2 Remove 00:01:30:12"),
             Command::RemoveTimecodeEvent {
                 timecode: 2,
+                track: None,
                 at: "00:01:30:12".into(),
             }
         );
@@ -3499,7 +3722,12 @@ mod tests {
         assert_eq!(command("Redo"), Command::Redo);
         assert!(error("Timecode 1 Add 00:00:00:00 Sequence 1")
             .message
-            .contains("needs a cue"));
+            .contains("cue"));
+        assert!(error("Store Timecode 1 Source Ltc")
+            .hint
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Internal"));
     }
 
     #[test]
