@@ -17,9 +17,13 @@
 //! Store Palette <Feature> <n> ["name"]    capture the programmer
 //! Delete Palette <Feature> <n> | Palette
 //! Store Cue 1 ["name"] [Fade 2] [Delay 0.5] [Mib [On|Off]] [Sequence 2]
+//! Store Cue 2 Follow 1.5 | Time 0.5      automatic triggers
+//! Cue 2 Trigger Go | Follow 1 | Time 2   retime without re-storing
 //! Delete Cue 1 [Sequence 2] | Sequence [2]
 //! Assign Executor 1 Sequence 1
 //! Executor 1 At 75 | Full | Off           executor master fader
+//! Executor 1 Mode Go | Fader | Flash | Solo
+//! Executor 1 Flash [Off] | Solo [Off]     hold or release a button
 //! Go | Back | Pause | Release [Executor n | Sequence n]
 //! Group 1 | Group 1 At 50 | Group 1 Full | Group 1 Off
 //! Store Group 1 ["name"] | Delete Group 1 | Group
@@ -47,6 +51,8 @@
 //! `universe.address` uses a dot: `1.001` is universe 1, address 1.
 
 use std::fmt;
+
+use crate::playback::{ExecutorMode, Trigger};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -81,6 +87,16 @@ pub enum Level {
 pub enum LevelSource {
     Level(Level),
     Palette { feature: String, number: u16 },
+}
+
+/// A trigger as written on the command line: `Go`, `Follow 1.5` or `Time 2`.
+///
+/// The show stores the time separately so a `Go` cue keeps the number while it
+/// is not used.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TriggerArg {
+    pub trigger: Trigger,
+    pub time: f64,
 }
 
 /// Which playback a `Go`, `Back`, `Pause` or `Release` addresses.
@@ -138,6 +154,25 @@ pub enum Command {
         fade: Option<f64>,
         delay: Option<f64>,
         mib: Option<bool>,
+        trigger: Option<TriggerArg>,
+    },
+    /// `Cue 2 Trigger Follow 1.5`: retime a stored cue without re-storing it.
+    CueTrigger {
+        sequence: u16,
+        number: f64,
+        trigger: TriggerArg,
+    },
+    SetExecutorMode {
+        executor: u16,
+        mode: ExecutorMode,
+    },
+    SetExecutorFlash {
+        executor: u16,
+        on: bool,
+    },
+    SetExecutorSolo {
+        executor: u16,
+        on: bool,
     },
     DeleteCue {
         sequence: u16,
@@ -532,6 +567,13 @@ const RESERVED: &[&str] = &[
     "stop",
     "undo",
     "redo",
+    "trigger",
+    "follow",
+    "flash",
+    "solo",
+    "mode",
+    "fader",
+    "go",
 ];
 
 struct Parser<'a> {
@@ -684,6 +726,9 @@ impl Parser<'_> {
         if word.eq_ignore_ascii_case("palette") || word.eq_ignore_ascii_case("palettes") {
             self.expect_end()?;
             return Ok(Command::ListPalettes);
+        }
+        if word.eq_ignore_ascii_case("cue") {
+            return self.cue_command();
         }
         if word.eq_ignore_ascii_case("sequence") || word.eq_ignore_ascii_case("sequences") {
             let only = if matches!(self.peek(), Some(Token::Number(_))) {
@@ -1379,10 +1424,23 @@ impl Parser<'_> {
             let mut fade = None;
             let mut delay = None;
             let mut mib = None;
+            let mut trigger = None;
             let mut sequence = 1;
             loop {
                 if self.eat_word("fade") {
                     fade = Some(self.seconds("fade")?);
+                } else if self.eat_word("trigger") {
+                    trigger = Some(self.trigger()?);
+                } else if self.eat_word("follow") {
+                    trigger = Some(TriggerArg {
+                        trigger: Trigger::Follow,
+                        time: self.seconds("follow")?,
+                    });
+                } else if self.eat_word("time") {
+                    trigger = Some(TriggerArg {
+                        trigger: Trigger::Time,
+                        time: self.seconds("time")?,
+                    });
                 } else if self.eat_word("delay") {
                     delay = Some(self.seconds("delay")?);
                 } else if self.eat_word("mib") {
@@ -1417,6 +1475,7 @@ impl Parser<'_> {
                 fade,
                 delay,
                 mib,
+                trigger,
             });
         }
         Err(CommandError::with_hint(
@@ -1525,12 +1584,108 @@ impl Parser<'_> {
                 level: Level::Percent(0.0),
             });
         }
+        if self.eat_word("mode") {
+            let word = self.name_token("executor mode")?;
+            let mode = [
+                ExecutorMode::Go,
+                ExecutorMode::Fader,
+                ExecutorMode::Flash,
+                ExecutorMode::Solo,
+            ]
+            .into_iter()
+            .find(|mode| mode.label().eq_ignore_ascii_case(&word))
+            .ok_or_else(|| {
+                CommandError::with_hint(
+                    format!("`{word}` is not an executor mode"),
+                    "use `Go`, `Fader`, `Flash` or `Solo`",
+                )
+            })?;
+            self.expect_end()?;
+            return Ok(Command::SetExecutorMode {
+                executor: number,
+                mode,
+            });
+        }
+        if self.eat_word("flash") {
+            let on = !self.eat_word("off");
+            self.eat_word("on");
+            self.expect_end()?;
+            return Ok(Command::SetExecutorFlash {
+                executor: number,
+                on,
+            });
+        }
+        if self.eat_word("solo") {
+            let on = !self.eat_word("off");
+            self.eat_word("on");
+            self.expect_end()?;
+            return Ok(Command::SetExecutorSolo {
+                executor: number,
+                on,
+            });
+        }
         Err(CommandError::with_hint(
             format!(
                 "unexpected {}",
                 self.peek().cloned().unwrap_or(Token::Word(String::new()))
             ),
-            "use `Executor <n> At <level>` or `Executor <n>` to inspect it",
+            "use `Executor <n> At <level>`, `Mode <mode>`, `Flash`, `Solo` or `Executor <n>`",
+        ))
+    }
+
+    /// `Cue 2 Trigger Follow 1.5`: the trigger is show data, so it is an edit
+    /// with its own undo step rather than a re-store that captures values.
+    fn cue_command(&mut self) -> Result<Command, CommandError> {
+        let number = self.cue_number()?;
+        if !self.eat_word("trigger") {
+            return Err(CommandError::with_hint(
+                format!("cue {number} needs an action"),
+                "use `Cue 2 Trigger Follow 1.5`, or `Sequence 1` to list the cues",
+            ));
+        }
+        let trigger = self.trigger()?;
+        let sequence = if self.eat_word("sequence") {
+            self.whole_number("sequence number")?
+        } else if self.eat_word("in") {
+            self.eat_word("sequence");
+            self.whole_number("sequence number")?
+        } else {
+            1
+        };
+        self.expect_end()?;
+        Ok(Command::CueTrigger {
+            sequence,
+            number,
+            trigger,
+        })
+    }
+
+    /// `Go`, `Follow <seconds>` or `Time <seconds>`.
+    fn trigger(&mut self) -> Result<TriggerArg, CommandError> {
+        if self.eat_word("go") {
+            return Ok(TriggerArg {
+                trigger: Trigger::Go,
+                time: 0.0,
+            });
+        }
+        if self.eat_word("follow") {
+            return Ok(TriggerArg {
+                trigger: Trigger::Follow,
+                time: self.seconds("follow")?,
+            });
+        }
+        if self.eat_word("time") {
+            return Ok(TriggerArg {
+                trigger: Trigger::Time,
+                time: self.seconds("time")?,
+            });
+        }
+        Err(CommandError::with_hint(
+            format!(
+                "expected a trigger, got {}",
+                self.peek().cloned().unwrap_or(Token::Word(String::new()))
+            ),
+            "use `Go`, `Follow <seconds>` or `Time <seconds>`",
         ))
     }
 
@@ -1830,6 +1985,7 @@ mod tests {
                 fade: Some(2.0),
                 delay: Some(0.5),
                 mib: None,
+                trigger: None,
             }
         );
         assert_eq!(
@@ -1841,6 +1997,7 @@ mod tests {
                 fade: None,
                 delay: None,
                 mib: None,
+                trigger: None,
             }
         );
         assert_eq!(
@@ -1852,6 +2009,7 @@ mod tests {
                 fade: Some(1.0),
                 delay: None,
                 mib: Some(true),
+                trigger: None,
             }
         );
         assert_eq!(
@@ -1863,6 +2021,65 @@ mod tests {
                 fade: None,
                 delay: None,
                 mib: Some(false),
+                trigger: None,
+            }
+        );
+        assert_eq!(
+            command("Store Cue 2 Follow 1.5 Fade 3"),
+            Command::StoreCue {
+                sequence: 1,
+                number: 2.0,
+                name: None,
+                fade: Some(3.0),
+                delay: None,
+                mib: None,
+                trigger: Some(TriggerArg {
+                    trigger: Trigger::Follow,
+                    time: 1.5,
+                }),
+            }
+        );
+        assert_eq!(
+            command("Cue 3 Trigger Time 2 Sequence 2"),
+            Command::CueTrigger {
+                sequence: 2,
+                number: 3.0,
+                trigger: TriggerArg {
+                    trigger: Trigger::Time,
+                    time: 2.0,
+                },
+            }
+        );
+        assert_eq!(
+            command("Cue 4 Trigger Go"),
+            Command::CueTrigger {
+                sequence: 1,
+                number: 4.0,
+                trigger: TriggerArg {
+                    trigger: Trigger::Go,
+                    time: 0.0,
+                },
+            }
+        );
+        assert_eq!(
+            command("Executor 2 Mode Solo"),
+            Command::SetExecutorMode {
+                executor: 2,
+                mode: ExecutorMode::Solo,
+            }
+        );
+        assert_eq!(
+            command("Executor 3 Flash Off"),
+            Command::SetExecutorFlash {
+                executor: 3,
+                on: false,
+            }
+        );
+        assert_eq!(
+            command("Executor 1 Solo"),
+            Command::SetExecutorSolo {
+                executor: 1,
+                on: true,
             }
         );
         assert_eq!(
@@ -1961,6 +2178,15 @@ mod tests {
         let failure = error("Thru 4");
         assert!(failure.hint.unwrap().contains("starts with"));
         assert!(error("Store Cue 1 Fade -1").message.contains("positive"));
+        assert!(error("Store Cue 2 Follow").message.contains("follow time"));
+        assert!(error("Cue 2 Trigger Follow")
+            .message
+            .contains("follow time"));
+        assert!(error("Cue 2 Trigger Follow -1").message.contains("-1"));
+        assert!(error("Cue 2 Trigger Sometimes")
+            .message
+            .contains("Sometimes"));
+        assert!(error("Executor 1 Mode Wiggle").message.contains("Wiggle"));
         assert!(error("Store Palette Color 0")
             .message
             .contains("out of range"));

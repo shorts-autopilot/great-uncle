@@ -14,6 +14,15 @@
 //! Replay is deliberately dull — it is `Engine::execute` on each journaled
 //! line — because a recovery path that reimplements command semantics will
 //! eventually disagree with them.
+//!
+//! Replay has to know where to start. A successful `Save` writes a
+//! [`EntryKind::Checkpoint`] entry naming the show file, and recovery begins
+//! after the newest checkpoint for the document it loaded. Without that, a
+//! save followed by a crash would replay the whole journal onto a file that
+//! already contains those statements — and statements that are not idempotent
+//! (an `Undo`, a store that captures a programmer) would produce a different
+//! document than the one on disk. The autosave says the same thing for a
+//! snapshot: its revision is the newest one already captured.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufWriter, Write};
@@ -37,6 +46,9 @@ pub enum EntryKind {
     Show,
     Programmer,
     Desk,
+    /// The show file named by `line` contains everything up to this revision.
+    /// Written by a successful save; replay starts after the last one.
+    Checkpoint,
 }
 
 /// One journaled statement.
@@ -57,6 +69,58 @@ pub struct Tail {
     pub entries: Vec<Entry>,
     /// A final line that did not parse, usually a write cut short by a crash.
     pub incomplete: usize,
+}
+
+/// Where replay must begin for the document now in memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Baseline {
+    /// The newest revision the document already reflects; replay starts after
+    /// it.
+    pub rev: u64,
+    /// The oldest revision still in the journal when its head was lost to
+    /// rotation or damage.
+    pub head_lost: Option<u64>,
+}
+
+impl Tail {
+    /// The revision the document already reflects.
+    ///
+    /// `snapshot` is the revision of the autosave that was restored, or zero
+    /// when there was none. A save after that snapshot is newer still, so the
+    /// greater of the two wins. A journal that begins after revision 1 lost its
+    /// head; the oldest entry available is then the best starting point, and
+    /// the caller is told so it can say as much.
+    pub fn baseline(&self, show: &Path, snapshot: u64) -> Baseline {
+        let key = path_key(show);
+        let checkpoint = self
+            .entries
+            .iter()
+            .rev()
+            .find(|entry| entry.kind == EntryKind::Checkpoint && entry.line == key)
+            .map(|entry| entry.rev)
+            .unwrap_or(0);
+        let mut baseline = Baseline {
+            rev: snapshot.max(checkpoint),
+            head_lost: None,
+        };
+        if let Some(first) = self.entries.first() {
+            if first.rev > baseline.rev.saturating_add(1) {
+                baseline.rev = first.rev - 1;
+                baseline.head_lost = Some(first.rev);
+            }
+        }
+        baseline
+    }
+}
+
+/// The identity a checkpoint records: the canonical path, so saving from another
+/// directory still names the same file. A path that cannot be canonicalised is
+/// used as written.
+fn path_key(path: &Path) -> String {
+    fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// The path of a companion file: `show.olshow` + `.journal`.
@@ -139,6 +203,12 @@ impl Journal {
         self.entries
     }
 
+    /// The revision of the last entry written, which is the newest state this
+    /// journal describes.
+    pub fn rev(&self) -> u64 {
+        self.rev
+    }
+
     /// Why the journal stopped recording, if it did.
     pub fn failure(&self) -> Option<&str> {
         self.failure.as_deref()
@@ -180,6 +250,14 @@ impl Journal {
             }
             Err(error) => self.failure = Some(error.to_string()),
         }
+    }
+
+    /// Record that the show file at `show` now holds everything up to `rev`.
+    ///
+    /// The entry names the path, so a journal shared by several shows does not
+    /// let one show's save vouch for another's.
+    pub fn checkpoint(&mut self, show: &Path, rev: u64) {
+        self.note(EntryKind::Checkpoint, &path_key(show), rev);
     }
 
     /// Start a fresh file, keeping one generation.
@@ -313,6 +391,64 @@ mod tests {
         let mut journal = Journal::open(path.clone()).unwrap();
         journal.note(EntryKind::Show, "Store Cue 1", 0);
         assert_eq!(read(&path).unwrap().entries[2].rev, 5);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_checkpoint_says_where_replay_starts() {
+        let journal_path = temp("checkpoint");
+        let show = temp("checkpoint.olshow");
+        fs::write(&show, "{}").unwrap();
+        {
+            let mut journal = Journal::open(journal_path.clone()).unwrap();
+            journal.note(EntryKind::Show, "Fixture 1 At 50", 1);
+            journal.note(EntryKind::Show, "Fixture 1 At 60", 2);
+            // The caller's revision is a floor: the checkpoint lands after
+            // every entry already written.
+            journal.checkpoint(&show, 0);
+            journal.note(EntryKind::Show, "Fixture 1 At 70", 0);
+        }
+        let tail = read(&journal_path).unwrap();
+        let baseline = tail.baseline(&show, 0);
+        assert_eq!(baseline.rev, 3, "the checkpoint is the newest entry");
+        assert_eq!(baseline.head_lost, None);
+        assert_eq!(
+            tail.baseline(&show, 9).rev,
+            9,
+            "a newer autosave wins over an older save"
+        );
+
+        // A journal shared by two shows must not replay one from the other's
+        // save.
+        let other = temp("checkpoint-other.olshow");
+        fs::write(&other, "{}").unwrap();
+        assert_eq!(tail.baseline(&other, 0).rev, 0);
+
+        let _ = fs::remove_file(&journal_path);
+        let _ = fs::remove_file(&show);
+        let _ = fs::remove_file(&other);
+    }
+
+    #[test]
+    fn a_journal_that_lost_its_head_starts_where_the_file_does() {
+        let path = temp("head");
+        fs::write(
+            &path,
+            concat!(
+                "{\"rev\":41,\"at\":\"now\",\"line\":\"Fixture 1 At 50\",\"kind\":\"programmer\"}\n",
+                "{\"rev\":42,\"at\":\"now\",\"line\":\"Fixture 1 At 60\",\"kind\":\"programmer\"}\n"
+            ),
+        )
+        .unwrap();
+        let tail = read(&path).unwrap();
+        let baseline = tail.baseline(Path::new("/no/such/show.olshow"), 0);
+        assert_eq!(baseline.rev, 40, "the oldest entry's predecessor");
+        assert_eq!(baseline.head_lost, Some(41));
+
+        // A snapshot from before the rotation is no better than the file head.
+        let stale = tail.baseline(Path::new("/no/such/show.olshow"), 20);
+        assert_eq!(stale.rev, 40);
+        assert_eq!(stale.head_lost, Some(41));
         let _ = fs::remove_file(&path);
     }
 

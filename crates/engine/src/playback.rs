@@ -8,13 +8,18 @@
 //!
 //! Playback is time-driven and lives outside the show file: cue numbers, fade
 //! and delay times are saved, while "which cue is running" is not.
+//!
+//! A cue may also start itself: `Follow` waits for the previous fade to settle,
+//! `Time` counts from the previous cue's start. Both are resolved by
+//! [`Playback::due`], a pure function of the show, the runs and an instant, so
+//! the chain can be tested without a clock.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::desk::Masters;
+use crate::desk::Desk;
 use crate::levels::{is_intensity, Levels};
 use crate::show::Show;
 
@@ -32,6 +37,41 @@ pub struct Sequence {
     /// Kept sorted by cue number.
     #[serde(default)]
     pub cues: Vec<Cue>,
+}
+
+/// How a cue starts.
+///
+/// An enum, not a string, so an unknown trigger is a deserialization error
+/// rather than a cue that silently never fires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Trigger {
+    /// Waits for `Go`.
+    #[default]
+    Go,
+    /// Starts `trigger_time` after the previous fade settles.
+    Follow,
+    /// Starts `trigger_time` after the previous cue started.
+    Time,
+}
+
+impl Trigger {
+    pub fn label(self) -> &'static str {
+        match self {
+            Trigger::Go => "Go",
+            Trigger::Follow => "Follow",
+            Trigger::Time => "Time",
+        }
+    }
+}
+
+/// `Go`, `Follow 1.5s` or `Time 2.0s`: one expression for every listing.
+pub fn format_trigger(trigger: Trigger, time: f64) -> String {
+    match trigger {
+        Trigger::Go => "Go".to_string(),
+        Trigger::Follow => format!("Follow {time:.1}s"),
+        Trigger::Time => format!("Time {time:.1}s"),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -52,9 +92,42 @@ pub struct Cue {
     /// already in place when the dimmer rises.
     #[serde(default)]
     pub mib: bool,
+    /// What starts this cue.
+    #[serde(default)]
+    pub trigger: Trigger,
+    /// Seconds for `Follow` and `Time`. Kept (and ignored) on a `Go` cue, so
+    /// switching a trigger back and forth does not lose the number.
+    #[serde(default)]
+    pub trigger_time: f64,
     /// Tracked values: only what changes relative to the previous cue.
     #[serde(default)]
     pub levels: Levels,
+}
+
+/// What the button of an executor does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ExecutorMode {
+    /// The button starts the next cue; the fader is a master.
+    #[default]
+    Go,
+    /// The fader crossfades the cue by hand.
+    Fader,
+    /// The button runs the list at full while held.
+    Flash,
+    /// The button removes every other playback while held.
+    Solo,
+}
+
+impl ExecutorMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            ExecutorMode::Go => "Go",
+            ExecutorMode::Fader => "Fader",
+            ExecutorMode::Flash => "Flash",
+            ExecutorMode::Solo => "Solo",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -64,6 +137,9 @@ pub struct Executor {
     pub sequence: u16,
     #[serde(default)]
     pub name: String,
+    /// What the button does. The fader position itself is desk state.
+    #[serde(default)]
+    pub mode: ExecutorMode,
 }
 
 impl Sequence {
@@ -83,6 +159,11 @@ impl Sequence {
 
     pub fn cue(&self, number: f64) -> Option<&Cue> {
         self.cue_index(number).map(|index| &self.cues[index])
+    }
+
+    pub fn cue_mut(&mut self, number: f64) -> Option<&mut Cue> {
+        let index = self.cue_index(number)?;
+        self.cues.get_mut(index)
     }
 
     /// Where a cue with this number belongs, keeping the list sorted.
@@ -144,6 +225,11 @@ pub struct Run {
     paused_delay: Duration,
     paused_fade: Duration,
     pub done: bool,
+    /// When the run began: `Time` triggers count from here.
+    pub started: Instant,
+    /// When the fade first reached 1.0: `Follow` triggers count from here. A
+    /// paused or hand-driven run never settles, so it never triggers.
+    pub settled: Option<Instant>,
 }
 
 impl Run {
@@ -172,7 +258,12 @@ impl Run {
         if let Some(levels) = &self.paused {
             return levels.clone();
         }
-        let progress = self.progress(now);
+        self.levels_at_progress(self.progress(now))
+    }
+
+    /// The look at a fraction of the fade, shared by time and by a hand on a
+    /// fader so both produce the same blend.
+    fn levels_at_progress(&self, progress: f64) -> Levels {
         if progress <= 0.0 {
             return self.from.clone();
         }
@@ -251,9 +342,70 @@ impl Playback {
                 paused_delay: Duration::ZERO,
                 paused_fade: Duration::ZERO,
                 done: false,
+                started: now,
+                settled: None,
             },
         );
         Ok(())
+    }
+
+    /// Move a run to `fraction` of its fade, as a hand on a fader does.
+    ///
+    /// The run is paused at the blended look, so pause/resume, release and
+    /// output merging need no separate code path. A held run does not settle,
+    /// so it never chains to the next cue by itself.
+    pub fn scrub(&mut self, target: Target, fraction: f64) -> bool {
+        let Some(run) = self.runs.get_mut(&target) else {
+            return false;
+        };
+        let fraction = fraction.clamp(0.0, 1.0);
+        run.paused = Some(run.levels_at_progress(fraction));
+        run.paused_progress = fraction;
+        run.paused_delay = Duration::ZERO;
+        run.paused_fade = run.fade.mul_f64(1.0 - fraction);
+        run.settled = None;
+        true
+    }
+
+    /// Cues that should start now because the cue before them asked for it.
+    ///
+    /// The instant is explicit so tests never sleep. The index is the position
+    /// of the cue to start; the caller starts it with [`Playback::go`], which
+    /// replaces this target's run.
+    pub fn due(&self, show: &Show, now: Instant) -> Vec<(Target, u16, usize)> {
+        let mut due = Vec::new();
+        for (target, run) in &self.runs {
+            if run.is_paused() {
+                continue;
+            }
+            let Some(sequence_number) = sequence_for(show, *target) else {
+                continue;
+            };
+            let Some(sequence) = show.sequence(sequence_number) else {
+                continue;
+            };
+            let Some(index) = sequence.cue_index(run.cue_number) else {
+                continue;
+            };
+            // A chain never wraps: the last cue has no follower.
+            let Some(next) = sequence.cues.get(index + 1) else {
+                continue;
+            };
+            let when = match next.trigger {
+                Trigger::Go => continue,
+                // A follow counts from the settled fade, so a run that is still
+                // moving has nothing to follow yet.
+                Trigger::Follow => match run.settled {
+                    Some(settled) => settled.checked_add(seconds(next.trigger_time)),
+                    None => continue,
+                },
+                Trigger::Time => run.started.checked_add(seconds(next.trigger_time)),
+            };
+            if when.is_some_and(|when| now >= when) {
+                due.push((*target, sequence_number, index + 1));
+            }
+        }
+        due
     }
 
     /// Freeze a running cue where it is, remembering the delay and fade time
@@ -268,6 +420,8 @@ impl Playback {
                 run.paused_fade = run.fade.mul_f64((1.0 - progress).clamp(0.0, 1.0));
                 run.paused = Some(levels);
                 run.paused_progress = progress;
+                // A held run is not settled, so it does not chain on its own.
+                run.settled = None;
                 true
             }
             _ => false,
@@ -318,16 +472,28 @@ impl Playback {
     }
 
     /// Recompute the output for `now`. Returns true when it changed.
-    pub fn refresh(&mut self, _show: &Show, masters: &Masters, now: Instant) -> bool {
+    ///
+    /// A run that reaches the end of its fade records when it settled, which is
+    /// what a `Follow` on the next cue counts from.
+    pub fn refresh(&mut self, desk: &Desk, now: Instant) -> bool {
         for run in self.runs.values_mut() {
-            run.done = run.paused.is_none() && run.progress(now) >= 1.0;
+            if run.paused.is_some() {
+                run.done = false;
+                continue;
+            }
+            if run.progress(now) >= 1.0 {
+                run.done = true;
+                run.settled.get_or_insert(now);
+            } else {
+                run.done = false;
+            }
         }
 
         let mut output = Levels::new();
         for (target, run) in &self.runs {
             let fader = match target {
-                Target::Sequence(_) => 1.0,
-                Target::Executor(number) => masters.executor(*number),
+                Target::Sequence(_) => desk.sequence_master(),
+                Target::Executor(number) => desk.executor_master(*number),
             };
             output.merge_htp(&run.levels_at(now).scale_intensity(fader));
         }
@@ -355,6 +521,14 @@ fn snap_non_intensity(from: &mut Levels, to: &Levels) {
     }
 }
 
+/// The cue list a target plays.
+fn sequence_for(show: &Show, target: Target) -> Option<u16> {
+    match target {
+        Target::Sequence(number) => Some(number),
+        Target::Executor(number) => show.executor(number).map(|executor| executor.sequence),
+    }
+}
+
 fn seconds(value: f64) -> Duration {
     if value.is_finite() && value > 0.0 {
         Duration::from_secs_f64(value.min(MAX_TIME))
@@ -377,12 +551,6 @@ pub fn format_cue_number(number: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::desk::Masters;
-
-    fn masters() -> Masters {
-        Masters::new()
-    }
-
     use super::*;
     use crate::test_support::demo_show;
 
@@ -401,6 +569,8 @@ mod tests {
             fade,
             delay: 0.0,
             mib: false,
+            trigger: Trigger::Go,
+            trigger_time: 0.0,
             levels,
         }
     }
@@ -645,6 +815,7 @@ mod tests {
             number: 1,
             sequence: 1,
             name: "Main".into(),
+            mode: ExecutorMode::Go,
         });
         let sequence = Sequence {
             number: 1,
@@ -658,19 +829,16 @@ mod tests {
         show.sequences.push(sequence);
 
         let now = Instant::now();
-        let mut masters = masters();
-        masters.set_executor(1, 0.5);
+        let mut desk = Desk::new();
+        desk.set_executor_fader(1, 0.5);
         let mut playback = Playback::new();
         playback.go(&show, Target::Executor(1), 1, 0, now).unwrap();
-        playback.refresh(&show, &masters, now);
+        playback.refresh(&desk, now);
         assert_eq!(playback.output().get(1, "Dimmer"), Some(0.5));
         assert_eq!(playback.output().get(1, "ColorAdd_R"), Some(1.0));
 
-        masters.set_executor(1, 1.0);
-        assert!(
-            playback.refresh(&show, &masters, now),
-            "fader change alters output"
-        );
+        desk.set_executor_fader(1, 1.0);
+        assert!(playback.refresh(&desk, now), "fader change alters output");
         assert_eq!(playback.output().get(1, "Dimmer"), Some(1.0));
     }
 
@@ -681,11 +849,272 @@ mod tests {
         let now = Instant::now();
         let mut playback = Playback::new();
         playback.go(&show, Target::Sequence(1), 1, 0, now).unwrap();
-        playback.refresh(&show, &masters(), now);
+        playback.refresh(&Desk::new(), now);
         assert_eq!(playback.output().get(1, "Dimmer"), Some(0.5));
         assert!(playback.release(Target::Sequence(1)));
-        assert!(playback.refresh(&show, &masters(), now));
+        assert!(playback.refresh(&Desk::new(), now));
         assert!(playback.output().is_empty());
+    }
+
+    fn chain() -> Sequence {
+        Sequence {
+            number: 1,
+            name: "Chain".into(),
+            cues: vec![
+                cue(1.0, 0.0, levels(&[(1, "Dimmer", 0.4)])),
+                Cue {
+                    trigger: Trigger::Follow,
+                    trigger_time: 1.0,
+                    ..cue(2.0, 2.0, levels(&[(1, "Dimmer", 0.8)]))
+                },
+                Cue {
+                    trigger: Trigger::Follow,
+                    trigger_time: 0.0,
+                    ..cue(3.0, 0.0, levels(&[(1, "Dimmer", 1.0)]))
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn a_follow_waits_for_the_fade_to_settle() {
+        let mut show = demo_show();
+        show.sequences.push(chain());
+        let start = Instant::now();
+        let desk = Desk::new();
+        let mut playback = Playback::new();
+        playback
+            .go(&show, Target::Sequence(1), 1, 0, start)
+            .unwrap();
+        playback.refresh(&desk, start);
+        assert!(
+            playback.due(&show, start).is_empty(),
+            "the follow time has not passed"
+        );
+        assert_eq!(
+            playback.due(&show, start + Duration::from_secs(1)),
+            vec![(Target::Sequence(1), 1, 1)]
+        );
+    }
+
+    #[test]
+    fn a_follow_counts_from_the_end_of_the_fade_not_the_start() {
+        let mut show = demo_show();
+        show.sequences.push(Sequence {
+            number: 1,
+            name: "Slow".into(),
+            cues: vec![
+                cue(1.0, 2.0, levels(&[(1, "Dimmer", 0.4)])),
+                Cue {
+                    trigger: Trigger::Follow,
+                    trigger_time: 0.5,
+                    ..cue(2.0, 0.0, levels(&[(1, "Dimmer", 1.0)]))
+                },
+            ],
+        });
+        let start = Instant::now();
+        let desk = Desk::new();
+        let mut playback = Playback::new();
+        playback
+            .go(&show, Target::Sequence(1), 1, 0, start)
+            .unwrap();
+        playback.refresh(&desk, start + Duration::from_secs(1));
+        assert!(playback
+            .due(&show, start + Duration::from_secs(1))
+            .is_empty());
+
+        // The fade ends at 2 s; the follow time starts there.
+        playback.refresh(&desk, start + Duration::from_secs(2));
+        assert!(
+            playback
+                .due(&show, start + Duration::from_secs(2))
+                .is_empty(),
+            "half a second of follow time is still to run"
+        );
+        assert_eq!(
+            playback
+                .due(&show, start + Duration::from_millis(2500))
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_follow_zero_chains_on_the_same_tick() {
+        let mut show = demo_show();
+        show.sequences.push(Sequence {
+            number: 1,
+            name: "Fast".into(),
+            cues: vec![
+                cue(1.0, 0.0, levels(&[(1, "Dimmer", 0.4)])),
+                Cue {
+                    trigger: Trigger::Follow,
+                    ..cue(2.0, 0.0, levels(&[(1, "Dimmer", 1.0)]))
+                },
+            ],
+        });
+        let start = Instant::now();
+        let desk = Desk::new();
+        let mut playback = Playback::new();
+        playback
+            .go(&show, Target::Sequence(1), 1, 0, start)
+            .unwrap();
+        playback.refresh(&desk, start);
+        assert_eq!(playback.due(&show, start).len(), 1);
+    }
+
+    #[test]
+    fn a_time_trigger_counts_from_the_cue_start_and_overlaps() {
+        let mut show = demo_show();
+        show.sequences.push(Sequence {
+            number: 1,
+            name: "Overlap".into(),
+            cues: vec![
+                cue(1.0, 4.0, levels(&[(1, "Dimmer", 0.4)])),
+                Cue {
+                    trigger: Trigger::Time,
+                    trigger_time: 2.0,
+                    ..cue(2.0, 4.0, levels(&[(1, "Dimmer", 1.0)]))
+                },
+            ],
+        });
+        let start = Instant::now();
+        let desk = Desk::new();
+        let mut playback = Playback::new();
+        playback
+            .go(&show, Target::Sequence(1), 1, 0, start)
+            .unwrap();
+        playback.refresh(&desk, start + Duration::from_secs(1));
+        assert!(playback
+            .due(&show, start + Duration::from_secs(1))
+            .is_empty());
+        assert_eq!(
+            playback.due(&show, start + Duration::from_secs(2)).len(),
+            1,
+            "a time trigger fires while the fade is still moving"
+        );
+    }
+
+    #[test]
+    fn a_go_cue_waits_for_a_button() {
+        let mut show = demo_show();
+        show.sequences.push(Sequence {
+            number: 1,
+            name: "Manual".into(),
+            cues: vec![
+                cue(1.0, 0.0, levels(&[(1, "Dimmer", 0.4)])),
+                cue(2.0, 0.0, levels(&[(1, "Dimmer", 1.0)])),
+            ],
+        });
+        let start = Instant::now();
+        let desk = Desk::new();
+        let mut playback = Playback::new();
+        playback
+            .go(&show, Target::Sequence(1), 1, 0, start)
+            .unwrap();
+        playback.refresh(&desk, start);
+        assert!(playback
+            .due(&show, start + Duration::from_secs(3600))
+            .is_empty());
+    }
+
+    #[test]
+    fn the_last_cue_never_wraps() {
+        let mut show = demo_show();
+        show.sequences.push(Sequence {
+            number: 1,
+            name: "Single".into(),
+            cues: vec![Cue {
+                trigger: Trigger::Follow,
+                ..cue(1.0, 0.0, levels(&[(1, "Dimmer", 0.4)]))
+            }],
+        });
+        let start = Instant::now();
+        let desk = Desk::new();
+        let mut playback = Playback::new();
+        playback
+            .go(&show, Target::Sequence(1), 1, 0, start)
+            .unwrap();
+        playback.refresh(&desk, start);
+        assert!(playback
+            .due(&show, start + Duration::from_secs(3600))
+            .is_empty());
+    }
+
+    #[test]
+    fn a_held_run_never_triggers() {
+        let mut show = demo_show();
+        show.sequences.push(chain());
+        let start = Instant::now();
+        let desk = Desk::new();
+        let mut playback = Playback::new();
+        playback
+            .go(&show, Target::Sequence(1), 1, 0, start)
+            .unwrap();
+        assert!(playback.pause(Target::Sequence(1), start));
+        playback.refresh(&desk, start + Duration::from_secs(10));
+        assert!(
+            playback
+                .due(&show, start + Duration::from_secs(20))
+                .is_empty(),
+            "a run held by a hand does not chain"
+        );
+    }
+
+    #[test]
+    fn scrub_follows_the_blend_at_any_fraction() {
+        let mut show = demo_show();
+        show.sequences.push(Sequence {
+            number: 1,
+            name: "Hand".into(),
+            cues: vec![
+                cue(1.0, 0.0, levels(&[(1, "Dimmer", 0.4)])),
+                cue(2.0, 4.0, levels(&[(1, "Dimmer", 1.0)])),
+            ],
+        });
+        let start = Instant::now();
+        let mut playback = Playback::new();
+        playback
+            .go(&show, Target::Sequence(1), 1, 0, start)
+            .unwrap();
+        playback
+            .go(&show, Target::Sequence(1), 1, 1, start)
+            .unwrap();
+
+        assert!(playback.scrub(Target::Sequence(1), 0.5));
+        let run = playback.run(Target::Sequence(1)).unwrap();
+        assert!(run.is_paused());
+        assert_eq!(
+            run.levels_at(start + Duration::from_secs(99))
+                .get(1, "Dimmer"),
+            Some(0.7),
+            "half the fade is the same blend time would produce"
+        );
+
+        playback.scrub(Target::Sequence(1), 0.0);
+        assert_eq!(
+            playback
+                .run(Target::Sequence(1))
+                .unwrap()
+                .levels_at(start)
+                .get(1, "Dimmer"),
+            Some(0.4)
+        );
+        playback.scrub(Target::Sequence(1), 1.0);
+        assert_eq!(
+            playback
+                .run(Target::Sequence(1))
+                .unwrap()
+                .levels_at(start)
+                .get(1, "Dimmer"),
+            Some(1.0)
+        );
+    }
+
+    #[test]
+    fn an_unknown_trigger_name_is_a_deserialization_error() {
+        let error = serde_json::from_str::<Cue>(r#"{"number":1,"trigger":"sound"}"#).unwrap_err();
+        assert!(error.to_string().contains("unknown variant"), "{error}");
     }
 
     #[test]

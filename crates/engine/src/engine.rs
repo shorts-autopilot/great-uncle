@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::command::{self, Command, CommandError, Level, LevelSource, PlaybackRef};
+use crate::command::{self, Command, CommandError, Level, LevelSource, PlaybackRef, TriggerArg};
 use crate::desk::{Desk, RunState};
 use crate::effect::{Effect, Effects, Waveform, MAX_RATE_HZ, MAX_SPREAD_DEGREES};
 use crate::fixture_type::{FixtureType, DIMMER};
@@ -22,12 +22,24 @@ use crate::output::{lock, OutputStatus};
 use crate::palette::{self, Palette};
 use crate::patch::PatchRange;
 use crate::playback::{
-    format_cue_number, Cue, Executor, Playback, Sequence, Target, MAX_CUE_NUMBER, MAX_TIME,
+    format_cue_number, format_trigger, Cue, Executor, ExecutorMode, Playback, Sequence, Target,
+    Trigger, MAX_CUE_NUMBER, MAX_TIME,
 };
 use crate::pools::{Filter, Group, World};
 use crate::render::{self, OutputFrame, Stage};
 use crate::show::{Fixture, Show, MAX_RATE_MASTER};
 use crate::timecode::{self, TimecodeEvent, TimecodePlayer, TimecodeShow, MAX_FPS, MIN_FPS};
+
+/// Everything `Store Cue` carries before defaults are applied.
+struct CueSpec {
+    sequence: u16,
+    number: f64,
+    name: Option<String>,
+    fade: Option<f64>,
+    delay: Option<f64>,
+    mib: Option<bool>,
+    trigger: Option<TriggerArg>,
+}
 
 /// Everything `Store Effect` carries before defaults are applied.
 struct EffectSpec {
@@ -66,6 +78,9 @@ pub struct RecoveryReport {
     pub skipped: Vec<String>,
     /// The revision that broke the chain, if any.
     pub stopped: Option<u64>,
+    /// The oldest revision still in the journal when its head was lost to
+    /// rotation, so earlier statements could not be replayed.
+    pub head_lost: Option<u64>,
     /// A final journal line cut short by the crash.
     pub incomplete: usize,
 }
@@ -82,6 +97,11 @@ impl RecoveryReport {
         if let Some(rev) = self.stopped {
             lines.push(format!(
                 "Warning: journal replay stopped at revision {rev}; later entries ignored"
+            ));
+        }
+        if let Some(rev) = self.head_lost {
+            lines.push(format!(
+                "Warning: the journal begins at revision {rev}; earlier edits are not available"
             ));
         }
         if self.incomplete > 0 {
@@ -164,14 +184,28 @@ impl Engine {
         // Timecode events start cues before the playback is sampled, so a cue
         // that begins on this frame is already in the output.
         let fired = self.timecode_events(now);
+        let mut started = BTreeSet::new();
         for event in &fired {
+            started.insert(Target::Sequence(event.sequence));
             self.fire_timecode_event(event, now);
         }
-        let advanced = self.playback.refresh(&self.show, &self.desk.masters, now);
+        // A `Follow` or `Time` trigger that came due starts through the same
+        // path, so a chained cue is already in this frame. A target timecode
+        // started on this tick is left alone: its own chain begins next tick.
+        let due = self.playback.due(&self.show, now);
+        let chained = !due.is_empty();
+        for (target, sequence, index) in due {
+            if started.contains(&target) {
+                continue;
+            }
+            self.start_cue(target, sequence, index, now);
+        }
+        let advanced = self.playback.refresh(&self.desk, now);
         // A running effect or timecode changes the output on every tick, even
         // when no cue is moving, so the sender keeps re-rendering.
         let changed = advanced
             || !fired.is_empty()
+            || chained
             || self.effects.is_running()
             || self.timecode.is_running();
         if changed {
@@ -218,7 +252,20 @@ impl Engine {
     }
 
     fn save_snapshot(&self, path: &Path) -> io::Result<()> {
-        crate::journal::Snapshot::capture(self.revision, &self.show, &self.desk).save(path)
+        // The revision a snapshot records is a journal revision, because that
+        // is what replay compares it against. Engine revisions count renders
+        // and restart at zero, so using one here would replay statements the
+        // snapshot already contains.
+        let rev = self.journal_rev();
+        crate::journal::Snapshot::capture(rev, &self.show, &self.desk).save(path)
+    }
+
+    /// The newest journal revision, or zero when no journal is open.
+    fn journal_rev(&self) -> u64 {
+        self.journal
+            .as_ref()
+            .map(|journal| journal.rev())
+            .unwrap_or(0)
     }
 
     /// Install a recovered document and desk, restoring playback positions.
@@ -240,8 +287,21 @@ impl Engine {
     /// statement that no longer applies (a fixture deleted later) is skipped
     /// with a warning; a break in the revision chain stops replay, because a
     /// spliced file must not silently reorder edits.
-    pub fn recover(&mut self, tail: &crate::journal::Tail, from: u64) -> RecoveryReport {
+    pub fn recover(
+        &mut self,
+        tail: &crate::journal::Tail,
+        show_path: &Path,
+        snapshot: u64,
+    ) -> RecoveryReport {
+        // A `Save` records where the file on disk stands, and the autosave
+        // records where a snapshot stands; replay starts after the newer one.
+        // Replaying statements the document already contains would apply
+        // non-idempotent edits (an `Undo`, a store that captures a programmer)
+        // a second time and diverge from the saved file.
+        let baseline = tail.baseline(show_path, snapshot);
+        let from = baseline.rev;
         let mut report = RecoveryReport {
+            head_lost: baseline.head_lost,
             incomplete: tail.incomplete,
             ..RecoveryReport::default()
         };
@@ -355,7 +415,24 @@ impl Engine {
                 fade,
                 delay,
                 mib,
-            } => self.store_cue(sequence, number, name, fade, delay, mib),
+                trigger,
+            } => self.store_cue(CueSpec {
+                sequence,
+                number,
+                name,
+                fade,
+                delay,
+                mib,
+                trigger,
+            }),
+            Command::CueTrigger {
+                sequence,
+                number,
+                trigger,
+            } => self.cue_trigger(sequence, number, trigger),
+            Command::SetExecutorMode { executor, mode } => self.set_executor_mode(executor, mode),
+            Command::SetExecutorFlash { executor, on } => self.set_executor_flash(executor, on),
+            Command::SetExecutorSolo { executor, on } => self.set_executor_solo(executor, on),
             Command::DeleteCue { sequence, number } => self.delete_cue(sequence, number),
             Command::ListSequences { only } => Ok(self.sequence_list(only)),
             Command::AssignExecutor { executor, sequence } => {
@@ -891,6 +968,11 @@ impl Engine {
             self.show
                 .save(show_path)
                 .map_err(|error| CommandError::new(error.to_string()))?;
+            // The file now contains every statement so far, so replay starts
+            // after this point rather than from the beginning of the journal.
+            if let Some(journal) = &mut self.journal {
+                journal.checkpoint(show_path, self.revision);
+            }
             lines.push(format!("Saved show to {path}"));
         }
         if let Err(error) = self.autosave_now() {
@@ -980,7 +1062,7 @@ impl Engine {
             self.desk.masters.set_group(number, level);
         }
         for (number, level) in seed.executors {
-            self.desk.masters.set_executor(number, level);
+            self.desk.set_executor_fader(number, level);
         }
         self.desk.programmer = seed.programmer;
     }
@@ -1035,8 +1117,7 @@ impl Engine {
                 self.playback.pause(target, self.clock);
             }
         }
-        self.playback
-            .refresh(&self.show, &self.desk.masters, self.clock);
+        self.playback.refresh(&self.desk, self.clock);
         self.desk.runs = runs;
     }
 
@@ -1194,6 +1275,13 @@ impl Engine {
             } else {
                 "off"
             }
+        ));
+        lines.push(format!(
+            "Solo: {}",
+            self.desk
+                .soloed()
+                .map(|number| format!("executor {number}"))
+                .unwrap_or_else(|| "off".to_string())
         ));
         let autosave = match &self.autosave {
             Some((path, interval, _)) => format!(
@@ -1503,15 +1591,16 @@ impl Engine {
         CommandOutcome::with_lines(lines)
     }
 
-    fn store_cue(
-        &mut self,
-        sequence_number: u16,
-        number: f64,
-        name: Option<String>,
-        fade: Option<f64>,
-        delay: Option<f64>,
-        mib: Option<bool>,
-    ) -> Result<CommandOutcome, CommandError> {
+    fn store_cue(&mut self, spec: CueSpec) -> Result<CommandOutcome, CommandError> {
+        let CueSpec {
+            sequence: sequence_number,
+            number,
+            name,
+            fade,
+            delay,
+            mib,
+            trigger,
+        } = spec;
         if sequence_number == 0 {
             return Err(CommandError::new("sequence number 0 is not allowed"));
         }
@@ -1520,7 +1609,11 @@ impl Engine {
                 "cue number {number} is outside 0..={MAX_CUE_NUMBER}"
             )));
         }
-        for (label, value) in [("fade", fade), ("delay", delay)] {
+        for (label, value) in [
+            ("fade", fade),
+            ("delay", delay),
+            ("trigger time", trigger.map(|trigger| trigger.time)),
+        ] {
             if let Some(value) = value {
                 if !value.is_finite() || !(0.0..=MAX_TIME).contains(&value) {
                     return Err(CommandError::new(format!(
@@ -1600,19 +1693,27 @@ impl Engine {
                     if let Some(mib) = mib {
                         cue.mib = mib;
                     }
+                    if let Some(trigger) = trigger {
+                        apply_trigger(cue, trigger);
+                    }
                     cue.levels = delta;
                 }
-                None => sequence.cues.insert(
-                    insertion,
-                    Cue {
+                None => {
+                    let mut cue = Cue {
                         number,
                         name: cue_name.clone(),
                         fade,
                         delay,
                         mib: mib.unwrap_or(false),
+                        trigger: Trigger::Go,
+                        trigger_time: 0.0,
                         levels: delta,
-                    },
-                ),
+                    };
+                    if let Some(trigger) = trigger {
+                        apply_trigger(&mut cue, trigger);
+                    }
+                    sequence.cues.insert(insertion, cue);
+                }
             }
             show.sequences.sort_by_key(|sequence| sequence.number);
             let mib_label = if mib.unwrap_or(existing_mib) { ", mib" } else { "" };
@@ -1633,6 +1734,45 @@ impl Engine {
             );
         }
         Ok(CommandOutcome::with_lines(lines))
+    }
+
+    /// Retime one cue's trigger. This is a show edit with one undo step, and it
+    /// never restarts a running cue: the change takes effect the next time the
+    /// chain is evaluated.
+    fn cue_trigger(
+        &mut self,
+        sequence_number: u16,
+        number: f64,
+        trigger: TriggerArg,
+    ) -> Result<CommandOutcome, CommandError> {
+        let Some(sequence) = self.show.sequence(sequence_number) else {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence_number} does not exist"),
+                "`Sequence` lists the sequences",
+            ));
+        };
+        if sequence.cue_index(number).is_none() {
+            return Err(CommandError::with_hint(
+                format!(
+                    "sequence {sequence_number} has no cue {}",
+                    format_cue_number(number)
+                ),
+                format!("`Sequence {sequence_number}` lists its cues"),
+            ));
+        }
+        let label = format_trigger(trigger.trigger, trigger.time);
+        let message = self.mutate(|show| {
+            if let Some(index) = show.sequence_index(sequence_number) {
+                if let Some(cue) = show.sequences[index].cue_mut(number) {
+                    apply_trigger(cue, trigger);
+                }
+            }
+            Ok(format!(
+                "Cue {} in sequence {sequence_number} starts on {label}",
+                format_cue_number(number)
+            ))
+        })?;
+        Ok(CommandOutcome::message(message))
     }
 
     fn delete_cue(
@@ -1687,16 +1827,17 @@ impl Engine {
                         return CommandOutcome::with_lines(lines);
                     }
                     lines.push(format!(
-                        "{:<6} {:<20} {:>6} {:>6} {:<4} {}",
-                        "Cue", "Name", "Fade", "Delay", "Mib", "Values"
+                        "{:<6} {:<18} {:>6} {:>6} {:<13} {:<4} {}",
+                        "Cue", "Name", "Fade", "Delay", "Trigger", "Mib", "Values"
                     ));
                     for cue in &sequence.cues {
                         lines.push(format!(
-                            "{:<6} {:<20} {:>5.1}s {:>5.1}s {:<4} {}{}",
+                            "{:<6} {:<18} {:>5.1}s {:>5.1}s {:<13} {:<4} {}{}",
                             format_cue_number(cue.number),
-                            truncate(&cue.name, 20),
+                            truncate(&cue.name, 18),
                             cue.fade,
                             cue.delay,
+                            format_trigger(cue.trigger, cue.trigger_time),
                             if cue.mib { "yes" } else { "-" },
                             cue.levels.len(),
                             if cue.levels.is_empty() {
@@ -1761,6 +1902,7 @@ impl Engine {
                     number,
                     sequence,
                     name: format!("Executor {number}"),
+                    mode: ExecutorMode::Go,
                 }),
             }
             show.executors.sort_by_key(|executor| executor.number);
@@ -1792,18 +1934,136 @@ impl Engine {
             }
             Level::Full => 1.0,
         };
+        let Some(mode) = self.show.executor(number).map(|executor| executor.mode) else {
+            return Err(CommandError::with_hint(
+                format!("executor {number} does not exist"),
+                "assign one first: `Assign Executor 1 Sequence 1`",
+            ));
+        };
+        let percent = (value * 100.0).round() as i64;
+        self.desk.set_executor_fader(number, value);
+        if mode == ExecutorMode::Fader {
+            // A hand on the fader crossfades the cue: at 0 it holds the state
+            // before the cue, at 100 the state of the cue. An idle list starts
+            // cue 1 so the fader has something to move.
+            if self.playback.run(Target::Executor(number)).is_none() {
+                self.start_first_cue(number);
+            }
+            self.playback.scrub(Target::Executor(number), value);
+        }
+        self.refresh_playback();
+        Ok(CommandOutcome::message(format!(
+            "Executor {number} fader at {percent}%"
+        )))
+    }
+
+    fn set_executor_mode(
+        &mut self,
+        number: u16,
+        mode: ExecutorMode,
+    ) -> Result<CommandOutcome, CommandError> {
         if self.show.executor(number).is_none() {
             return Err(CommandError::with_hint(
                 format!("executor {number} does not exist"),
                 "assign one first: `Assign Executor 1 Sequence 1`",
             ));
         }
-        let percent = (value * 100.0).round() as i64;
-        self.desk.masters.set_executor(number, value);
+        let label = mode.label();
+        let message = self.mutate(|show| {
+            if let Some(executor) = show
+                .executors
+                .iter_mut()
+                .find(|executor| executor.number == number)
+            {
+                executor.mode = mode;
+            }
+            Ok(format!("Executor {number} mode {label}"))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    /// Hold or release flash. A desk action, not an edit: no undo step, and it
+    /// never changes the show.
+    fn set_executor_flash(
+        &mut self,
+        number: u16,
+        on: bool,
+    ) -> Result<CommandOutcome, CommandError> {
+        if self.show.executor(number).is_none() {
+            return Err(CommandError::with_hint(
+                format!("executor {number} does not exist"),
+                "assign one first: `Assign Executor 1 Sequence 1`",
+            ));
+        }
+        self.desk.set_executor_flash(number, on);
+        // Flash on an unstarted list starts its first cue; releasing restores
+        // the fader but leaves the cue where it is.
+        if on && self.playback.run(Target::Executor(number)).is_none() {
+            self.start_first_cue(number);
+        }
         self.refresh_playback();
         Ok(CommandOutcome::message(format!(
-            "Executor {number} fader at {percent}%"
+            "Executor {number} flash {}",
+            if on { "on" } else { "off" }
         )))
+    }
+
+    /// Hold or release solo. Solo is a merge-time flag, so it alters no run.
+    fn set_executor_solo(&mut self, number: u16, on: bool) -> Result<CommandOutcome, CommandError> {
+        if self.show.executor(number).is_none() {
+            return Err(CommandError::with_hint(
+                format!("executor {number} does not exist"),
+                "assign one first: `Assign Executor 1 Sequence 1`",
+            ));
+        }
+        self.desk.set_executor_solo(number, on);
+        self.refresh_playback();
+        Ok(CommandOutcome::message(format!(
+            "Executor {number} solo {}",
+            if on { "on" } else { "off" }
+        )))
+    }
+
+    /// Start the first cue of an executor's list, if it has one.
+    fn start_first_cue(&mut self, executor: u16) {
+        let Some(sequence) = self.show.executor(executor).map(|e| e.sequence) else {
+            return;
+        };
+        if self
+            .show
+            .sequence(sequence)
+            .map(|sequence| sequence.cues.is_empty())
+            .unwrap_or(true)
+        {
+            return;
+        }
+        let now = self.clock;
+        self.start_cue(Target::Executor(executor), sequence, 0, now);
+    }
+
+    /// `idle`, `flash`, `solo` or which cue is running.
+    fn executor_state_label(&self, number: u16) -> String {
+        let state = self.desk.executor_state(number);
+        if state.flash {
+            return "flash".to_string();
+        }
+        if state.solo {
+            return "solo".to_string();
+        }
+        match self.playback.run(Target::Executor(number)) {
+            Some(run) => format!(
+                "cue {} {}",
+                format_cue_number(run.cue_number),
+                if run.is_paused() {
+                    "held"
+                } else if run.done {
+                    "done"
+                } else {
+                    "running"
+                }
+            ),
+            None => "idle".to_string(),
+        }
     }
 
     fn executor_list(&self, only: Option<u16>) -> CommandOutcome {
@@ -1823,32 +2083,25 @@ impl Engine {
         }
 
         let mut lines = vec![format!(
-            "{:<4} {:<20} {:<8} {:<9} {}",
-            "No.", "Sequence", "Fader", "State", "Cue"
+            "{:<4} {:<12} {:<6} {:<7} {:<14} {}",
+            "No.", "Sequence", "Mode", "Fader", "State", "Cue"
         )];
         for executor in executors {
-            let (state, cue) = match self.playback.run(Target::Executor(executor.number)) {
-                Some(run) => {
-                    let state = if run.is_paused() {
-                        "paused".to_string()
-                    } else if run.done {
-                        "complete".to_string()
-                    } else {
-                        format!("{:.0}%", run.progress(self.clock) * 100.0)
-                    };
-                    (state, format_cue_number(run.cue_number))
-                }
-                None => ("idle".to_string(), "-".to_string()),
-            };
+            let cue = self
+                .playback
+                .run(Target::Executor(executor.number))
+                .map(|run| format_cue_number(run.cue_number))
+                .unwrap_or_else(|| "-".to_string());
             lines.push(format!(
-                "{:<4} {:<20} {:<8} {:<9} {}",
+                "{:<4} {:<12} {:<6} {:<7} {:<14} {}",
                 executor.number,
                 format!("Sequence {}", executor.sequence),
+                executor.mode.label(),
                 format!(
                     "{:.0}%",
-                    self.desk.masters.executor(executor.number) * 100.0
+                    self.desk.executor_state(executor.number).fader * 100.0
                 ),
-                state,
+                self.executor_state_label(executor.number),
                 cue
             ));
         }
@@ -1902,8 +2155,7 @@ impl Engine {
     }
 
     fn refresh_playback(&mut self) {
-        self.playback
-            .refresh(&self.show, &self.desk.masters, self.clock);
+        self.playback.refresh(&self.desk, self.clock);
         self.revision += 1;
     }
 
@@ -3260,13 +3512,15 @@ impl Engine {
         else {
             return;
         };
-        let _ = self.playback.go(
-            &self.show,
-            Target::Sequence(event.sequence),
-            event.sequence,
-            index,
-            now,
-        );
+        self.start_cue(Target::Sequence(event.sequence), event.sequence, index, now);
+    }
+
+    /// Start one cue on one target.
+    ///
+    /// Timecode and a trigger chain both come through here, so a cue starts the
+    /// same way whoever asked for it.
+    fn start_cue(&mut self, target: Target, sequence: u16, index: usize, now: Instant) {
+        let _ = self.playback.go(&self.show, target, sequence, index, now);
     }
 
     fn history_step(&mut self, undo: bool) -> Result<CommandOutcome, CommandError> {
@@ -3337,8 +3591,7 @@ impl Engine {
         for number in stale {
             self.effects.stop(number);
         }
-        self.playback
-            .refresh(&self.show, &self.desk.masters, self.clock);
+        self.playback.refresh(&self.desk, self.clock);
         self.revision += 1;
     }
 
@@ -3418,6 +3671,8 @@ pub const HELP: &[&str] = &[
     "Store Palette Color 1 \"Warm\"           capture the programmer in a pool",
     "Delete Palette Color 1 / Palette        delete or list palettes",
     "Store Cue 1 [\"name\"] [Fade 2] [Delay 0.5] [Mib] [Sequence 2]",
+    "Store Cue 2 Follow 1.5 / Time 0.5  start without a button",
+    "Cue 2 Trigger Go / Follow 1 / Time 2  retime a stored cue",
     "Delete Cue 1 [Sequence 2] / Sequence [2]  delete or list cues",
     "Undo / Redo                            step through show edits",
     "Store Timecode 1 \"Song\" [Fps 25]       create a timecode show",
@@ -3426,6 +3681,8 @@ pub const HELP: &[&str] = &[
     "Timecode [1] / Delete Timecode 1       list or delete timecode shows",
     "Assign Executor 1 Sequence 1            bind a cue list to a fader",
     "Executor 1 At 75 | Full | Off           executor master fader",
+    "Executor 1 Mode Go | Fader | Flash | Solo",
+    "Executor 1 Flash [Off] | Solo [Off]     hold or release a button",
     "Go | Back | Pause | Release [Executor 1 | Sequence 1]",
     "Group 1 / Group 1 At 50 / Group 1 Full / Group 1 Off",
     "Store Group 1 \"Front\" / Delete Group 1 / Group",
@@ -3445,6 +3702,15 @@ pub const HELP: &[&str] = &[
     "Help                                   this list",
     "Separate several commands with `;`.",
 ];
+
+/// Apply a parsed trigger to a cue. A `Go` keeps the stored time, so switching
+/// back and forth does not lose the number.
+fn apply_trigger(cue: &mut Cue, spec: TriggerArg) {
+    cue.trigger = spec.trigger;
+    if spec.trigger != Trigger::Go {
+        cue.trigger_time = spec.time;
+    }
+}
 
 pub fn level_value(level: &Level) -> Result<f64, CommandError> {
     match level {
@@ -4845,6 +5111,163 @@ mod tests {
         engine.execute("Fixture 1 At 50").unwrap();
     }
 
+    #[test]
+    fn a_follow_chain_runs_without_commands_between_ticks() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 40").unwrap();
+        engine.execute("Store Cue 1 Fade 0").unwrap();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 2 Follow 1 Fade 0").unwrap();
+        engine.execute("Fixture 1 At 20").unwrap();
+        engine.execute("Store Cue 3 Follow 0 Fade 0").unwrap();
+
+        let start = engine.clock();
+        engine.execute("Go Sequence 1").unwrap();
+        engine.tick(start);
+        assert_eq!(
+            engine.playback.run(Target::Sequence(1)).unwrap().cue_number,
+            1.0
+        );
+        engine.tick(start + Duration::from_secs(1));
+        assert_eq!(
+            engine.playback.run(Target::Sequence(1)).unwrap().cue_number,
+            2.0,
+            "cue 2 follows one second after cue 1 settles"
+        );
+        engine.tick(start + Duration::from_secs(1) + Duration::from_millis(20));
+        assert_eq!(
+            engine.playback.run(Target::Sequence(1)).unwrap().cue_number,
+            3.0,
+            "cue 3 follows cue 2 immediately"
+        );
+    }
+
+    #[test]
+    fn a_timecoded_cue_is_not_chained_again_on_the_same_tick() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 40").unwrap();
+        engine.execute("Store Cue 1 Fade 0").unwrap();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 2 Follow 0 Fade 0").unwrap();
+        engine.execute("Fixture 1 At 20").unwrap();
+        engine.execute("Store Cue 3 Follow 0 Fade 0").unwrap();
+        engine.execute("Store Timecode 1 Fps 25").unwrap();
+        engine
+            .execute("Timecode 1 Add 00:00:01:00 Sequence 1 Cue 1")
+            .unwrap();
+
+        let start = engine.clock();
+        engine.execute("Timecode 1 Start").unwrap();
+        engine.tick(start + Duration::from_secs(1));
+        assert_eq!(
+            engine.playback.run(Target::Sequence(1)).unwrap().cue_number,
+            1.0,
+            "the timecoded cue sits on its cue for this tick"
+        );
+        engine.tick(start + Duration::from_secs(1) + Duration::from_millis(20));
+        assert_eq!(
+            engine.playback.run(Target::Sequence(1)).unwrap().cue_number,
+            2.0,
+            "its chain starts on the next tick"
+        );
+    }
+
+    #[test]
+    fn a_trigger_edit_is_one_undo_step_and_keeps_the_running_cue() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 40").unwrap();
+        engine.execute("Store Cue 1 Fade 0").unwrap();
+        engine.execute("Fixture 1 At 60").unwrap();
+        engine.execute("Store Cue 2 Fade 2").unwrap();
+        engine.execute("Go Sequence 1").unwrap();
+        let running = engine.playback.run(Target::Sequence(1)).unwrap().cue_number;
+
+        engine.execute("Cue 2 Trigger Follow 1.5").unwrap();
+        let cue = engine.show.sequence(1).unwrap().cue(2.0).unwrap();
+        assert_eq!(cue.trigger, Trigger::Follow);
+        assert_eq!(cue.trigger_time, 1.5);
+        assert_eq!(
+            engine.playback.run(Target::Sequence(1)).unwrap().cue_number,
+            running,
+            "a trigger edit does not restart a running cue"
+        );
+
+        // A `Go` keeps the stored time, so toggling does not lose it.
+        engine.execute("Cue 2 Trigger Go").unwrap();
+        let cue = engine.show.sequence(1).unwrap().cue(2.0).unwrap();
+        assert_eq!(cue.trigger, Trigger::Go);
+        assert_eq!(cue.trigger_time, 1.5);
+
+        engine.execute("Undo").unwrap();
+        let cue = engine.show.sequence(1).unwrap().cue(2.0).unwrap();
+        assert_eq!(cue.trigger, Trigger::Follow, "one undo step per edit");
+    }
+
+    #[test]
+    fn executor_modes_drive_the_fader_by_hand() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 40").unwrap();
+        engine.execute("Store Cue 1 Fade 0").unwrap();
+        engine.execute("Assign Executor 1 Sequence 1").unwrap();
+        engine.execute("Executor 1 Mode Fader").unwrap();
+        assert_eq!(engine.show.executor(1).unwrap().mode, ExecutorMode::Fader);
+
+        engine.execute("Executor 1 At 60").unwrap();
+        let run = engine.playback.run(Target::Executor(1)).unwrap();
+        assert_eq!(run.cue_number, 1.0, "a fader on an idle list starts cue 1");
+        assert!(run.is_paused(), "the fader holds the crossfade");
+        assert_eq!(
+            run.levels_at(engine.clock()).get(1, "Dimmer"),
+            Some(0.24),
+            "60% of the way from nothing to 40%"
+        );
+
+        let lines = engine.execute("Executor 1").unwrap().lines;
+        assert!(
+            lines.iter().any(|line| line.contains("Fader")),
+            "the listing names the mode: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn solo_silences_the_other_executor_and_flash_restores_the_fader() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 40").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Assign Executor 1 Sequence 1").unwrap();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 2 Sequence 2").unwrap();
+        engine.execute("Assign Executor 2 Sequence 2").unwrap();
+        engine.execute("Go Executor 1").unwrap();
+        engine.execute("Go Executor 2").unwrap();
+        assert_eq!(engine.playback.output().get(1, "Dimmer"), Some(1.0));
+
+        engine.execute("Executor 1 Solo").unwrap();
+        assert_eq!(
+            engine.playback.output().get(1, "Dimmer"),
+            Some(0.4),
+            "the soloed executor is the only one left"
+        );
+        engine.execute("Executor 1 Solo Off").unwrap();
+        assert_eq!(engine.playback.output().get(1, "Dimmer"), Some(1.0));
+
+        engine.execute("Release Executor 2").unwrap();
+        engine.execute("Executor 1 At 50").unwrap();
+        assert_eq!(engine.playback.output().get(1, "Dimmer"), Some(0.2));
+        engine.execute("Executor 1 Flash").unwrap();
+        assert_eq!(
+            engine.playback.output().get(1, "Dimmer"),
+            Some(0.4),
+            "flash ignores the fader"
+        );
+        engine.execute("Executor 1 Flash Off").unwrap();
+        assert_eq!(
+            engine.playback.output().get(1, "Dimmer"),
+            Some(0.2),
+            "releasing restores it"
+        );
+    }
+
     fn journal_path(name: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
         path.push(format!("openlight-{}-{name}.journal", std::process::id()));
@@ -4887,6 +5310,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// A show path no checkpoint can name, for tests that replay a bare tail.
+    const NO_SHOW: &str = "openlight-replay-test.olshow";
+
     #[test]
     fn replaying_the_journal_reproduces_show_and_programmer() {
         let path = journal_path("replay");
@@ -4902,7 +5328,7 @@ mod tests {
         assert_eq!(tail.incomplete, 0);
 
         let mut recovered = engine();
-        let report = recovered.recover(&tail, 0);
+        let report = recovered.recover(&tail, Path::new(NO_SHOW), 0);
         assert_eq!(report.applied, 2, "{report:?}");
         assert!(report.skipped.is_empty(), "{report:?}");
         assert_eq!(recovered.show, show);
@@ -4916,7 +5342,7 @@ mod tests {
         // Replaying inside a live session must not journal the replay itself.
         recovered.set_journal(Some(crate::journal::Journal::open(path.clone()).unwrap()));
         let before = crate::journal::read(&path).unwrap().entries.len();
-        recovered.recover(&tail, 0);
+        recovered.recover(&tail, Path::new(NO_SHOW), 0);
         assert_eq!(crate::journal::read(&path).unwrap().entries.len(), before);
         let _ = std::fs::remove_file(&path);
     }
@@ -4942,7 +5368,7 @@ mod tests {
             incomplete: 1,
         };
         let mut engine = engine();
-        let report = engine.recover(&tail, 0);
+        let report = engine.recover(&tail, Path::new(NO_SHOW), 0);
         assert_eq!(report.applied, 1);
         assert_eq!(report.skipped.len(), 1, "the missing fixture is not fatal");
         assert!(report.skipped[0].contains("Fixture 99"));
@@ -4965,7 +5391,7 @@ mod tests {
             incomplete: 0,
         };
         let mut engine = engine();
-        let report = engine.recover(&tail, 0);
+        let report = engine.recover(&tail, Path::new(NO_SHOW), 0);
         assert_eq!(report.applied, 1);
         assert_eq!(report.stopped, Some(3));
         assert_eq!(
@@ -4973,6 +5399,53 @@ mod tests {
             Some(0.2),
             "the entry past the break is not replayed"
         );
+    }
+
+    #[test]
+    fn a_save_defines_where_replay_starts() {
+        let journal = journal_path("baseline");
+        let show_path =
+            journal.with_file_name(format!("openlight-{}-baseline.olshow", std::process::id()));
+        let _ = std::fs::remove_file(&show_path);
+        let _ = std::fs::remove_file(show_path.with_extension("oldesk"));
+
+        let mut session = engine();
+        session.set_journal(Some(
+            crate::journal::Journal::open(journal.clone()).unwrap(),
+        ));
+        session.execute("Fixture 1 At 40").unwrap();
+        session.execute("Fixture 1 At 90").unwrap();
+        // `Undo` is not journaled. Replaying the two edits would put the
+        // programmer back at 90 and disagree with the file saved at 40.
+        session.execute("Undo").unwrap();
+        session
+            .execute(&format!("Save \"{}\"", show_path.display()))
+            .unwrap();
+        session.execute("Fixture 1 At 20").unwrap();
+        drop(session);
+
+        let tail = crate::journal::read(&journal).unwrap();
+        assert_eq!(tail.entries.len(), 4, "{tail:#?}");
+        assert_eq!(tail.entries[2].kind, crate::journal::EntryKind::Checkpoint);
+        assert_eq!(tail.baseline(&show_path, 0).rev, 3);
+
+        let (mut reopened, _) = Engine::open(&show_path).unwrap();
+        assert_eq!(
+            reopened.desk.programmer.get(1, "Dimmer"),
+            Some(0.4),
+            "the file holds the undone value"
+        );
+        let report = reopened.recover(&tail, &show_path, 0);
+        assert_eq!(
+            report.applied, 1,
+            "only the edit after the save: {report:?}"
+        );
+        assert!(report.skipped.is_empty(), "{report:?}");
+        assert_eq!(reopened.desk.programmer.get(1, "Dimmer"), Some(0.2));
+
+        let _ = std::fs::remove_file(&journal);
+        let _ = std::fs::remove_file(&show_path);
+        let _ = std::fs::remove_file(show_path.with_extension("oldesk"));
     }
 
     #[test]
@@ -4988,6 +5461,10 @@ mod tests {
         let _ = std::fs::remove_file(&show_path);
 
         let mut engine = engine();
+        let journal = journal_path("autosave-rev");
+        engine.set_journal(Some(
+            crate::journal::Journal::open(journal.clone()).unwrap(),
+        ));
         engine.enable_autosave(path.clone(), Duration::from_secs(30));
         engine.execute("Fixture 1 At 60").unwrap();
         let start = engine.clock();
@@ -5003,7 +5480,12 @@ mod tests {
             .execute(&format!("Save \"{}\"", show_path.display()))
             .unwrap();
         let snapshot = crate::journal::Snapshot::load(&path).unwrap().unwrap();
-        assert_eq!(snapshot.rev, engine.revision);
+        assert_eq!(
+            snapshot.rev,
+            engine.journal().unwrap().rev(),
+            "a snapshot records a journal revision, not a render count"
+        );
+        assert_eq!(snapshot.rev, 2, "the edit, then the save checkpoint");
 
         let lines = engine.execute("Status").unwrap().lines;
         assert!(
@@ -5015,5 +5497,6 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&show_path);
         let _ = std::fs::remove_file(show_path.with_extension("oldesk"));
+        let _ = std::fs::remove_file(&journal);
     }
 }

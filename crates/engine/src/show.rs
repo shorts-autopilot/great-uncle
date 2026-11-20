@@ -7,9 +7,10 @@
 //! Version 2 adds palettes, sequences and executors. Version 3 adds groups,
 //! worlds, filters and effects. Version 4 adds timecode shows. Version 5 moves
 //! the programmer, the masters and the executor faders out of the show and into
-//! the desk file, because they are handles rather than programming. Older files
-//! still load: new sections default to empty, and the v5 upgrade hands the
-//! values it finds in an old file to the desk through a [`LoadReport`].
+//! the desk file, because they are handles rather than programming. Version 6
+//! adds cue triggers and executor modes. Older files still load: new sections
+//! default to empty, and the v5 upgrade hands the values it finds in an old file
+//! to the desk through a [`LoadReport`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -27,9 +28,9 @@ use crate::pools::{Filter, Group, World, MAX_GROUP_FIXTURES, MAX_POOL_OBJECTS};
 use crate::timecode::{self, TimecodeShow, MAX_FPS, MAX_TIMECODES, MAX_TIMECODE_EVENTS, MIN_FPS};
 
 pub const SHOW_FORMAT: &str = "openlight-show";
-pub const SHOW_VERSION: u32 = 5;
+pub const SHOW_VERSION: u32 = 6;
 /// Older documents that still load, oldest first.
-pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3, 4, 5];
+pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3, 4, 5, 6];
 /// Fastest rate master accepted, as a factor (400%).
 pub const MAX_RATE_MASTER: f64 = 4.0;
 pub const MAX_UNIVERSE_SIZE: u16 = 512;
@@ -481,7 +482,11 @@ impl Show {
                         sequence.number
                     ));
                 }
-                for (name, value) in [("fade", cue.fade), ("delay", cue.delay)] {
+                for (name, value) in [
+                    ("fade", cue.fade),
+                    ("delay", cue.delay),
+                    ("trigger time", cue.trigger_time),
+                ] {
                     if !value.is_finite() || !(0.0..=MAX_TIME).contains(&value) {
                         problems.push(format!(
                             "sequence {} cue {label}: {name} {value} is outside 0..={MAX_TIME} seconds",
@@ -1035,7 +1040,7 @@ mod tests {
             .read_to_string(&mut text)
             .unwrap();
         assert!(text.contains("\"format\": \"openlight-show\""));
-        assert!(text.contains("\"version\": 5"));
+        assert!(text.contains("\"version\": 6"));
         assert!(text.contains("OpenLight Demo Wash"), "types are embedded");
         let _ = fs::remove_file(&path);
     }
@@ -1265,7 +1270,7 @@ mod tests {
 
     #[test]
     fn timecode_events_must_name_a_stored_cue() {
-        use crate::playback::{Cue, Sequence};
+        use crate::playback::{Cue, Sequence, Trigger};
         use crate::timecode::{TimecodeEvent, TimecodeShow};
 
         let mut show = demo_show();
@@ -1278,6 +1283,8 @@ mod tests {
                 fade: 0.0,
                 delay: 0.0,
                 mib: false,
+                trigger: Trigger::Go,
+                trigger_time: 0.0,
                 levels: Levels::new(),
             }],
         });
@@ -1298,6 +1305,38 @@ mod tests {
                 .any(|problem| problem.contains("cue 2 which sequence 1 does not have")),
             "{problems:#?}"
         );
+    }
+
+    #[test]
+    fn version_five_shows_upgrade_with_go_triggers() {
+        use crate::playback::{ExecutorMode, Trigger};
+
+        let mut path = std::env::temp_dir();
+        path.push(format!("openlight-{}-v5.olshow", std::process::id()));
+        fs::write(
+            &path,
+            r#"{
+                "format": "openlight-show",
+                "version": 5,
+                "name": "Old",
+                "sequences": [{"number": 1, "cues": [{"number": 1}]}],
+                "executors": [{"number": 1, "sequence": 1}]
+            }"#,
+        )
+        .unwrap();
+        let (show, report) = Show::load_with_report(&path).unwrap();
+        assert!(report.warnings.is_empty(), "{report:#?}");
+        assert_eq!(show.version, SHOW_VERSION);
+        assert_eq!(show.sequences[0].cues[0].trigger, Trigger::Go);
+        assert_eq!(show.sequences[0].cues[0].trigger_time, 0.0);
+        assert_eq!(show.executors[0].mode, ExecutorMode::Go);
+
+        // The upgraded file validates and writes as the current version.
+        show.save(&path).unwrap();
+        let (reloaded, _) = Show::load_with_report(&path).unwrap();
+        assert_eq!(reloaded, show);
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(crate::journal::path_for(&path, ".bak"));
     }
 
     #[test]
@@ -1351,7 +1390,7 @@ mod tests {
     #[test]
     fn invalid_palettes_sequences_and_executors_are_reported() {
         use crate::palette::Palette;
-        use crate::playback::{Cue, Executor, Sequence};
+        use crate::playback::{Cue, Executor, ExecutorMode, Sequence, Trigger};
 
         let mut show = demo_show();
         show.palettes.push(Palette {
@@ -1370,6 +1409,8 @@ mod tests {
                     fade: -1.0,
                     delay: 0.0,
                     mib: false,
+                    trigger: Trigger::Go,
+                    trigger_time: 0.0,
                     levels: Levels::new(),
                 },
                 Cue {
@@ -1378,6 +1419,8 @@ mod tests {
                     fade: 0.0,
                     delay: 0.0,
                     mib: false,
+                    trigger: Trigger::Go,
+                    trigger_time: 0.0,
                     levels: Levels::new(),
                 },
                 Cue {
@@ -1386,6 +1429,8 @@ mod tests {
                     fade: 0.0,
                     delay: 0.0,
                     mib: false,
+                    trigger: Trigger::Go,
+                    trigger_time: 0.0,
                     levels: Levels::new(),
                 },
             ],
@@ -1394,6 +1439,7 @@ mod tests {
             number: 1,
             sequence: 9,
             name: String::new(),
+            mode: ExecutorMode::Go,
         });
 
         let problems = show.validate();

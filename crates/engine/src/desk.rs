@@ -41,9 +41,14 @@ pub struct Masters {
     /// Group masters by group number, 0..=1. Missing means full.
     #[serde(default)]
     pub groups: BTreeMap<u16, f64>,
-    /// Executor faders by executor number, 0..=1. Missing means full.
-    #[serde(default)]
-    pub executors: BTreeMap<u16, f64>,
+    /// Executor faders in desk version 1, where they lived here. Read once and
+    /// moved to [`Desk::executors`]; never written again.
+    #[serde(
+        default,
+        rename = "executors",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub(crate) legacy_executors: BTreeMap<u16, f64>,
 }
 
 impl Default for Masters {
@@ -58,7 +63,7 @@ impl Masters {
             grand: 1.0,
             rate: 1.0,
             groups: BTreeMap::new(),
-            executors: BTreeMap::new(),
+            legacy_executors: BTreeMap::new(),
         }
     }
 
@@ -66,16 +71,37 @@ impl Masters {
         self.groups.get(&number).copied().unwrap_or(1.0)
     }
 
-    pub fn executor(&self, number: u16) -> f64 {
-        self.executors.get(&number).copied().unwrap_or(1.0)
-    }
-
     pub fn set_group(&mut self, number: u16, level: f64) {
         set_level(&mut self.groups, number, level);
     }
+}
 
-    pub fn set_executor(&mut self, number: u16, level: f64) {
-        set_level(&mut self.executors, number, level);
+/// One executor's handles: fader, flash and solo.
+///
+/// The show says what an executor plays and what its button does; this says
+/// where the handles are. It never travels inside a show.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutorDesk {
+    /// 0..=1, the live position.
+    #[serde(default = "full")]
+    pub fader: f64,
+    /// True while flash is held: the contribution is full whatever the fader
+    /// says. Releasing restores the fader.
+    #[serde(default)]
+    pub flash: bool,
+    /// True while solo is held: every other playback is silent.
+    #[serde(default)]
+    pub solo: bool,
+}
+
+impl Default for ExecutorDesk {
+    fn default() -> Self {
+        Self {
+            fader: 1.0,
+            flash: false,
+            solo: false,
+        }
     }
 }
 
@@ -154,6 +180,9 @@ pub struct Desk {
     /// Active filter: limits the features commands may touch.
     pub filter: Option<u16>,
     pub masters: Masters,
+    /// Executor handles by executor number. Missing means a fader at full and
+    /// no button held.
+    pub executors: BTreeMap<u16, ExecutorDesk>,
     /// A blackout in progress. Saved as its level, so a recovered desk comes
     /// back dark rather than unexpectedly lit.
     pub blackout: Option<BlackoutState>,
@@ -180,6 +209,64 @@ impl Desk {
     /// The blackout master: 1 when there is no blackout.
     pub fn blackout_master(&self, now: Instant) -> f64 {
         self.blackout.map(|state| state.master(now)).unwrap_or(1.0)
+    }
+
+    pub fn executor_state(&self, number: u16) -> ExecutorDesk {
+        self.executors.get(&number).copied().unwrap_or_default()
+    }
+
+    /// How loud one executor is, the single expression rendering uses.
+    ///
+    /// Flash overrides the fader, and a solo silences everyone else at the
+    /// merge step rather than changing any run.
+    pub fn executor_master(&self, number: u16) -> f64 {
+        let state = self.executor_state(number);
+        let base = if state.flash { 1.0 } else { state.fader };
+        match self.soloed() {
+            Some(soloed) if soloed != number => 0.0,
+            _ => base,
+        }
+    }
+
+    /// The first soloed executor. `Status` names it, so an empty stage is
+    /// diagnosable in one command.
+    pub fn soloed(&self) -> Option<u16> {
+        self.executors
+            .iter()
+            .find(|(_, state)| state.solo)
+            .map(|(number, _)| *number)
+    }
+
+    /// Sequences are not executors, so a solo takes them off the stage too.
+    pub fn sequence_master(&self) -> f64 {
+        if self.soloed().is_some() {
+            0.0
+        } else {
+            1.0
+        }
+    }
+
+    /// Move an executor fader. A handle left at its default is dropped, so a
+    /// desk file only names the handles someone touched.
+    pub fn set_executor_fader(&mut self, number: u16, level: f64) {
+        self.executors.entry(number).or_default().fader = level.clamp(0.0, 1.0);
+        self.tidy_executor(number);
+    }
+
+    pub fn set_executor_flash(&mut self, number: u16, flash: bool) {
+        self.executors.entry(number).or_default().flash = flash;
+        self.tidy_executor(number);
+    }
+
+    pub fn set_executor_solo(&mut self, number: u16, solo: bool) {
+        self.executors.entry(number).or_default().solo = solo;
+        self.tidy_executor(number);
+    }
+
+    fn tidy_executor(&mut self, number: u16) {
+        if self.executor_state(number) == ExecutorDesk::default() {
+            self.executors.remove(&number);
+        }
     }
 
     /// True when the stage is fully dark because of a blackout.
@@ -271,6 +358,23 @@ impl Desk {
 
         self.masters.sanitise(show, &mut warnings);
 
+        let executors: BTreeSet<u16> = show
+            .executors
+            .iter()
+            .map(|executor| executor.number)
+            .collect();
+        self.executors.retain(|number, state| {
+            let live = executors.contains(number)
+                && state.fader.is_finite()
+                && (0.0..=1.0).contains(&state.fader);
+            if !live {
+                warnings.push(format!(
+                    "desk: executor {number} handle dropped (executor not in the show)"
+                ));
+            }
+            live
+        });
+
         let before = self.runs.len();
         self.runs.retain(|run| run_is_live(run, show));
         for _ in self.runs.len()..before {
@@ -319,12 +423,19 @@ impl Desk {
 
     /// Turn a desk file into live desk state, dropping what the show lacks.
     pub(crate) fn from_file(file: DeskFile, show: &Show) -> (Desk, Vec<String>) {
+        let mut masters = file.masters;
+        let legacy = std::mem::take(&mut masters.legacy_executors);
+        let mut executors = file.executors;
+        for (number, fader) in legacy {
+            executors.entry(number).or_default().fader = fader;
+        }
         let mut desk = Desk {
             selection: file.selection,
             programmer: file.programmer,
             world: file.world,
             filter: file.filter,
-            masters: file.masters,
+            masters,
+            executors,
             // A saved blackout comes back at its level, not mid-ramp.
             blackout: file.blackout.map(|saved| BlackoutState {
                 from: saved.level,
@@ -356,6 +467,7 @@ impl Desk {
             world: self.world,
             filter: self.filter,
             masters: self.masters.clone(),
+            executors: self.executors.clone(),
             blackout: self.blackout.map(|state| SavedBlackout {
                 level: state.level,
                 fade: state.fade.as_secs_f64(),
@@ -408,22 +520,6 @@ impl Masters {
             }
             live
         });
-
-        let executors: BTreeSet<u16> = show
-            .executors
-            .iter()
-            .map(|executor| executor.number)
-            .collect();
-        self.executors.retain(|number, level| {
-            let live =
-                executors.contains(number) && level.is_finite() && (0.0..=1.0).contains(level);
-            if !live {
-                warnings.push(format!(
-                    "desk: executor {number} fader dropped (executor not in the show)"
-                ));
-            }
-            live
-        });
     }
 }
 
@@ -456,6 +552,8 @@ pub struct DeskFile {
     filter: Option<u16>,
     #[serde(default)]
     masters: Masters,
+    #[serde(default)]
+    executors: BTreeMap<u16, ExecutorDesk>,
     #[serde(default)]
     blackout: Option<SavedBlackout>,
     #[serde(default)]
@@ -568,7 +666,7 @@ mod tests {
         desk.world = Some(7);
         desk.filter = Some(7);
         desk.masters.set_group(3, 0.5);
-        desk.masters.set_executor(4, 0.5);
+        desk.set_executor_fader(4, 0.5);
         desk.runs.push(RunState {
             sequence: Some(9),
             executor: None,
@@ -586,7 +684,7 @@ mod tests {
         assert_eq!(loaded.world, None);
         assert_eq!(loaded.filter, None);
         assert!(loaded.masters.groups.is_empty());
-        assert!(loaded.masters.executors.is_empty());
+        assert!(loaded.executors.is_empty());
         assert!(loaded.runs.is_empty());
         assert!(warnings.len() >= 6, "{warnings:#?}");
         let _ = fs::remove_file(&path);
@@ -635,6 +733,97 @@ mod tests {
         assert!(warnings.is_empty(), "{warnings:?}");
         assert!(loaded.is_blacked_out(Instant::now()));
         assert_eq!(loaded.lock.as_deref(), Some("4711"));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn executor_master_combines_fader_flash_and_solo() {
+        let mut desk = Desk::new();
+        assert_eq!(
+            desk.executor_master(1),
+            1.0,
+            "an untouched executor is full"
+        );
+        desk.set_executor_fader(1, 0.4);
+        assert_eq!(desk.executor_master(1), 0.4);
+
+        desk.set_executor_flash(1, true);
+        assert_eq!(desk.executor_master(1), 1.0, "flash ignores the fader");
+        desk.set_executor_flash(1, false);
+        assert_eq!(desk.executor_master(1), 0.4, "releasing restores the fader");
+
+        desk.set_executor_fader(2, 0.8);
+        desk.set_executor_solo(2, true);
+        assert_eq!(desk.soloed(), Some(2));
+        assert_eq!(
+            desk.executor_master(2),
+            0.8,
+            "the soloed executor keeps its level"
+        );
+        assert_eq!(
+            desk.executor_master(1),
+            0.0,
+            "every other executor is silent"
+        );
+        assert_eq!(desk.sequence_master(), 0.0);
+        assert_eq!(desk.executor_master(3), 0.0, "even an untouched one");
+
+        desk.set_executor_solo(2, false);
+        assert_eq!(desk.soloed(), None);
+        assert_eq!(desk.executor_master(1), 0.4);
+        assert_eq!(desk.sequence_master(), 1.0);
+    }
+
+    #[test]
+    fn executor_handles_round_trip() {
+        let mut show = demo_show();
+        show.executors.push(crate::playback::Executor {
+            number: 3,
+            sequence: 1,
+            name: "Main".into(),
+            mode: crate::playback::ExecutorMode::Fader,
+        });
+        let mut desk = Desk::new();
+        desk.set_executor_fader(3, 0.25);
+        desk.set_executor_flash(3, true);
+        desk.set_executor_solo(3, true);
+
+        let path = temp_path("executors");
+        desk.save(&path, &show).unwrap();
+        let (loaded, warnings) = Desk::load(&path, &show).unwrap().unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(loaded.executor_state(3).fader, 0.25);
+        assert!(loaded.executor_state(3).flash);
+        assert!(loaded.executor_state(3).solo);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_version_one_desk_hands_its_executor_faders_over() {
+        let mut show = demo_show();
+        show.executors.push(crate::playback::Executor {
+            number: 2,
+            sequence: 1,
+            name: "Main".into(),
+            mode: crate::playback::ExecutorMode::Go,
+        });
+        let path = temp_path("legacy-executors");
+        fs::write(
+            &path,
+            format!(
+                r#"{{"format":"openlight-desk","version":1,"show":"{}",
+                   "masters":{{"grand":1.0,"rate":1.0,"executors":{{"2":0.4}}}}}}"#,
+                show.name
+            ),
+        )
+        .unwrap();
+        let (loaded, warnings) = Desk::load(&path, &show).unwrap().unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(loaded.executor_state(2).fader, 0.4);
+        assert!(
+            loaded.masters.legacy_executors.is_empty(),
+            "the old field is not carried forward"
+        );
         let _ = fs::remove_file(&path);
     }
 

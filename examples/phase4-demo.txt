@@ -38,7 +38,19 @@ Wait 2
 Timecode 1 Pause
 Timecode 1 Stop
 
+# A list that runs itself: cue 2 follows cue 1's fade with no command in
+# between. It is released afterwards so the final frame is unchanged.
+Fixture 1 Thru 2 At Full
+Store Cue 1 Sequence 2 Fade 0
+Fixture 1 Thru 2 At 0
+Store Cue 2 Sequence 2 Follow 0.5 Fade 1
+Go Sequence 2
+Wait 1.5
+Release Sequence 2
+Clear All
+
 Timecode 1
 Sequence 1
+Sequence 2
 Status
 Save "target/phase4-demo.olshow.json"

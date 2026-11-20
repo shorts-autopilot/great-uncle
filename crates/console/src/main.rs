@@ -268,7 +268,7 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
                 None => 0,
             };
             let tail = engine::journal::read(&engine::journal::path_for(&show_path, ".journal"))?;
-            let report = engine.recover(&tail, from);
+            let report = engine.recover(&tail, &show_path, from);
             for line in report.summary() {
                 println!("{line}");
             }
