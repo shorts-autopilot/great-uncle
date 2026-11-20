@@ -3,15 +3,16 @@
 Phase 4 closed the first loop: the desk plays cues, follows timecode, moves in
 black and can undo. This document is the **design set for the next eighteen
 pieces of work**, ranked by value to a working desk. Each item has a design in
-[`docs/design/`](design/). Three of them are built so far, in the order the
+[`docs/design/`](design/). Four of them are built so far, in the order the
 designs ask for:
 
 | Item | State |
 |---|---|
 | 03 show data vs desk state | **built** — `.oldesk` beside the show, `Save Show` / `Save Desk` / `Load Show`, undo covers the programmer, v4 files seed the desk |
+| 04 autosave, journal and replay | **built** — `<show>.journal` replayed at start, `<show>.autosave` snapshot, `--autosave`, `--journal`, `--no-recover`, `Status` names both |
 | 05 output scheduling, telemetry, reconnect, watchdog | **built** — one self-clocked worker per universe, measured `achieved_hz` / `last_send_us`, reconnect with backoff, stale-then-black watchdog |
 | 06 reversible blackout and desk lock | **built** — `Blackout [Fade s]`, `Blackout Off`, `Lock [code]`, `Unlock [code]`, `Command::mutates()` allow-list |
-| the other fifteen | designed, not built |
+| the other fourteen | designed, not built |
 
 The designs are written to be implemented one at a time. Every one names the
 files it touches, the command grammar it adds, the show/desk format change it

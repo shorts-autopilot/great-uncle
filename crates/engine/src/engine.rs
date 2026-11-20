@@ -6,9 +6,10 @@
 //! validate, so a show is always safe to render and save.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::command::{self, Command, CommandError, Level, LevelSource, PlaybackRef};
 use crate::desk::{Desk, RunState};
@@ -56,6 +57,44 @@ impl CommandOutcome {
     }
 }
 
+/// What a journal replay achieved.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct RecoveryReport {
+    /// Statements that replayed cleanly.
+    pub applied: usize,
+    /// Statements skipped because they no longer apply, with the reason.
+    pub skipped: Vec<String>,
+    /// The revision that broke the chain, if any.
+    pub stopped: Option<u64>,
+    /// A final journal line cut short by the crash.
+    pub incomplete: usize,
+}
+
+impl RecoveryReport {
+    pub fn summary(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        if self.applied > 0 {
+            lines.push(format!("Recovered {} edits from the journal", self.applied));
+        }
+        for skipped in &self.skipped {
+            lines.push(format!("Warning: skipped {skipped}"));
+        }
+        if let Some(rev) = self.stopped {
+            lines.push(format!(
+                "Warning: journal replay stopped at revision {rev}; later entries ignored"
+            ));
+        }
+        if self.incomplete > 0 {
+            lines.push("Warning: 1 incomplete journal entry was dropped".to_string());
+        }
+        lines
+    }
+
+    pub fn recovered_anything(&self) -> bool {
+        self.applied > 0 || !self.skipped.is_empty() || self.incomplete > 0
+    }
+}
+
 pub struct Engine {
     pub show: Show,
     /// The handles: selection, programmer, masters, playback positions.
@@ -73,6 +112,14 @@ pub struct Engine {
     history: History,
     /// The statement being dispatched, recorded as its undo label.
     label: String,
+    /// The crash journal, when one is open.
+    journal: Option<crate::journal::Journal>,
+    /// Autosave target, interval and the last time it ran.
+    autosave: Option<(PathBuf, Duration, Instant)>,
+    /// Why the last autosave failed, reported once in `Status`.
+    autosave_error: Option<String>,
+    /// True while replaying the journal: no journalling, no undo steps.
+    recovering: bool,
     /// The instant the latest [`Engine::tick`] saw. Commands that start a fade
     /// use it, so a test can drive time explicitly.
     clock: Instant,
@@ -96,6 +143,10 @@ impl Engine {
             timecode: TimecodePlayer::default(),
             history: History::default(),
             label: String::new(),
+            journal: None,
+            autosave: None,
+            autosave_error: None,
+            recovering: false,
             clock: Instant::now(),
         }
     }
@@ -126,7 +177,93 @@ impl Engine {
         if changed {
             self.revision += 1;
         }
+        if let Some((path, interval, last)) = &mut self.autosave {
+            if now.duration_since(*last) >= *interval {
+                *last = now;
+                let path = path.clone();
+                if let Err(error) = self.save_snapshot(&path) {
+                    self.autosave_error = Some(error.to_string());
+                } else {
+                    self.autosave_error = None;
+                }
+            }
+        }
         changed
+    }
+
+    /// Start (or stop, with a zero interval) periodic autosave.
+    pub fn enable_autosave(&mut self, path: PathBuf, interval: Duration) {
+        self.autosave = if interval.is_zero() {
+            None
+        } else {
+            Some((path, interval, Instant::now()))
+        };
+    }
+
+    pub fn set_journal(&mut self, journal: Option<crate::journal::Journal>) {
+        self.journal = journal;
+    }
+
+    pub fn journal(&self) -> Option<&crate::journal::Journal> {
+        self.journal.as_ref()
+    }
+
+    /// Write a snapshot of the document and the desk right now.
+    pub fn autosave_now(&mut self) -> io::Result<()> {
+        let Some((path, _, _)) = &self.autosave else {
+            return Ok(());
+        };
+        let path = path.clone();
+        self.save_snapshot(&path)
+    }
+
+    fn save_snapshot(&self, path: &Path) -> io::Result<()> {
+        crate::journal::Snapshot::capture(self.revision, &self.show, &self.desk).save(path)
+    }
+
+    /// Install a recovered document and desk, restoring playback positions.
+    pub fn adopt(&mut self, show: Show, desk: Desk) {
+        self.show = show;
+        self.desk = desk;
+        self.playback = Playback::new();
+        self.effects.stop_all();
+        self.timecode.stop();
+        self.history = History::default();
+        self.restore_desk_runs();
+        self.revision += 1;
+    }
+
+    /// Replay the journal tail from `from`, the revision the document is at.
+    ///
+    /// Replay is ordinary [`Engine::execute`] with journalling and undo
+    /// recording off, so recovery cannot disagree with the command language. A
+    /// statement that no longer applies (a fixture deleted later) is skipped
+    /// with a warning; a break in the revision chain stops replay, because a
+    /// spliced file must not silently reorder edits.
+    pub fn recover(&mut self, tail: &crate::journal::Tail, from: u64) -> RecoveryReport {
+        let mut report = RecoveryReport {
+            incomplete: tail.incomplete,
+            ..RecoveryReport::default()
+        };
+        let mut expected = from;
+        self.recovering = true;
+        for entry in &tail.entries {
+            if entry.rev <= from {
+                continue;
+            }
+            if entry.rev != expected + 1 {
+                report.stopped = Some(entry.rev);
+                break;
+            }
+            expected = entry.rev;
+            let line = entry.line.clone();
+            match self.execute(&line) {
+                Ok(_) => report.applied += 1,
+                Err(error) => report.skipped.push(format!("`{line}`: {error}")),
+            }
+        }
+        self.recovering = false;
+        report
     }
 
     pub fn empty() -> Self {
@@ -515,6 +652,8 @@ impl Engine {
         self.effects.stop_all();
         self.timecode.stop();
         self.revision += 1;
+        // `New` replaces the document, so replay has to replace it too.
+        self.note(crate::journal::EntryKind::Show);
         Ok(CommandOutcome::message(message))
     }
 
@@ -753,6 +892,9 @@ impl Engine {
                 .save(show_path)
                 .map_err(|error| CommandError::new(error.to_string()))?;
             lines.push(format!("Saved show to {path}"));
+        }
+        if let Err(error) = self.autosave_now() {
+            lines.push(format!("Warning: autosave failed: {error}"));
         }
         Ok(CommandOutcome::with_lines(lines))
     }
@@ -1053,6 +1195,30 @@ impl Engine {
                 "off"
             }
         ));
+        let autosave = match &self.autosave {
+            Some((path, interval, _)) => format!(
+                "every {}s -> {}{}",
+                interval.as_secs(),
+                path.display(),
+                match &self.autosave_error {
+                    Some(error) => format!(" (failed: {error})"),
+                    None => String::new(),
+                }
+            ),
+            None => "off".to_string(),
+        };
+        lines.push(match &self.journal {
+            Some(journal) => format!(
+                "Journal: {} ({} entries{}) | Autosave: {autosave}",
+                journal.path().display(),
+                journal.entries(),
+                match journal.failure() {
+                    Some(error) => format!(", stopped: {error}"),
+                    None => String::new(),
+                }
+            ),
+            None => format!("Journal: off | Autosave: {autosave}"),
+        });
         lines.push(format!(
             "World: {} | Filter: {}",
             self.desk
@@ -3190,8 +3356,11 @@ impl Engine {
             programmer: self.desk.programmer.clone(),
         };
         let message = change(&mut self.desk.programmer);
-        self.history.record(snapshot, self.label.clone());
+        if !self.recovering {
+            self.history.record(snapshot, self.label.clone());
+        }
         self.revision += 1;
+        self.note(crate::journal::EntryKind::Programmer);
         message
     }
 
@@ -3216,7 +3385,8 @@ impl Engine {
                 problems.join("; ")
             )));
         }
-        if backup != self.show {
+        let changed = backup != self.show;
+        if changed && !self.recovering {
             let programmer = self.desk.programmer.clone();
             self.history.record(
                 Snapshot {
@@ -3227,6 +3397,9 @@ impl Engine {
             );
         }
         self.revision += 1;
+        if changed {
+            self.note(crate::journal::EntryKind::Show);
+        }
         Ok(message)
     }
 }
@@ -3285,6 +3458,18 @@ pub fn level_value(level: &Level) -> Result<f64, CommandError> {
             }
         }
         Level::Full => Ok(1.0),
+    }
+}
+
+impl Engine {
+    /// Record the statement being dispatched, when it changed persisted state.
+    fn note(&mut self, kind: crate::journal::EntryKind) {
+        if self.recovering {
+            return;
+        }
+        if let Some(journal) = &mut self.journal {
+            journal.note(kind, &self.label, self.revision);
+        }
     }
 }
 
@@ -4658,5 +4843,177 @@ mod tests {
 
         engine.execute("Unlock 4711").unwrap();
         engine.execute("Fixture 1 At 50").unwrap();
+    }
+
+    fn journal_path(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!("openlight-{}-{name}.journal", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    #[test]
+    fn the_journal_records_changes_and_nothing_else() {
+        let path = journal_path("records");
+        let mut engine = engine();
+        engine.set_journal(Some(crate::journal::Journal::open(path.clone()).unwrap()));
+
+        engine
+            .execute("Fixture 1 At 50; Store Cue 1; Clear Values")
+            .unwrap();
+        let entries = crate::journal::read(&path).unwrap().entries;
+        assert_eq!(entries.len(), 3, "{entries:#?}");
+        assert_eq!(entries[0].line, "Fixture 1 At 50");
+        assert_eq!(entries[1].line, "Store Cue 1");
+        assert_eq!(entries[2].line, "Clear Values");
+        assert_eq!(entries[0].kind, crate::journal::EntryKind::Programmer);
+        assert_eq!(entries[1].kind, crate::journal::EntryKind::Show);
+
+        // Questions, listings and playback moves change no persisted state.
+        for line in ["Sheet", "Status", "Sequence", "Palette"] {
+            engine.execute(line).unwrap();
+        }
+        assert_eq!(
+            crate::journal::read(&path).unwrap().entries.len(),
+            3,
+            "a question is not an edit"
+        );
+
+        // `New` replaces the document, so it has to be replayable too.
+        engine.execute("New Fresh").unwrap();
+        let entries = crate::journal::read(&path).unwrap().entries;
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[3].line, "New Fresh");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn replaying_the_journal_reproduces_show_and_programmer() {
+        let path = journal_path("replay");
+        let mut session = engine();
+        session.set_journal(Some(crate::journal::Journal::open(path.clone()).unwrap()));
+        session.execute("Fixture 1 At 70; Store Cue 2").unwrap();
+        let show = session.show.clone();
+        let programmer = session.desk.programmer.clone();
+        drop(session);
+
+        let tail = crate::journal::read(&path).unwrap();
+        assert_eq!(tail.entries.len(), 2);
+        assert_eq!(tail.incomplete, 0);
+
+        let mut recovered = engine();
+        let report = recovered.recover(&tail, 0);
+        assert_eq!(report.applied, 2, "{report:?}");
+        assert!(report.skipped.is_empty(), "{report:?}");
+        assert_eq!(recovered.show, show);
+        assert_eq!(recovered.desk.programmer, programmer);
+        assert_eq!(
+            recovered.history.undo_depth(),
+            0,
+            "replay is not a pile of undo steps"
+        );
+
+        // Replaying inside a live session must not journal the replay itself.
+        recovered.set_journal(Some(crate::journal::Journal::open(path.clone()).unwrap()));
+        let before = crate::journal::read(&path).unwrap().entries.len();
+        recovered.recover(&tail, 0);
+        assert_eq!(crate::journal::read(&path).unwrap().entries.len(), before);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn replay_skips_a_statement_that_no_longer_applies() {
+        use crate::journal::{Entry, EntryKind, Tail};
+        let tail = Tail {
+            entries: vec![
+                Entry {
+                    rev: 1,
+                    at: "2026-11-19T21:04:12Z".into(),
+                    line: "Fixture 99 At 50".into(),
+                    kind: EntryKind::Programmer,
+                },
+                Entry {
+                    rev: 2,
+                    at: "2026-11-19T21:04:13Z".into(),
+                    line: "Fixture 1 At 30".into(),
+                    kind: EntryKind::Programmer,
+                },
+            ],
+            incomplete: 1,
+        };
+        let mut engine = engine();
+        let report = engine.recover(&tail, 0);
+        assert_eq!(report.applied, 1);
+        assert_eq!(report.skipped.len(), 1, "the missing fixture is not fatal");
+        assert!(report.skipped[0].contains("Fixture 99"));
+        assert_eq!(report.incomplete, 1);
+        assert!(report.recovered_anything());
+        assert_eq!(engine.desk.programmer.get(1, "Dimmer"), Some(0.3));
+    }
+
+    #[test]
+    fn a_break_in_the_chain_stops_replay() {
+        use crate::journal::{Entry, EntryKind, Tail};
+        let entry = |rev: u64, line: &str| Entry {
+            rev,
+            at: "2026-11-19T21:04:12Z".into(),
+            line: line.into(),
+            kind: EntryKind::Programmer,
+        };
+        let tail = Tail {
+            entries: vec![entry(1, "Fixture 1 At 20"), entry(3, "Fixture 1 At 90")],
+            incomplete: 0,
+        };
+        let mut engine = engine();
+        let report = engine.recover(&tail, 0);
+        assert_eq!(report.applied, 1);
+        assert_eq!(report.stopped, Some(3));
+        assert_eq!(
+            engine.desk.programmer.get(1, "Dimmer"),
+            Some(0.2),
+            "the entry past the break is not replayed"
+        );
+    }
+
+    #[test]
+    fn autosave_writes_a_snapshot_and_save_refreshes_it() {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "openlight-{}-autosave.olshow.autosave",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let show_path =
+            path.with_file_name(format!("openlight-{}-autosave.olshow", std::process::id()));
+        let _ = std::fs::remove_file(&show_path);
+
+        let mut engine = engine();
+        engine.enable_autosave(path.clone(), Duration::from_secs(30));
+        engine.execute("Fixture 1 At 60").unwrap();
+        let start = engine.clock();
+        engine.tick(start + Duration::from_secs(31));
+
+        let snapshot = crate::journal::Snapshot::load(&path).unwrap().unwrap();
+        let (snapshot_show, snapshot_desk, warnings) = snapshot.restore();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(snapshot_show, engine.show);
+        assert_eq!(snapshot_desk.programmer.get(1, "Dimmer"), Some(0.6));
+
+        engine
+            .execute(&format!("Save \"{}\"", show_path.display()))
+            .unwrap();
+        let snapshot = crate::journal::Snapshot::load(&path).unwrap().unwrap();
+        assert_eq!(snapshot.rev, engine.revision);
+
+        let lines = engine.execute("Status").unwrap().lines;
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Autosave: every 30s")),
+            "status names the autosave: {lines:#?}"
+        );
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&show_path);
+        let _ = std::fs::remove_file(show_path.with_extension("oldesk"));
     }
 }

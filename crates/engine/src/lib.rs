@@ -21,6 +21,7 @@
 //! * [`effect`] — stored waveforms and the running effect layer.
 //! * [`timecode`] — timecode shows, positions and the running player.
 //! * [`history`] — undo and redo over show snapshots.
+//! * [`journal`] — the crash journal and the autosave snapshot.
 //! * [`render`] — programmer, playback, effects and masters to DMX universes.
 //! * [`output`] — 60 Hz engine tick + 30 Hz frame output thread.
 
@@ -31,6 +32,7 @@ pub mod engine;
 pub mod fixture_type;
 pub mod gdtf;
 pub mod history;
+pub mod journal;
 pub mod levels;
 pub mod output;
 pub mod palette;

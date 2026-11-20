@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::error::Error;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -22,7 +22,7 @@ use engine::{Engine, Runtime, RuntimeConfig, TransportBinding};
 mod ui;
 
 const USAGE: &str = "\
-openlight — DMX lighting console (Phase 4)
+openlight — DMX lighting console (Phase 5)
 
 Usage: openlight [options]
 
@@ -37,6 +37,9 @@ Options:
   --frames <n>         run for n output frames, then exit
   --fps <n>            frame rate (default 30)
   --engine-hz <n>      engine tick rate (default 60)
+  --autosave <secs>    snapshot show and desk every <secs> (0 disables)
+  --journal <file|off> journal each edit to <file> (default: <show>.journal)
+  --no-recover         do not replay the journal at start
   --ui                 open the full-screen terminal shell
   --trace              print the last virtual frame as bytes
   --help               show this text
@@ -52,6 +55,7 @@ Examples:
   openlight --output 1=virtual --script examples/phase4-demo.txt \\
             --frames 120 --trace
   openlight --output 1=generic:/dev/ttyUSB0 --script examples/phase2-demo.txt --frames 90
+  openlight --show look.olshow --autosave 30 --ui
 ";
 
 fn main() -> ExitCode {
@@ -76,6 +80,14 @@ fn main() -> ExitCode {
     }
 }
 
+/// Where the journal goes.
+enum JournalChoice {
+    /// `<show>.journal` when a show is open, off otherwise.
+    Default,
+    Off,
+    Path(PathBuf),
+}
+
 struct Options {
     show: Option<PathBuf>,
     gdtf: Vec<PathBuf>,
@@ -84,6 +96,9 @@ struct Options {
     fps: f64,
     engine_hz: f64,
     script: Option<PathBuf>,
+    autosave: Option<f64>,
+    journal: JournalChoice,
+    recover: bool,
     trace: bool,
     ui: bool,
 }
@@ -98,6 +113,9 @@ impl Options {
             fps: 30.0,
             engine_hz: 60.0,
             script: None,
+            autosave: None,
+            journal: JournalChoice::Default,
+            recover: true,
             trace: false,
             ui: false,
         };
@@ -136,6 +154,24 @@ impl Options {
                         .parse()
                         .map_err(|_| "--fps needs a number".to_string())?
                 }
+                "--autosave" => {
+                    let value: f64 = take_value(&arguments, &mut index, inline, flag)?
+                        .parse()
+                        .map_err(|_| "--autosave needs a number of seconds".to_string())?;
+                    if !value.is_finite() || value < 0.0 {
+                        return Err("--autosave needs a number of seconds".to_string());
+                    }
+                    options.autosave = Some(value);
+                }
+                "--journal" => {
+                    let value = take_value(&arguments, &mut index, inline, flag)?;
+                    options.journal = if value.eq_ignore_ascii_case("off") {
+                        JournalChoice::Off
+                    } else {
+                        JournalChoice::Path(PathBuf::from(value))
+                    };
+                }
+                "--no-recover" => options.recover = false,
                 "--engine-hz" => {
                     options.engine_hz = take_value(&arguments, &mut index, inline, flag)?
                         .parse()
@@ -204,6 +240,77 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
         }
         None => Engine::empty(),
     };
+
+    if let Some(show_path) = options.show.clone() {
+        let journal_path = match &options.journal {
+            JournalChoice::Off => None,
+            JournalChoice::Path(path) => Some(path.clone()),
+            JournalChoice::Default => Some(engine::journal::path_for(&show_path, ".journal")),
+        };
+        let autosave_path = engine::journal::path_for(&show_path, ".autosave");
+
+        // Recovery runs before the journal opens, so replay is never journaled.
+        if options.recover {
+            let snapshot = engine::journal::Snapshot::load(&autosave_path)?;
+            let from = match &snapshot {
+                Some(snapshot) => {
+                    let (show, desk, warnings) = snapshot.restore();
+                    engine.adopt(show, desk);
+                    for warning in warnings {
+                        println!("Warning: {warning}");
+                    }
+                    println!(
+                        "Recovering from autosave {} (revision {})",
+                        snapshot.at, snapshot.rev
+                    );
+                    snapshot.rev
+                }
+                None => 0,
+            };
+            let tail = engine::journal::read(&engine::journal::path_for(&show_path, ".journal"))?;
+            let report = engine.recover(&tail, from);
+            for line in report.summary() {
+                println!("{line}");
+            }
+            if report.recovered_anything() && io::stdin().is_terminal() {
+                print!(
+                    "The recovered session is not saved. Save it to {}? [Y/n] ",
+                    show_path.display()
+                );
+                io::stdout().flush()?;
+                let mut answer = String::new();
+                io::stdin().read_line(&mut answer)?;
+                if !answer.trim().eq_ignore_ascii_case("n") {
+                    let save = format!("Save {}", quote(&show_path.to_string_lossy()));
+                    let outcome = engine.execute(&save).map_err(|error| error.to_string())?;
+                    print_outcome(&outcome);
+                }
+            }
+        }
+
+        if let Some(seconds) = options.autosave {
+            let interval = Duration::from_secs_f64(seconds);
+            if interval.is_zero() {
+                println!("Autosave off");
+            } else {
+                println!(
+                    "Auto-saving to {} every {seconds} s",
+                    autosave_path.display()
+                );
+                engine.enable_autosave(autosave_path, interval);
+            }
+        }
+
+        if let Some(path) = journal_path {
+            match engine::journal::Journal::open(path) {
+                Ok(journal) => {
+                    println!("Journal at {}", journal.path().display());
+                    engine.set_journal(Some(journal));
+                }
+                Err(error) => println!("Warning: journal disabled: {error}"),
+            }
+        }
+    }
 
     for path in &options.gdtf {
         let outcome = engine.execute(&format!("Import Gdtf {}", quote(&path.to_string_lossy())))?;

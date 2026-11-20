@@ -296,10 +296,15 @@ impl Desk {
             path: path.to_path_buf(),
             source,
         })?;
+        Self::check(&file, path)?;
+        Ok(Some(Self::from_file(file, show)))
+    }
+
+    fn check(file: &DeskFile, path: &Path) -> Result<(), DeskError> {
         if file.format != DESK_FORMAT {
             return Err(DeskError::WrongFormat {
                 path: path.to_path_buf(),
-                found: file.format,
+                found: file.format.clone(),
             });
         }
         if file.version > DESK_VERSION {
@@ -309,7 +314,11 @@ impl Desk {
                 supported: DESK_VERSION,
             });
         }
+        Ok(())
+    }
 
+    /// Turn a desk file into live desk state, dropping what the show lacks.
+    pub(crate) fn from_file(file: DeskFile, show: &Show) -> (Desk, Vec<String>) {
         let mut desk = Desk {
             selection: file.selection,
             programmer: file.programmer,
@@ -333,12 +342,12 @@ impl Desk {
                 file.show, show.name
             ));
         }
-        Ok(Some((desk, warnings)))
+        (desk, warnings)
     }
 
-    /// Write this desk beside its show.
-    pub fn save(&self, path: &Path, show: &Show) -> Result<(), DeskError> {
-        let file = DeskFile {
+    /// The persistable form of this desk.
+    pub(crate) fn to_file(&self, show: &Show) -> DeskFile {
+        DeskFile {
             format: DESK_FORMAT.to_string(),
             version: DESK_VERSION,
             show: show.name.clone(),
@@ -353,7 +362,12 @@ impl Desk {
             }),
             lock: self.lock.clone(),
             runs: self.runs.clone(),
-        };
+        }
+    }
+
+    /// Write this desk beside its show.
+    pub fn save(&self, path: &Path, show: &Show) -> Result<(), DeskError> {
+        let file = self.to_file(show);
         let json = serde_json::to_string_pretty(&file).map_err(|source| DeskError::Parse {
             path: path.to_path_buf(),
             source,
@@ -427,7 +441,7 @@ fn run_is_live(run: &RunState, show: &Show) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct DeskFile {
+pub struct DeskFile {
     format: String,
     version: u32,
     #[serde(default)]

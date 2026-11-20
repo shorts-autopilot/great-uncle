@@ -19,7 +19,7 @@ profiles that you supply.
 | 2 | Palettes, cues, sequences, executor faders | done — see [`docs/PHASE2.md`](docs/PHASE2.md) |
 | 3 | Groups, worlds, filters, masters, effects | done — see [`docs/PHASE3.md`](docs/PHASE3.md) |
 | 4 | Timecode, move-in-black, undo, first UI shell | done — see [`docs/PHASE4.md`](docs/PHASE4.md) |
-| 5+ | desk state, output scheduling, blackout/lock | in progress — see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
+| 5+ | desk state, output, journal, blackout/lock | in progress — see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 | 5+ | triggers, timing, GUI, … | designed — see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 
 It is a console with a command line, a full-screen terminal shell, a script
@@ -32,12 +32,15 @@ file written beside the show (`look.olshow` + `look.oldesk`), so a document
 never carries someone else's half-finished look. `Blackout` darkens the rig
 without touching the programming, `Lock` refuses changes until it is released,
 and every universe reports the frame rate and send time it actually achieved.
-There is no desktop GUI yet.
+Every edit is journaled beside the show as it happens and a snapshot is written
+on a timer, so a power cut costs the last few seconds rather than the session:
+the next start replays the journal and offers to save. There is no desktop GUI
+yet.
 
 ## Quick start
 
 ```bash
-cargo test --workspace            # 206 tests, no hardware needed
+cargo test --workspace            # 219 tests, no hardware needed
 cargo run -p openlight-console    # interactive console
 cargo run -p openlight-console -- --ui   # full-screen terminal shell
 ```
