@@ -144,6 +144,10 @@ pub struct Engine {
     label: String,
     /// The crash journal, when one is open.
     journal: Option<crate::journal::Journal>,
+    /// The head of the journal file when this session does not append to it.
+    /// Snapshots record it, so a later replay starts after the entries they
+    /// already contain even though no journal was open here.
+    journal_head: u64,
     /// Autosave target, interval and the last time it ran.
     autosave: Option<(PathBuf, Duration, Instant)>,
     /// Why the last autosave failed, reported once in `Status`.
@@ -174,6 +178,7 @@ impl Engine {
             history: History::default(),
             label: String::new(),
             journal: None,
+            journal_head: 0,
             autosave: None,
             autosave_error: None,
             recovering: false,
@@ -248,6 +253,13 @@ impl Engine {
         self.journal = journal;
     }
 
+    /// Tell the engine where the journal file stands when no journal is open.
+    /// The console reads the file once at startup, so a snapshot taken with
+    /// `--journal off` still records a real revision.
+    pub fn set_journal_head(&mut self, rev: u64) {
+        self.journal_head = rev;
+    }
+
     pub fn journal(&self) -> Option<&crate::journal::Journal> {
         self.journal.as_ref()
     }
@@ -265,11 +277,15 @@ impl Engine {
         // The revision a snapshot records is a journal revision, because that
         // is what replay compares it against. Engine revisions count renders
         // and restart at zero, so using one here would replay statements the
-        // snapshot already contains. With no journal open there is no revision
-        // to claim: recording zero would let a later session replay the stale
-        // tail onto this snapshot, so the snapshot says so instead.
-        let rev = self.journal.as_ref().map(crate::journal::Journal::rev);
-        crate::journal::Snapshot::capture(rev, &self.show, &self.desk).save(path)
+        // snapshot already contains. With no journal open the console still
+        // tells us the file's head, which is the honest claim: older entries
+        // are already in this document, newer ones are not.
+        let rev = self
+            .journal
+            .as_ref()
+            .map(crate::journal::Journal::rev)
+            .unwrap_or(self.journal_head);
+        crate::journal::Snapshot::capture(Some(rev), &self.show, &self.desk).save(path)
     }
 
     /// Install a recovered document and desk, restoring playback positions.
@@ -458,6 +474,14 @@ impl Engine {
                 number,
                 stagger,
             } => self.cue_stagger(sequence, number, stagger),
+            Command::SetHome {
+                fixtures,
+                group,
+                attribute,
+                level,
+                off,
+            } => self.set_home(fixtures, group, attribute, level, off),
+            Command::Home { fixtures, group } => self.home(fixtures, group),
             Command::SetExecutorMode { executor, mode } => self.set_executor_mode(executor, mode),
             Command::SetExecutorFlash { executor, on } => self.set_executor_flash(executor, on),
             Command::SetExecutorSolo { executor, on } => self.set_executor_solo(executor, on),
@@ -892,6 +916,7 @@ impl Engine {
             mode: mode.name.clone(),
             universe,
             address,
+            home: Default::default(),
         };
         let mode_label = mode.name.clone();
 
@@ -1181,11 +1206,13 @@ impl Engine {
                         if !seen.insert(channel.attribute.to_ascii_lowercase()) {
                             continue;
                         }
-                        // The sheet shows what the rig is doing: programmer,
-                        // playback, effects and masters.
+                        // The sheet shows what the rig is doing and where the
+                        // base value came from: P, Pb, H or nothing.
+                        let source = stage.source(fixture, &channel.attribute);
                         let level = stage.level(fixture, &channel.attribute);
                         parts.push(format!(
-                            "{} {}%",
+                            "{} {} {}%",
+                            source.label(),
                             fixture_type.pretty_attribute(&channel.attribute),
                             (level * 100.0).round() as i64
                         ));
@@ -2690,6 +2717,166 @@ impl Engine {
         self.set_level_group(group, None, LevelSource::Level(Level::Percent(0.0)))
     }
 
+    /// Resolve the fixtures a `Default` or `Home` command addresses: a group,
+    /// an explicit list, or the current selection.
+    fn home_targets(
+        &self,
+        fixtures: Option<Vec<u16>>,
+        group: Option<u16>,
+    ) -> Result<Vec<u16>, CommandError> {
+        match group {
+            Some(number) => self.group_targets(number),
+            None => self.targets(fixtures),
+        }
+    }
+
+    /// `Fixture 1 Default …`: the base look below the programmer and playback.
+    fn set_home(
+        &mut self,
+        fixtures: Option<Vec<u16>>,
+        group: Option<u16>,
+        attribute: Option<String>,
+        level: Option<Level>,
+        off: bool,
+    ) -> Result<CommandOutcome, CommandError> {
+        let targets = self.home_targets(fixtures, group)?;
+        let Some(attribute) = attribute else {
+            return Ok(self.home_list(&targets));
+        };
+        let canonical = self.resolve_attribute(&targets, &attribute)?;
+        for number in &targets {
+            let fixture = self
+                .show
+                .fixture(*number)
+                .ok_or_else(|| CommandError::new(format!("fixture {number} is not patched")))?;
+            let (_, mode) = self.show.mode_for(fixture).map_err(CommandError::new)?;
+            if mode.channel_for(&canonical).is_none() {
+                return Err(CommandError::with_hint(
+                    format!(
+                        "fixture {number} has no `{attribute}` in mode `{}`",
+                        fixture.mode
+                    ),
+                    format!("attributes: {}", attribute_list(mode)),
+                ));
+            }
+        }
+
+        let label = format_fixture_list(&targets);
+        if off {
+            let message = self.mutate(|show| {
+                for number in &targets {
+                    if let Some(index) = show.fixture_index(*number) {
+                        show.fixtures[index].home.remove(&canonical);
+                    }
+                }
+                Ok(format!("{label} `{canonical}` home: profile default again"))
+            })?;
+            return Ok(CommandOutcome::message(message));
+        }
+
+        let value = level
+            .as_ref()
+            .ok_or_else(|| CommandError::new("`Default` needs a level or `Off`"))
+            .and_then(level_value)?;
+        let percent = (value * 100.0).round() as i64;
+        let message = self.mutate(|show| {
+            for number in &targets {
+                if let Some(index) = show.fixture_index(*number) {
+                    show.fixtures[index].home.insert(canonical.clone(), value);
+                }
+            }
+            Ok(format!("{label} `{canonical}` home at {percent}%"))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    /// The effective home for every attribute the fixtures have, marking which
+    /// values are stored overrides and which come from the profile.
+    fn home_list(&self, targets: &[u16]) -> CommandOutcome {
+        let mut lines = Vec::new();
+        for number in targets {
+            let Some(fixture) = self.show.fixture(*number) else {
+                continue;
+            };
+            let Ok((_, mode)) = self.show.mode_for(fixture) else {
+                lines.push(format!("Fixture {number}: type or mode is not in the show"));
+                continue;
+            };
+            lines.push(format!("Fixture {number} \"{}\"", fixture.name));
+            let mut seen = BTreeSet::new();
+            for channel in &mode.channels {
+                if !seen.insert(channel.attribute.to_ascii_lowercase()) {
+                    continue;
+                }
+                let stored = fixture
+                    .home
+                    .keys()
+                    .any(|name| name.eq_ignore_ascii_case(&channel.attribute));
+                let level = self.show.home_level(fixture, &channel.attribute);
+                lines.push(format!(
+                    "  {:<16} {:>4}%  {}",
+                    channel.attribute,
+                    (level * 100.0).round() as i64,
+                    if stored { "stored" } else { "profile" }
+                ));
+            }
+            // A mode change keeps stored values the new mode lacks; say so
+            // rather than hiding them.
+            let mut extra: Vec<(&String, &f64)> = fixture
+                .home
+                .iter()
+                .filter(|(name, _)| !seen.contains(&name.to_ascii_lowercase()))
+                .collect();
+            extra.sort_by_key(|(name, _)| name.as_str());
+            for (name, level) in extra {
+                lines.push(format!(
+                    "  {:<16} {:>4}%  stored (not in mode)",
+                    name,
+                    (*level * 100.0).round() as i64
+                ));
+            }
+        }
+        CommandOutcome::with_lines(lines)
+    }
+
+    /// `Home`: put the base look into the programmer, where it can be stored or
+    /// adjusted like any other programming.
+    fn home(
+        &mut self,
+        fixtures: Option<Vec<u16>>,
+        group: Option<u16>,
+    ) -> Result<CommandOutcome, CommandError> {
+        let targets = self.home_targets(fixtures, group)?;
+        let mut values: Vec<(u16, String, f64)> = Vec::new();
+        for number in &targets {
+            let Some(fixture) = self.show.fixture(*number) else {
+                continue;
+            };
+            let (_, mode) = self.show.mode_for(fixture).map_err(CommandError::new)?;
+            let mut seen = BTreeSet::new();
+            for channel in &mode.channels {
+                if !seen.insert(channel.attribute.to_ascii_lowercase()) {
+                    continue;
+                }
+                values.push((
+                    *number,
+                    channel.attribute.clone(),
+                    self.show.home_level(fixture, &channel.attribute),
+                ));
+            }
+        }
+        let label = format_fixture_list(&targets);
+        let count = values.len();
+        let message = self.edit_programmer(move |programmer| {
+            for (number, attribute, level) in &values {
+                programmer.set(*number, attribute, *level);
+            }
+            format!("{label} recalled home ({count} values)")
+        });
+        self.desk.selection = targets;
+        Ok(CommandOutcome::message(message))
+    }
+
     fn store_group(
         &mut self,
         number: u16,
@@ -4006,6 +4193,8 @@ pub const HELP: &[&str] = &[
     "Cue 2 Timing ColorAdd_R Fade 0.5 [Delay 0] [Curve EaseOut]",
     "Cue 2 Timing ColorAdd_R / Timing / Timing ColorAdd_R Off",
     "Cue 2 Stagger 0.2                   start each fixture after the one before",
+    "Fixture 1 Default [Dimmer 50] / Default Dimmer Off  base look per fixture",
+    "Home / Fixture 1 Home / Group 1 Home   recall the base look into the programmer",
     "Delete Cue 1 [Sequence 2] / Sequence [2]  delete or list cues",
     "Undo / Redo                            step through show edits",
     "Store Timecode 1 \"Song\" [Fps 25]       create a timecode show",
@@ -4327,6 +4516,7 @@ mod tests {
             mode: "4ch".into(),
             universe: 1,
             address: 1,
+            home: Default::default(),
         });
         let mut engine = Engine::new(show);
         let error = engine.execute("Fixture 1 At 50").unwrap_err();
@@ -5323,6 +5513,100 @@ mod tests {
     }
 
     #[test]
+    fn home_is_the_base_below_programmer_and_playback() {
+        let mut engine = engine();
+        let start = engine.clock();
+        engine.tick(start);
+        engine.execute("Fixture 1 Default ColorAdd_R 50").unwrap();
+        assert_eq!(engine.render().slot(1, 2), Some(128));
+        let sheet = engine.execute("Sheet").unwrap().lines.join("\n");
+        assert!(sheet.contains("H Red 50%"), "{sheet}");
+
+        engine.execute("Fixture 1 At Full").unwrap();
+        assert_eq!(engine.render().slot(1, 1), Some(255));
+        assert_eq!(engine.render().slot(1, 2), Some(128), "home still colours");
+        assert!(engine
+            .execute("Sheet")
+            .unwrap()
+            .lines
+            .join("\n")
+            .contains("P Dimmer 100%"));
+
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Clear All").unwrap();
+        engine.execute("Go Sequence 1").unwrap();
+        engine.tick(start);
+        let sheet = engine.execute("Sheet").unwrap().lines.join("\n");
+        assert!(sheet.contains("Pb Dimmer 100%"), "{sheet}");
+        assert!(sheet.contains("H Red 50%"), "{sheet}");
+    }
+
+    #[test]
+    fn home_recalls_the_defaults_into_the_programmer() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 Default Dimmer 60").unwrap();
+        engine.execute("Fixture 1 Default ColorAdd_R 25").unwrap();
+        engine.execute("Fixture 1 Home").unwrap();
+        assert_eq!(engine.desk.programmer.get(1, "Dimmer"), Some(0.6));
+        assert_eq!(engine.desk.programmer.get(1, "ColorAdd_R"), Some(0.25));
+
+        let listing = engine
+            .execute("Fixture 1 Default")
+            .unwrap()
+            .lines
+            .join("\n");
+        assert!(
+            listing.contains("Dimmer") && listing.contains("stored"),
+            "{listing}"
+        );
+
+        engine.execute("Fixture 1 Default Dimmer Off").unwrap();
+        assert!(!engine.show.fixture(1).unwrap().home.contains_key("Dimmer"));
+        let listing = engine
+            .execute("Fixture 1 Default")
+            .unwrap()
+            .lines
+            .join("\n");
+        assert!(listing.contains("profile"), "{listing}");
+    }
+
+    #[test]
+    fn home_recalled_into_a_cue_survives_clear_values() {
+        let mut engine = engine();
+        let start = engine.clock();
+        engine.tick(start);
+        engine.execute("Fixture 1 Default ColorAdd_R 50").unwrap();
+        engine.execute("Fixture 1 Home").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Clear All").unwrap();
+        engine.execute("Go Sequence 1").unwrap();
+        engine.tick(start);
+        assert_eq!(engine.render().slot(1, 2), Some(128));
+    }
+
+    #[test]
+    fn default_rejects_an_attribute_the_mode_lacks() {
+        let mut engine = engine();
+        let error = engine.execute("Fixture 1 Default Pan 50").unwrap_err();
+        assert!(error.message.contains("Pan"), "{error}");
+        assert!(engine.show.fixture(1).unwrap().home.is_empty());
+    }
+
+    #[test]
+    fn group_default_and_home_apply_to_every_member() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Group 1").unwrap();
+        engine.execute("Group 1 Default Dimmer 30").unwrap();
+        assert_eq!(
+            engine.show.fixture(1).unwrap().home.get("Dimmer"),
+            Some(&0.3)
+        );
+        engine.execute("Group 1 Home").unwrap();
+        assert_eq!(engine.desk.programmer.get(1, "Dimmer"), Some(0.3));
+    }
+
+    #[test]
     fn timecode_drives_cues_from_the_engine_clock() {
         let mut engine = engine();
         let start = engine.clock();
@@ -5902,6 +6186,27 @@ mod tests {
         let _ = std::fs::remove_file(&journal);
         let _ = std::fs::remove_file(&show_path);
         let _ = std::fs::remove_file(show_path.with_extension("oldesk"));
+    }
+
+    #[test]
+    fn a_snapshot_records_the_journal_head_when_no_journal_is_open() {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "openlight-{}-journal-head.olshow.autosave",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let mut engine = engine();
+        engine.set_journal_head(7);
+        engine.enable_autosave(path.clone(), Duration::from_secs(30));
+        let start = engine.clock();
+        engine.tick(start + Duration::from_secs(31));
+
+        let snapshot = crate::journal::Snapshot::load(&path).unwrap().unwrap();
+        assert_eq!(snapshot.rev, Some(7));
+        assert_eq!(snapshot.replay_from(), ReplayFrom::Snapshot(7));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

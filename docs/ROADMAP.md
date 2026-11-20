@@ -3,7 +3,7 @@
 Phase 4 closed the first loop: the desk plays cues, follows timecode, moves in
 black and can undo. This document is the **design set for the next eighteen
 pieces of work**, ranked by value to a working desk. Each item has a design in
-[`docs/design/`](design/). Six of them are built so far, in the order the
+[`docs/design/`](design/). Seven of them are built so far, in the order the
 designs ask for:
 
 | Item | State |
@@ -14,7 +14,8 @@ designs ask for:
 | 06 reversible blackout and desk lock | **built** — `Blackout [Fade s]`, `Blackout Off`, `Lock [code]`, `Unlock [code]`, `Command::mutates()` allow-list |
 | 01 cue triggers and executor state | **built** — `Store Cue n Follow t` / `Time t`, `Cue n Trigger …`, `Executor n Mode`, `Flash`, `Solo`; show v6; executor handles in the desk file |
 | 02 per-attribute timing, curves and stagger | **built** — cue `timing` map and `stagger`, `Cue n Timing …`, `Cue n Stagger`, one fade lane per attribute with quadratic curves, show v7 |
-| the other twelve | designed, not built |
+| 07 fixture defaults and `Home` | **built** — per-fixture home with the profile's `Channel.Default` fallback, `Fixture n Default …`, `Home`, sheet sources `P`/`Pb`/`H`, show v8 |
+| the other eleven | designed, not built |
 
 The designs are written to be implemented one at a time. Every one names the
 files it touches, the command grammar it adds, the show/desk format change it

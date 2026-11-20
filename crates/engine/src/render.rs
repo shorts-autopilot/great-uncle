@@ -26,6 +26,27 @@ use crate::effect::EffectOutput;
 use crate::levels::{is_intensity, Levels};
 use crate::show::{Fixture, Show};
 
+/// Where a rendered base value came from. The sheet prints these as `P`, `Pb`,
+/// `H` or `-`, which makes an unprogrammed but profile-coloured fixture legible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueSource {
+    Programmer,
+    Playback,
+    Home,
+    None,
+}
+
+impl ValueSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            ValueSource::Programmer => "P",
+            ValueSource::Playback => "Pb",
+            ValueSource::Home => "H",
+            ValueSource::None => "-",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OutputFrame {
     universes: BTreeMap<u16, [u8; DMX_SLOTS]>,
@@ -104,14 +125,29 @@ impl<'a> Stage<'a> {
         }
     }
 
+    /// Where the base value comes from, before effects and masters.
+    pub fn source(&self, fixture: &Fixture, attribute: &str) -> ValueSource {
+        if self.programmer.get(fixture.number, attribute).is_some() {
+            ValueSource::Programmer
+        } else if self.playback.get(fixture.number, attribute).is_some() {
+            ValueSource::Playback
+        } else if self.show.has_home(fixture, attribute) {
+            ValueSource::Home
+        } else {
+            ValueSource::None
+        }
+    }
+
     pub fn level(&self, fixture: &Fixture, attribute: &str) -> f64 {
-        let base = match (
-            self.programmer.get(fixture.number, attribute),
-            self.playback.get(fixture.number, attribute),
-        ) {
-            (Some(value), _) => value,
-            (None, Some(value)) => value,
-            (None, None) => 0.0,
+        // Programmer beats playback beats home beats nothing.
+        let base = match self.source(fixture, attribute) {
+            ValueSource::Programmer => self
+                .programmer
+                .get(fixture.number, attribute)
+                .unwrap_or(0.0),
+            ValueSource::Playback => self.playback.get(fixture.number, attribute).unwrap_or(0.0),
+            ValueSource::Home => self.show.home_level(fixture, attribute),
+            ValueSource::None => 0.0,
         };
         let level = match self.effects.get(fixture.number, attribute) {
             Some(offset) => (base + offset).clamp(0.0, 1.0),
@@ -246,6 +282,96 @@ mod tests {
     }
 
     #[test]
+    fn a_fixture_with_no_values_renders_its_home() {
+        let mut show = demo_show();
+        show.fixtures[0].home.insert("Dimmer".into(), 0.5);
+        show.fixtures[0].home.insert("ColorAdd_R".into(), 0.25);
+        let frame = program(&show, &Levels::new(), &masters());
+        assert_eq!(frame.slot(1, 1), Some(128));
+        assert_eq!(frame.slot(1, 2), Some(64));
+        assert_eq!(frame.slot(1, 3), Some(0), "no home, no value");
+    }
+
+    #[test]
+    fn playback_and_programmer_override_home() {
+        let mut show = demo_show();
+        show.fixtures[0].home.insert("Dimmer".into(), 0.25);
+        let mut playback = Levels::new();
+        playback.set(1, "Dimmer", 0.5);
+        let frame = render(
+            &show,
+            &Levels::new(),
+            &playback,
+            &EffectOutput::default(),
+            &masters(),
+            1.0,
+        );
+        assert_eq!(frame.slot(1, 1), Some(128), "playback beats home");
+
+        let programmer = programmer(&show, &[(1, "Dimmer", 1.0)]);
+        let frame = render(
+            &show,
+            &programmer,
+            &playback,
+            &EffectOutput::default(),
+            &masters(),
+            1.0,
+        );
+        assert_eq!(frame.slot(1, 1), Some(255), "the programmer beats both");
+    }
+
+    #[test]
+    fn an_effect_modulates_home() {
+        let mut show = demo_show();
+        show.fixtures[0].home.insert("Dimmer".into(), 0.5);
+        let mut effects = EffectOutput::default();
+        effects.add(1, "Dimmer", 0.25);
+        let frame = render(
+            &show,
+            &Levels::new(),
+            &Levels::new(),
+            &effects,
+            &masters(),
+            1.0,
+        );
+        assert_eq!(frame.slot(1, 1), Some(191));
+    }
+
+    #[test]
+    fn masters_scale_home_intensity_only() {
+        let mut show = demo_show();
+        show.fixtures[0].home.insert("Dimmer".into(), 1.0);
+        show.fixtures[0].home.insert("ColorAdd_R".into(), 1.0);
+        let mut masters = masters();
+        masters.grand = 0.5;
+        let frame = program(&show, &Levels::new(), &masters);
+        assert_eq!(frame.slot(1, 1), Some(128));
+        assert_eq!(frame.slot(1, 2), Some(255));
+    }
+
+    #[test]
+    fn the_source_names_programmer_playback_home_or_nothing() {
+        let mut show = demo_show();
+        show.fixtures[0].home.insert("Dimmer".into(), 0.5);
+        let mut programmer = Levels::new();
+        programmer.set(1, "Dimmer", 0.4);
+        let mut playback = Levels::new();
+        playback.set(1, "ColorAdd_R", 0.2);
+        let effects = EffectOutput::default();
+        let masters = masters();
+        let stage = Stage::new(&show, &programmer, &playback, &effects, &masters, 1.0);
+        let fixture = &show.fixtures[0];
+        assert_eq!(stage.source(fixture, "Dimmer"), ValueSource::Programmer);
+        assert_eq!(stage.source(fixture, "ColorAdd_R"), ValueSource::Playback);
+        assert_eq!(
+            stage.source(fixture, "ColorAdd_G"),
+            ValueSource::Home,
+            "a profile channel is a home even when its default is zero"
+        );
+        assert_eq!(stage.source(fixture, "Pan"), ValueSource::None);
+    }
+
+    #[test]
     fn playback_drives_fixtures_with_an_empty_programmer() {
         let show = demo_show();
         let mut playback = Levels::new();
@@ -305,6 +431,7 @@ mod tests {
             mode: "4ch".into(),
             universe: 1,
             address: 5,
+            home: Default::default(),
         });
         show.groups.push(Group {
             number: 1,
@@ -391,6 +518,7 @@ mod tests {
             mode: "4ch".into(),
             universe: 2,
             address: 1,
+            home: Default::default(),
         });
         let programmer = programmer(&show, &[(1, "Dimmer", 1.0), (2, "Dimmer", 1.0)]);
         let mut masters = masters();

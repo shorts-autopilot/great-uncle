@@ -644,6 +644,7 @@ mod tests {
             mode: "4ch".into(),
             universe: 2,
             address: 1,
+            home: Default::default(),
         });
         let mut engine = Engine::new(show);
         engine.desk.programmer.set(2, "Dimmer", 1.0);

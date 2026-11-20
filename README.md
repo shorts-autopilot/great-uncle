@@ -19,7 +19,7 @@ profiles that you supply.
 | 2 | Palettes, cues, sequences, executor faders | done — see [`docs/PHASE2.md`](docs/PHASE2.md) |
 | 3 | Groups, worlds, filters, masters, effects | done — see [`docs/PHASE3.md`](docs/PHASE3.md) |
 | 4 | Timecode, move-in-black, undo, first UI shell | done — see [`docs/PHASE4.md`](docs/PHASE4.md) |
-| 5+ | desk state, output, journal, blackout/lock, cue triggers, timing | in progress — 03, 04, 05, 06, 01 and 02 built; see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
+| 5+ | desk state, output, journal, blackout/lock, cues, timing, home | in progress — 03, 04, 05, 06, 01, 02 and 07 built; see [`docs/PHASE5.md`](docs/PHASE5.md) |
 | 5+ | patch tools, GUI, … | designed — see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 
 It is a console with a command line, a full-screen terminal shell, a script
@@ -41,12 +41,15 @@ trigger, and an executor's button and fader are `Go`, `Fader`, `Flash` or
 `Solo`, with their positions kept in the desk file. A cue's fade can be split
 per attribute — colour in half a second, position in four, a snap on the
 dimmer — with a curve on each lane and a stagger between consecutive fixtures.
-There is no desktop GUI yet.
+A fixture also has a home look: with nothing programmed it renders the profile's
+`Default` rather than DMX zero, `Default` edits and lists it, and `Home` recalls
+it into the programmer; `Sheet` says whether each value comes from `P`, `Pb`,
+`H` or nowhere. There is no desktop GUI yet.
 
 ## Quick start
 
 ```bash
-cargo test --workspace            # 256 tests, no hardware needed
+cargo test --workspace            # 274 tests, no hardware needed
 cargo run -p openlight-console    # interactive console
 cargo run -p openlight-console -- --ui   # full-screen terminal shell
 ```

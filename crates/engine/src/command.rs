@@ -179,6 +179,21 @@ pub enum Command {
         number: f64,
         stagger: f64,
     },
+    /// `Fixture 1 Default …`: list or change a fixture's home look. No
+    /// attribute means "list"; `off` drops the stored override.
+    SetHome {
+        fixtures: Option<Vec<u16>>,
+        group: Option<u16>,
+        attribute: Option<String>,
+        level: Option<Level>,
+        off: bool,
+    },
+    /// `Fixture 1 Home`, `Group 2 Home` or bare `Home`: recall the base look
+    /// into the programmer.
+    Home {
+        fixtures: Option<Vec<u16>>,
+        group: Option<u16>,
+    },
     SetExecutorMode {
         executor: u16,
         mode: ExecutorMode,
@@ -390,6 +405,10 @@ impl Command {
                 curve: None,
                 off: false,
                 ..
+            } => false,
+            // Listing a fixture's home changes nothing.
+            Command::SetHome {
+                attribute: None, ..
             } => false,
             // Lifting a blackout is always allowed: refusing it is a hazard.
             Command::Blackout { off: true, .. } => false,
@@ -603,6 +622,8 @@ const RESERVED: &[&str] = &[
     "timing",
     "stagger",
     "curve",
+    "default",
+    "home",
 ];
 
 struct Parser<'a> {
@@ -689,6 +710,14 @@ impl Parser<'_> {
             let fixtures = self.optional_fixture_list()?;
             self.expect_end()?;
             return Ok(Command::Off { fixtures });
+        }
+        if word.eq_ignore_ascii_case("home") {
+            let fixtures = self.optional_fixture_list()?;
+            self.expect_end()?;
+            return Ok(Command::Home {
+                fixtures,
+                group: None,
+            });
         }
         if word.eq_ignore_ascii_case("clear") {
             let mut all = false;
@@ -894,13 +923,67 @@ impl Parser<'_> {
                 fixtures: Some(fixtures),
             });
         }
+        if self.eat_word("home") {
+            self.expect_end()?;
+            return Ok(Command::Home {
+                fixtures: Some(fixtures),
+                group: None,
+            });
+        }
+        if self.eat_word("default") {
+            return self.default_action(Some(fixtures), None);
+        }
         Err(CommandError::with_hint(
             format!(
                 "unexpected {}",
                 self.peek().cloned().unwrap_or(Token::Word(String::new()))
             ),
-            "after a fixture list use `At <level>`, `Full` or `Off`",
+            "after a fixture list use `At <level>`, `Full`, `Off`, `Home` or `Default`",
         ))
+    }
+
+    /// `Default [<attribute> <level> | <attribute> Off]`: a home override, or
+    /// the listing when nothing follows.
+    fn default_action(
+        &mut self,
+        fixtures: Option<Vec<u16>>,
+        group: Option<u16>,
+    ) -> Result<Command, CommandError> {
+        if self.at_end() {
+            return Ok(Command::SetHome {
+                fixtures,
+                group,
+                attribute: None,
+                level: None,
+                off: false,
+            });
+        }
+        if self.eat_word("off") {
+            return Err(CommandError::with_hint(
+                "`Default Off` needs an attribute",
+                "use `Default Dimmer Off` to drop one override",
+            ));
+        }
+        let attribute = self.name_token("attribute")?;
+        if self.eat_word("off") {
+            self.expect_end()?;
+            return Ok(Command::SetHome {
+                fixtures,
+                group,
+                attribute: Some(attribute),
+                level: None,
+                off: true,
+            });
+        }
+        let level = self.level()?;
+        self.expect_end()?;
+        Ok(Command::SetHome {
+            fixtures,
+            group,
+            attribute: Some(attribute),
+            level: Some(level),
+            off: false,
+        })
     }
 
     fn optional_fixture_list(&mut self) -> Result<Option<Vec<u16>>, CommandError> {
@@ -1151,12 +1234,22 @@ impl Parser<'_> {
             self.expect_end()?;
             return Ok(Command::OffGroup { group: number });
         }
+        if self.eat_word("home") {
+            self.expect_end()?;
+            return Ok(Command::Home {
+                fixtures: None,
+                group: Some(number),
+            });
+        }
+        if self.eat_word("default") {
+            return self.default_action(None, Some(number));
+        }
         Err(CommandError::with_hint(
             format!(
                 "unexpected {}",
                 self.peek().cloned().unwrap_or(Token::Word(String::new()))
             ),
-            "after a group use `At <level>`, `Full` or `Off`",
+            "after a group use `At <level>`, `Full`, `Off`, `Home` or `Default`",
         ))
     }
 
@@ -2442,6 +2535,75 @@ mod tests {
                 show_only: false
             }
         );
+    }
+
+    #[test]
+    fn parses_home_and_default() {
+        assert_eq!(
+            command("Fixture 1 Home"),
+            Command::Home {
+                fixtures: Some(vec![1]),
+                group: None,
+            }
+        );
+        assert_eq!(
+            command("Home"),
+            Command::Home {
+                fixtures: None,
+                group: None,
+            }
+        );
+        assert_eq!(
+            command("Group 2 Home"),
+            Command::Home {
+                fixtures: None,
+                group: Some(2),
+            }
+        );
+        assert_eq!(
+            command("Fixture 1 Default"),
+            Command::SetHome {
+                fixtures: Some(vec![1]),
+                group: None,
+                attribute: None,
+                level: None,
+                off: false,
+            }
+        );
+        assert_eq!(
+            command("Fixture 1 Default Dimmer 50"),
+            Command::SetHome {
+                fixtures: Some(vec![1]),
+                group: None,
+                attribute: Some("Dimmer".into()),
+                level: Some(Level::Percent(50.0)),
+                off: false,
+            }
+        );
+        assert_eq!(
+            command("Group 2 Default Dimmer Full"),
+            Command::SetHome {
+                fixtures: None,
+                group: Some(2),
+                attribute: Some("Dimmer".into()),
+                level: Some(Level::Full),
+                off: false,
+            }
+        );
+        assert_eq!(
+            command("Group 2 Default Dimmer Off"),
+            Command::SetHome {
+                fixtures: None,
+                group: Some(2),
+                attribute: Some("Dimmer".into()),
+                level: None,
+                off: true,
+            }
+        );
+        assert!(error("Fixture 1 Default Off").message.contains("attribute"));
+        assert!(!command("Fixture 1 Default").mutates());
+        assert!(command("Fixture 1 Default Dimmer 50").mutates());
+        assert!(command("Home").mutates());
     }
 
     #[test]

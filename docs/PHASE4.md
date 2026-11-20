@@ -225,6 +225,11 @@ red channel; the second fixture repeats the pair at 5 and 6.
   an executor fader does not scale a timecoded cue.
 - **MIB has no timing.** It snaps non-intensity values at cue start; there is no
   separate MIB fade, MIB delay or "MIB always/never" setting.
+- **Home is per fixture.** An unprogrammed attribute renders the profile's
+  `Channel.Default`, but there is no per-mode home table, no park/default
+  distinction, and re-importing a profile does not re-seed an edited home.
+  Loading a pre-v8 show reports every fixture whose profile default is non-zero
+  before it moves.
 - **Undo covers the show file only.** It does not undo console state such as
   selection, playback or effect starts, and a load resets it.
 - **The UI is a terminal shell.** There is no desktop GUI, no mouse, no colour,

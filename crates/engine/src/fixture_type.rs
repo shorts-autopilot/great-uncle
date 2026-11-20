@@ -129,6 +129,64 @@ impl Default for ChannelFunction {
 }
 
 impl Channel {
+    /// Convert a raw DMX byte back into a normalised level (0..=1).
+    ///
+    /// The inverse of [`Channel::raw_from_level`]: the function whose DMX band
+    /// contains `raw` is chosen, its physical value is interpolated, and that is
+    /// normalised across the attribute's whole physical range. A raw value in a
+    /// gap between bands snaps to the nearest band end. Where two bands share
+    /// the same raw byte, the lower band wins, because one byte cannot name two
+    /// physical values.
+    pub fn level_from_raw(&self, raw: u8) -> f64 {
+        if self.functions.is_empty() {
+            return f64::from(raw) / 255.0;
+        }
+        let mut physical_min = f64::INFINITY;
+        let mut physical_max = f64::NEG_INFINITY;
+        for function in &self.functions {
+            physical_min = physical_min.min(function.physical_from.min(function.physical_to));
+            physical_max = physical_max.max(function.physical_from.max(function.physical_to));
+        }
+
+        let physical = match self.functions.iter().find(|function| {
+            let low = function.dmx_from.min(function.dmx_to);
+            let high = function.dmx_from.max(function.dmx_to);
+            raw >= low && raw <= high
+        }) {
+            Some(function) => {
+                let span = f64::from(function.dmx_to) - f64::from(function.dmx_from);
+                let fraction = if span == 0.0 {
+                    0.0
+                } else {
+                    (f64::from(raw) - f64::from(function.dmx_from)) / span
+                };
+                function.physical_from
+                    + (function.physical_to - function.physical_from) * fraction.clamp(0.0, 1.0)
+            }
+            None => {
+                let mut best = (f64::INFINITY, physical_min);
+                for function in &self.functions {
+                    for (end, physical) in [
+                        (function.dmx_from, function.physical_from),
+                        (function.dmx_to, function.physical_to),
+                    ] {
+                        let distance = (f64::from(raw) - f64::from(end)).abs();
+                        if distance < best.0 {
+                            best = (distance, physical);
+                        }
+                    }
+                }
+                best.1
+            }
+        };
+
+        if physical_max > physical_min {
+            ((physical - physical_min) / (physical_max - physical_min)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
     /// Convert a normalised level (0..=1) into the raw DMX byte for this channel.
     ///
     /// The level selects a physical value across the whole attribute range and
@@ -247,6 +305,46 @@ mod tests {
         let channel = dimmer_channel(vec![]);
         assert_eq!(channel.raw_from_level(0.5), 128);
         assert_eq!(channel.raw_from_level(f64::NAN), 0);
+    }
+
+    #[test]
+    fn level_from_raw_inverts_a_linear_channel() {
+        let channel = dimmer_channel(vec![function(0.0, 100.0, 0, 255)]);
+        assert_eq!(channel.level_from_raw(0), 0.0);
+        assert!((channel.level_from_raw(128) - 128.0 / 255.0).abs() < 1e-9);
+        assert_eq!(channel.level_from_raw(255), 1.0);
+
+        for raw in [0u8, 1, 77, 128, 200, 255] {
+            let level = channel.level_from_raw(raw);
+            assert_eq!(channel.raw_from_level(level), raw, "raw {raw} round-trips");
+        }
+    }
+
+    #[test]
+    fn level_from_raw_picks_the_band_that_contains_the_byte() {
+        let channel = dimmer_channel(vec![
+            function(0.0, 50.0, 10, 20),
+            function(50.0, 100.0, 100, 200),
+        ]);
+        assert!((channel.level_from_raw(15) - 0.25).abs() < 1e-9);
+        assert!((channel.level_from_raw(150) - 0.75).abs() < 1e-9);
+        // 20 is shared with band 2's first byte; one byte cannot name both
+        // ends, and the lower band wins by construction.
+        for raw in [10u8, 15, 100, 150, 200] {
+            let level = channel.level_from_raw(raw);
+            assert_eq!(channel.raw_from_level(level), raw, "raw {raw}");
+        }
+    }
+
+    #[test]
+    fn level_from_raw_snaps_from_a_gap_to_the_nearest_end() {
+        let channel = dimmer_channel(vec![
+            function(0.0, 50.0, 10, 20),
+            function(50.0, 100.0, 100, 200),
+        ]);
+        assert_eq!(channel.level_from_raw(0), 0.0, "below every band");
+        assert!((channel.level_from_raw(90) - 0.5).abs() < 1e-9, "near 50%");
+        assert_eq!(channel.level_from_raw(255), 1.0, "above every band");
     }
 
     #[test]

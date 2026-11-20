@@ -342,6 +342,20 @@ impl Lane {
     }
 }
 
+/// A run held by a hand: the frozen look plus exactly what `resume` needs.
+///
+/// One struct rather than four parallel fields, so a paused run cannot be half
+/// set. `lanes` is `None` on the single-blend path, where `delay` and `fade`
+/// carry the remaining times; with a lane plan they carry the rebased plan.
+#[derive(Debug, Clone)]
+struct Paused {
+    levels: Levels,
+    progress: f64,
+    delay: Duration,
+    fade: Duration,
+    lanes: Option<Vec<Lane>>,
+}
+
 /// One running cue transition.
 #[derive(Debug, Clone)]
 pub struct Run {
@@ -357,13 +371,7 @@ pub struct Run {
     start: Instant,
     delay: Duration,
     fade: Duration,
-    paused: Option<Levels>,
-    paused_progress: f64,
-    paused_delay: Duration,
-    paused_fade: Duration,
-    /// Lanes rebased to start at `resume`, frozen at the same instant as
-    /// `paused` so a pause continues rather than restarts.
-    paused_lanes: Option<Vec<Lane>>,
+    paused: Option<Paused>,
     pub done: bool,
     /// When the run began: `Time` triggers count from here.
     pub started: Instant,
@@ -375,8 +383,8 @@ pub struct Run {
 impl Run {
     /// 0 before the delay ends, 1 once every lane has finished.
     pub fn progress(&self, now: Instant) -> f64 {
-        if self.paused.is_some() {
-            return self.paused_progress;
+        if let Some(paused) = &self.paused {
+            return paused.progress;
         }
         let elapsed = now.saturating_duration_since(self.start);
         if self.lanes.is_empty() {
@@ -403,8 +411,8 @@ impl Run {
 
     /// Output of this playback at `now`.
     pub fn levels_at(&self, now: Instant) -> Levels {
-        if let Some(levels) = &self.paused {
-            return levels.clone();
+        if let Some(paused) = &self.paused {
+            return paused.levels.clone();
         }
         if self.lanes.is_empty() {
             return self.levels_at_progress(self.progress(now));
@@ -435,11 +443,7 @@ impl Run {
         if self.lanes.is_empty() {
             return self.levels_at_progress(fraction);
         }
-        let fraction = if fraction.is_finite() {
-            fraction.clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
+        let fraction = clamp_fraction(fraction);
         let mut levels = self.to.clone();
         for lane in &self.lanes {
             let value = if fraction <= 0.0 {
@@ -480,21 +484,11 @@ impl Run {
 
     /// Lanes that continue a hand-driven run from `fraction` of every fade.
     fn rebased_lanes(&self, fraction: f64) -> Vec<Lane> {
-        let fraction = if fraction.is_finite() {
-            fraction.clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
+        let fraction = clamp_fraction(fraction);
         self.lanes
             .iter()
             .map(|lane| {
-                let covered = if fraction <= 0.0 {
-                    0.0
-                } else if fraction >= 1.0 {
-                    1.0
-                } else {
-                    lane.curve.apply(fraction)
-                };
+                let covered = lane.curve.apply(fraction);
                 Lane {
                     from: lane.from + (lane.to - lane.from) * covered,
                     start: Duration::ZERO,
@@ -503,6 +497,15 @@ impl Run {
                 }
             })
             .collect()
+    }
+}
+
+/// A scrub fraction is a position in the fade: finite and within 0..=1.
+fn clamp_fraction(fraction: f64) -> f64 {
+    if fraction.is_finite() {
+        fraction.clamp(0.0, 1.0)
+    } else {
+        1.0
     }
 }
 
@@ -572,10 +575,6 @@ impl Playback {
                 delay: seconds(cue.delay),
                 fade: seconds(cue.fade),
                 paused: None,
-                paused_progress: 1.0,
-                paused_delay: Duration::ZERO,
-                paused_fade: Duration::ZERO,
-                paused_lanes: None,
                 done: false,
                 started: now,
                 settled: None,
@@ -594,19 +593,21 @@ impl Playback {
             return false;
         };
         let fraction = fraction.clamp(0.0, 1.0);
-        run.paused = Some(run.levels_at_fraction(fraction));
-        run.paused_lanes = if run.lanes.is_empty() {
-            None
-        } else {
-            Some(run.rebased_lanes(fraction))
-        };
-        run.paused_progress = fraction;
-        run.paused_delay = Duration::ZERO;
-        run.paused_fade = if run.lanes.is_empty() {
-            run.fade.mul_f64(1.0 - fraction)
-        } else {
-            Duration::ZERO
-        };
+        run.paused = Some(Paused {
+            levels: run.levels_at_fraction(fraction),
+            progress: fraction,
+            delay: Duration::ZERO,
+            fade: if run.lanes.is_empty() {
+                run.fade.mul_f64(1.0 - fraction)
+            } else {
+                Duration::ZERO
+            },
+            lanes: if run.lanes.is_empty() {
+                None
+            } else {
+                Some(run.rebased_lanes(fraction))
+            },
+        });
         run.settled = None;
         true
     }
@@ -660,15 +661,19 @@ impl Playback {
                 let progress = run.progress(now);
                 let levels = run.levels_at(now);
                 let elapsed = now.saturating_duration_since(run.start);
-                run.paused_delay = run.delay.saturating_sub(elapsed);
-                run.paused_fade = run.fade.mul_f64((1.0 - progress).clamp(0.0, 1.0));
-                run.paused_lanes = if run.lanes.is_empty() {
-                    None
-                } else {
-                    Some(run.held_lanes(elapsed))
-                };
-                run.paused = Some(levels);
-                run.paused_progress = progress;
+                let delay = run.delay.saturating_sub(elapsed);
+                let fade = run.fade.mul_f64((1.0 - progress).clamp(0.0, 1.0));
+                run.paused = Some(Paused {
+                    levels,
+                    progress,
+                    delay,
+                    fade,
+                    lanes: if run.lanes.is_empty() {
+                        None
+                    } else {
+                        Some(run.held_lanes(elapsed))
+                    },
+                });
                 // A held run is not settled, so it does not chain on its own.
                 run.settled = None;
                 true
@@ -682,23 +687,22 @@ impl Playback {
         let Some(run) = self.runs.get_mut(&target) else {
             return false;
         };
-        let Some(levels) = run.paused.take() else {
+        let Some(paused) = run.paused.take() else {
             return false;
         };
         run.start = now;
-        match run.paused_lanes.take() {
+        match paused.lanes {
             Some(lanes) => {
                 run.lanes = lanes;
                 run.delay = Duration::ZERO;
                 run.fade = Duration::ZERO;
             }
             None => {
-                run.from = levels;
-                run.delay = run.paused_delay;
-                run.fade = run.paused_fade;
+                run.from = paused.levels;
+                run.delay = paused.delay;
+                run.fade = paused.fade;
             }
         }
-        run.paused_progress = 1.0;
         true
     }
 
@@ -795,6 +799,7 @@ fn build_lanes(cue: &Cue, from: &Levels, to: &Levels) -> Vec<Lane> {
     plan.sort_by_key(|(fixture, _)| *fixture);
 
     let cue_delay = seconds(cue.delay);
+    let cue_fade = seconds(cue.fade);
     let mut lanes = Vec::new();
     for (position, (fixture, names)) in plan.into_iter().enumerate() {
         let offset = seconds(cue.stagger * position as f64);
@@ -822,7 +827,7 @@ fn build_lanes(cue: &Cue, from: &Levels, to: &Levels) -> Vec<Lane> {
     }
 
     let plain = lanes.iter().all(|lane| {
-        lane.start == cue_delay && lane.fade == seconds(cue.fade) && lane.curve == Curve::Linear
+        lane.start == cue_delay && lane.fade == cue_fade && lane.curve == Curve::Linear
     });
     if plain {
         return Vec::new();

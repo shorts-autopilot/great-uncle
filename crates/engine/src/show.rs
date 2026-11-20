@@ -9,9 +9,11 @@
 //! the programmer, the masters and the executor faders out of the show and into
 //! the desk file, because they are handles rather than programming. Version 6
 //! adds cue triggers and executor modes. Version 7 adds per-attribute timing,
-//! curves and stagger. Older files still load: new sections default to empty,
-//! and the v5 upgrade hands the values it finds in an old file to the desk
-//! through a [`LoadReport`].
+//! curves and stagger. Version 8 adds each fixture's home look, the base that
+//! renders when neither the programmer nor playback has a value. Older files
+//! still load: new sections default to empty, the v5 upgrade hands the values
+//! it finds in an old file to the desk through a [`LoadReport`], and the v8
+//! upgrade reports any fixture whose profile default is not zero.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -29,9 +31,9 @@ use crate::pools::{Filter, Group, World, MAX_GROUP_FIXTURES, MAX_POOL_OBJECTS};
 use crate::timecode::{self, TimecodeShow, MAX_FPS, MAX_TIMECODES, MAX_TIMECODE_EVENTS, MIN_FPS};
 
 pub const SHOW_FORMAT: &str = "openlight-show";
-pub const SHOW_VERSION: u32 = 7;
+pub const SHOW_VERSION: u32 = 8;
 /// Older documents that still load, oldest first.
-pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3, 4, 5, 6, 7];
+pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8];
 /// Fastest rate master accepted, as a factor (400%).
 pub const MAX_RATE_MASTER: f64 = 4.0;
 pub const MAX_UNIVERSE_SIZE: u16 = 512;
@@ -92,6 +94,10 @@ pub struct Fixture {
     pub mode: String,
     pub universe: u16,
     pub address: u16,
+    /// Base look: attribute → normalised level. Missing attributes fall back to
+    /// the profile's channel default, so an edited home only stores overrides.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub home: BTreeMap<String, f64>,
 }
 
 const fn default_universe_size() -> u16 {
@@ -195,6 +201,36 @@ impl Show {
         self.fixture_types
             .iter()
             .find(|fixture_type| fixture_type.key().eq_ignore_ascii_case(key.trim()))
+    }
+
+    /// A fixture's home level for one attribute: the stored override, else the
+    /// channel's GDTF default, else zero.
+    pub fn home_level(&self, fixture: &Fixture, attribute: &str) -> f64 {
+        if let Some((_, level)) = fixture
+            .home
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(attribute))
+        {
+            return *level;
+        }
+        let Ok((_, mode)) = self.mode_for(fixture) else {
+            return 0.0;
+        };
+        mode.channel_for(attribute)
+            .map(|channel| channel.level_from_raw(channel.default_raw))
+            .unwrap_or(0.0)
+    }
+
+    /// Whether a home exists for this attribute, even when it is zero.
+    pub fn has_home(&self, fixture: &Fixture, attribute: &str) -> bool {
+        fixture
+            .home
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case(attribute))
+            || self
+                .mode_for(fixture)
+                .map(|(_, mode)| mode.channel_for(attribute).is_some())
+                .unwrap_or(false)
     }
 
     /// Resolve the fixture type and mode of a patched fixture.
@@ -336,6 +372,20 @@ impl Show {
             }
             if !fixture_numbers.insert(fixture.number) {
                 problems.push(format!("fixture {}: number used twice", fixture.number));
+            }
+            for (attribute, level) in &fixture.home {
+                if attribute.trim().is_empty() {
+                    problems.push(format!(
+                        "fixture {}: home value without an attribute",
+                        fixture.number
+                    ));
+                }
+                if !level.is_finite() || !(0.0..=1.0).contains(level) {
+                    problems.push(format!(
+                        "fixture {}: home `{attribute}` is {level}, expected 0..=1",
+                        fixture.number
+                    ));
+                }
             }
             let Some(&universe_size) = universe_sizes.get(&fixture.universe) else {
                 problems.push(format!(
@@ -880,7 +930,7 @@ impl Show {
             });
         }
 
-        let report = upgrade(&mut value, version, path)?;
+        let mut report = upgrade(&mut value, version, path)?;
         let mut show: Show = serde_json::from_value(value).map_err(|source| ShowError::Parse {
             path: path.to_path_buf(),
             source,
@@ -896,8 +946,48 @@ impl Show {
                 problems,
             });
         }
+        if version < 8 {
+            if let Some(warning) = home_upgrade_warning(&show) {
+                report.warnings.push(warning);
+            }
+        }
         Ok((show, report))
     }
+}
+
+/// The v8 upgrade note: the base look now comes from the profiles, so say which
+/// fixtures move before the operator sees them move.
+fn home_upgrade_warning(show: &Show) -> Option<String> {
+    let mut moved = Vec::new();
+    for fixture in &show.fixtures {
+        let Ok((_, mode)) = show.mode_for(fixture) else {
+            continue;
+        };
+        if let Some((channel, level)) = mode.channels.iter().find_map(|channel| {
+            let level = show.home_level(fixture, &channel.attribute);
+            (level > 0.0).then_some((channel, level))
+        }) {
+            moved.push(format!(
+                "fixture {}: {} {}%",
+                fixture.number,
+                channel.attribute,
+                (level * 100.0).round() as i64
+            ));
+        }
+    }
+    if moved.is_empty() {
+        return None;
+    }
+    let examples = moved.join("; ");
+    Some(format!(
+        "Home seeded from profiles: {} {} a non-zero default ({examples})",
+        moved.len(),
+        if moved.len() == 1 {
+            "fixture has"
+        } else {
+            "fixtures have"
+        },
+    ))
 }
 
 /// Values an older show carried that now belong to the desk.
@@ -1084,7 +1174,7 @@ mod tests {
             .read_to_string(&mut text)
             .unwrap();
         assert!(text.contains("\"format\": \"openlight-show\""));
-        assert!(text.contains("\"version\": 7"));
+        assert!(text.contains("\"version\": 8"));
         assert!(text.contains("OpenLight Demo Wash"), "types are embedded");
         let _ = fs::remove_file(&path);
     }
@@ -1130,6 +1220,7 @@ mod tests {
             mode: "4ch".into(),
             universe: 1,
             address: 3,
+            home: BTreeMap::new(),
         });
         let problems = show.validate();
         assert!(
@@ -1414,6 +1505,65 @@ mod tests {
         assert_eq!(reloaded, show);
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(crate::journal::path_for(&path, ".bak"));
+    }
+
+    #[test]
+    fn version_seven_shows_return_an_empty_home_and_report_profile_defaults() {
+        let mut show = demo_show();
+        show.fixture_types[0].modes[0].channels[0].default_raw = 255;
+        let mut value = serde_json::to_value(&show).unwrap();
+        value["version"] = serde_json::json!(7);
+        let path = temp_path("v7-home");
+        fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+
+        let (loaded, report) = Show::load_with_report(&path).unwrap();
+        assert!(loaded.fixtures[0].home.is_empty());
+        assert_eq!(loaded.home_level(&loaded.fixtures[0], "Dimmer"), 1.0);
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("Home seeded from profiles")
+                    && warning.contains("fixture 1: Dimmer 100%")),
+            "{report:#?}"
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn home_resolves_stored_then_profile_then_zero() {
+        let mut show = demo_show();
+        assert_eq!(show.home_level(&show.fixtures[0], "Dimmer"), 0.0);
+        assert!(!show.has_home(&show.fixtures[0], "Pan"));
+
+        show.fixture_types[0].modes[0].channels[1].default_raw = 128;
+        let red = show.home_level(&show.fixtures[0], "ColorAdd_R");
+        assert!((red - 128.0 / 255.0).abs() < 1e-9);
+        assert!(show.has_home(&show.fixtures[0], "ColorAdd_R"));
+
+        show.fixtures[0].home.insert("ColorAdd_R".into(), 0.25);
+        assert_eq!(show.home_level(&show.fixtures[0], "ColorAdd_R"), 0.25);
+
+        let path = temp_path("home-roundtrip");
+        show.save(&path).unwrap();
+        let loaded = Show::load(&path).unwrap();
+        assert_eq!(loaded.fixtures[0].home.get("ColorAdd_R"), Some(&0.25));
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(crate::journal::path_for(&path, ".bak"));
+    }
+
+    #[test]
+    fn invalid_home_levels_are_reported() {
+        let mut show = demo_show();
+        show.fixtures[0].home.insert("Dimmer".into(), 1.5);
+        show.fixtures[0].home.insert(" ".into(), 0.5);
+        let problems = show.validate();
+        for expected in ["home `Dimmer` is 1.5", "home value without an attribute"] {
+            assert!(
+                problems.iter().any(|problem| problem.contains(expected)),
+                "missing `{expected}` in {problems:#?}"
+            );
+        }
     }
 
     #[test]

@@ -248,6 +248,15 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
             JournalChoice::Default => Some(engine::journal::path_for(&show_path, ".journal")),
         };
         let autosave_path = engine::journal::path_for(&show_path, ".autosave");
+        // Even with the journal switched off, its head decides where a snapshot
+        // says replay starts. Reading the file does not append to it: entries
+        // from earlier sessions are already reflected by the saved show, while
+        // anything written later still has to replay.
+        let recovery_path = journal_path
+            .clone()
+            .unwrap_or_else(|| engine::journal::path_for(&show_path, ".journal"));
+        let tail = engine::journal::read(&recovery_path)?;
+        engine.set_journal_head(tail.entries.last().map(|entry| entry.rev).unwrap_or(0));
 
         // Recovery runs before the journal opens, so replay is never journaled.
         if options.recover {
@@ -272,7 +281,6 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
                 }
                 None => engine::journal::ReplayFrom::File,
             };
-            let tail = engine::journal::read(&engine::journal::path_for(&show_path, ".journal"))?;
             let report = engine.recover(&tail, &show_path, from);
             for line in report.summary() {
                 println!("{line}");

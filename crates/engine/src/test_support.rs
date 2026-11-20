@@ -56,6 +56,7 @@ pub fn demo_show() -> Show {
         mode: "4ch".into(),
         universe: 1,
         address: 1,
+        home: Default::default(),
     });
     show
 }
