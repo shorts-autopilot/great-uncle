@@ -41,6 +41,8 @@ Options:
   --journal <file|off> journal each edit to <file> (default: <show>.journal)
   --no-recover         do not replay the journal at start
   --ui                 open the full-screen terminal shell
+  --check              print `Patch Check` and exit; exit 1 on overlap, overflow,
+                       a missing type/mode or an invalid address
   --trace              print the last virtual frame as bytes
   --help               show this text
 
@@ -101,6 +103,7 @@ struct Options {
     recover: bool,
     trace: bool,
     ui: bool,
+    check: bool,
 }
 
 impl Options {
@@ -118,6 +121,7 @@ impl Options {
             recover: true,
             trace: false,
             ui: false,
+            check: false,
         };
 
         let mut index = 0;
@@ -179,6 +183,7 @@ impl Options {
                 }
                 "--trace" => options.trace = true,
                 "--ui" => options.ui = true,
+                "--check" => options.check = true,
                 "--help" | "-h" => return Ok(None),
                 other => return Err(format!("unknown option `{other}`")),
             }
@@ -242,10 +247,16 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
     };
 
     if let Some(show_path) = options.show.clone() {
-        let journal_path = match &options.journal {
-            JournalChoice::Off => None,
-            JournalChoice::Path(path) => Some(path.clone()),
-            JournalChoice::Default => Some(engine::journal::path_for(&show_path, ".journal")),
+        // A check reads the saved document and writes nothing: no journal, no
+        // recovery prompt and no autosave.
+        let journal_path = if options.check {
+            None
+        } else {
+            match &options.journal {
+                JournalChoice::Off => None,
+                JournalChoice::Path(path) => Some(path.clone()),
+                JournalChoice::Default => Some(engine::journal::path_for(&show_path, ".journal")),
+            }
         };
         let autosave_path = engine::journal::path_for(&show_path, ".autosave");
         // Even with the journal switched off, its head decides where a snapshot
@@ -259,7 +270,7 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
         engine.set_journal_head(tail.entries.last().map(|entry| entry.rev).unwrap_or(0));
 
         // Recovery runs before the journal opens, so replay is never journaled.
-        if options.recover {
+        if options.recover && !options.check {
             let snapshot = engine::journal::Snapshot::load(&autosave_path)?;
             let from = match &snapshot {
                 Some(snapshot) => {
@@ -301,7 +312,7 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
             }
         }
 
-        if let Some(seconds) = options.autosave {
+        if let Some(seconds) = options.autosave.filter(|_| !options.check) {
             let interval = Duration::from_secs_f64(seconds);
             if interval.is_zero() {
                 println!("Autosave off");
@@ -328,6 +339,21 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
     for path in &options.gdtf {
         let outcome = engine.execute(&format!("Import Gdtf {}", quote(&path.to_string_lossy())))?;
         print_outcome(&outcome);
+    }
+
+    if options.check {
+        let outcome = engine
+            .execute("Patch Check")
+            .map_err(|error| error.to_string())?;
+        print_outcome(&outcome);
+        let failed = outcome
+            .lines
+            .iter()
+            .any(|line| line.starts_with("Warning:") || line.starts_with("overlap:"));
+        if failed {
+            return Err("patch check found problems".into());
+        }
+        return Ok(());
     }
 
     let mut virtual_states: BTreeMap<u16, Arc<Mutex<VirtualState>>> = BTreeMap::new();

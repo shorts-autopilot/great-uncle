@@ -11,6 +11,7 @@
 //! * [`desk`] — the handles: selection, programmer, masters and playback
 //!   positions, saved beside the show rather than inside it.
 //! * [`store`] — atomic, crash-safe writes shared by every document.
+//! * [`csv`] — the patch spreadsheet, for `Patch Import` and `Report Patch`.
 //! * [`fixture_type`] — GDTF-derived fixture types, modes and channel functions.
 //! * [`gdtf`] — `.gdtf` archive import.
 //! * [`command`] — lexer and parser for the command line.
@@ -26,6 +27,7 @@
 //! * [`output`] — 60 Hz engine tick + 30 Hz frame output thread.
 
 pub mod command;
+pub mod csv;
 pub mod desk;
 pub mod effect;
 pub mod engine;

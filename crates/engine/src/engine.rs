@@ -5,15 +5,17 @@
 //! [`Engine::mutate`], which rolls back and reports if the result would not
 //! validate, so a show is always safe to render and save.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::command::{
-    self, Command, CommandError, Level, LevelSource, PlaybackRef, SetTarget, StoreMode, TriggerArg,
+    self, Command, CommandError, Level, LevelSource, PlaybackRef, ReportKind, SetTarget, StoreMode,
+    TriggerArg,
 };
+use crate::csv;
 use crate::desk::{Desk, Masters, Preview, RunState};
 use crate::effect::{Effect, Effects, Waveform, MAX_RATE_HZ, MAX_SPREAD_DEGREES};
 use crate::fixture_type::{Channel, FixtureType, SetSelector, DIMMER};
@@ -23,14 +25,14 @@ use crate::journal::ReplayFrom;
 use crate::levels::Levels;
 use crate::output::{lock, OutputStatus};
 use crate::palette::{self, Palette};
-use crate::patch::PatchRange;
+use crate::patch::{self, PatchRange};
 use crate::playback::{
     format_cue_number, format_trigger, timing_for, Cue, Curve, Executor, ExecutorMode, Playback,
     Sequence, Target, Trigger, MAX_CUE_NUMBER, MAX_TIME,
 };
 use crate::pools::{Filter, Group, World};
 use crate::render::{self, Highlight, OutputFrame, Stage};
-use crate::show::{Fixture, Show, MAX_RATE_MASTER};
+use crate::show::{Fixture, Show, MAX_FIXTURES, MAX_RATE_MASTER};
 use crate::timecode::{self, TimecodeEvent, TimecodePlayer, TimecodeShow, MAX_FPS, MIN_FPS};
 
 /// Everything `Store Cue` carries before defaults are applied.
@@ -460,6 +462,15 @@ impl Engine {
                 mode,
             } => self.patch(fixture, universe, address, type_key, mode),
             Command::Unpatch { fixtures } => self.unpatch(fixtures),
+            Command::Clone {
+                fixture,
+                universe,
+                address,
+                count,
+                step,
+            } => self.clone_fixtures(fixture, universe, address, count, step),
+            Command::PatchCheck => Ok(self.patch_check()),
+            Command::ImportPatch { path } => self.import_patch(&path),
             Command::ImportGdtf { path } => self.import_gdtf(&path),
             Command::New { name } => {
                 let outcome = self.new_show(name)?;
@@ -644,6 +655,11 @@ impl Engine {
             Command::Unlock { code } => self.unlock_desk(code),
             Command::Sheet => Ok(self.sheet()),
             Command::Status => Ok(self.status_report()),
+            Command::Report {
+                kind,
+                sequence,
+                path,
+            } => self.report(kind, sequence, &path),
             Command::Save { path } => self.save(&path, true, true),
             Command::Load { path, show_only } => self.load(&path, show_only),
             Command::Help => Ok(CommandOutcome::with_lines(self.help_text())),
@@ -1171,6 +1187,255 @@ impl Engine {
         Ok(CommandOutcome::message(message))
     }
 
+    /// `Clone Fixture 1 At 1.101 [Count 8] [Step 4]`: copy a fixture's type,
+    /// mode, home and name across the rig. Every new range is checked before
+    /// anything is inserted, so a failed clone leaves the patch untouched.
+    fn clone_fixtures(
+        &mut self,
+        source: u16,
+        universe: u16,
+        address: u16,
+        count: Option<u16>,
+        step: Option<u16>,
+    ) -> Result<CommandOutcome, CommandError> {
+        let fixture = self.show.fixture(source).cloned().ok_or_else(|| {
+            CommandError::with_hint(
+                format!("fixture {source} is not patched"),
+                "`Sheet` lists the patched fixtures",
+            )
+        })?;
+        let footprint = self
+            .show
+            .mode_for(&fixture)
+            .map(|(_, mode)| mode.footprint())
+            .map_err(CommandError::new)?;
+        let step = step.unwrap_or(footprint);
+        let count = usize::from(count.unwrap_or(1));
+        if self.show.fixtures.len() + count > MAX_FIXTURES {
+            return Err(CommandError::new(format!(
+                "cloning {count} fixtures would exceed the {MAX_FIXTURES}-fixture limit"
+            )));
+        }
+        let universe_config = self.show.universe(universe).cloned().ok_or_else(|| {
+            CommandError::with_hint(
+                format!("universe {universe} does not exist"),
+                format!(
+                    "defined universes: {}",
+                    self.show
+                        .universes
+                        .iter()
+                        .map(|universe| universe.number.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            )
+        })?;
+
+        let existing: Vec<(u16, PatchRange)> = self
+            .show
+            .fixtures
+            .iter()
+            .filter_map(|other| {
+                let (_, mode) = self.show.mode_for(other).ok()?;
+                PatchRange::new(other.universe, other.address, mode.footprint())
+                    .map(|range| (other.number, range))
+            })
+            .collect();
+
+        let mut used: BTreeSet<u16> = self
+            .show
+            .fixtures
+            .iter()
+            .map(|fixture| fixture.number)
+            .collect();
+        let mut clones = Vec::with_capacity(count);
+        let mut placed: Vec<PatchRange> = Vec::new();
+        for index in 0..count {
+            let offset = u32::from(address) + index as u32 * u32::from(step);
+            if offset > u32::from(u16::MAX) {
+                return Err(CommandError::new(format!(
+                    "clone {} would leave the address range",
+                    index + 1
+                )));
+            }
+            let offset = offset as u16;
+            let range = PatchRange::new(universe, offset, footprint).ok_or_else(|| {
+                CommandError::new(format!(
+                    "cannot patch {footprint} channels at {universe}.{offset:03}"
+                ))
+            })?;
+            if !range.fits(universe_config.size) {
+                return Err(CommandError::new(format!(
+                    "clone {} needs {footprint} slots at {universe}.{offset:03} but universe \
+                     {universe} has {} slots",
+                    index + 1,
+                    universe_config.size
+                )));
+            }
+            if let Some((other, _)) = existing.iter().find(|(_, other)| other.overlaps(&range)) {
+                return Err(CommandError::with_hint(
+                    format!(
+                        "clone {} would overlap fixture {other} at {universe}.{:03}",
+                        index + 1,
+                        range.start
+                    ),
+                    "pick another address or a larger step",
+                ));
+            }
+            if let Some(other) = placed.iter().position(|other| other.overlaps(&range)) {
+                return Err(CommandError::new(format!(
+                    "clone {} would overlap clone {} at {universe}.{:03}",
+                    index + 1,
+                    other + 1,
+                    range.start
+                )));
+            }
+            let number = next_fixture_number(&mut used)?;
+            let base = if fixture.name.trim().is_empty() {
+                fixture.type_key.clone()
+            } else {
+                fixture.name.trim().to_string()
+            };
+            clones.push(Fixture {
+                number,
+                name: format!("{base} {}", index + 2),
+                type_key: fixture.type_key.clone(),
+                mode: fixture.mode.clone(),
+                universe,
+                address: offset,
+                home: fixture.home.clone(),
+            });
+            placed.push(range);
+        }
+
+        let first = clones
+            .first()
+            .map(|fixture| fixture.address)
+            .unwrap_or(address);
+        let last = clones
+            .last()
+            .map(|fixture| fixture.address)
+            .unwrap_or(address);
+        let count = clones.len();
+        let message = self.mutate(|show| {
+            show.fixtures.extend(clones);
+            show.fixtures.sort_by_key(|fixture| fixture.number);
+            Ok(format!(
+                "Cloned fixture {source} to {count} new fixtures at {universe}.{first:03}..{universe}.{last:03}"
+            ))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    /// `Patch Check`: a read-only summary of the whole rig.
+    fn patch_check(&self) -> CommandOutcome {
+        let mut problems = Vec::new();
+        let mut ranges: Vec<(u16, PatchRange)> = Vec::new();
+        let mut slots = 0u32;
+        let mut used: BTreeMap<u16, u32> = BTreeMap::new();
+        for fixture in &self.show.fixtures {
+            let (_, mode) = match self.show.mode_for(fixture) {
+                Ok(value) => value,
+                Err(error) => {
+                    problems.push(format!("fixture {}: {error}", fixture.number));
+                    continue;
+                }
+            };
+            let footprint = mode.footprint();
+            slots += u32::from(footprint);
+            let Some(range) = PatchRange::new(fixture.universe, fixture.address, footprint) else {
+                problems.push(format!(
+                    "fixture {} has an invalid address {}.{:03}",
+                    fixture.number, fixture.universe, fixture.address
+                ));
+                continue;
+            };
+            let Some(universe) = self.show.universe(fixture.universe) else {
+                problems.push(format!(
+                    "fixture {} is in undefined universe {}",
+                    fixture.number, fixture.universe
+                ));
+                continue;
+            };
+            *used.entry(fixture.universe).or_default() += u32::from(footprint);
+            if !range.fits(universe.size) {
+                problems.push(format!(
+                    "fixture {} at {}.{:03} needs {footprint} slots but universe {} has {} slots",
+                    fixture.number,
+                    fixture.universe,
+                    fixture.address,
+                    fixture.universe,
+                    universe.size
+                ));
+            }
+            ranges.push((fixture.number, range));
+        }
+
+        let universes: Vec<u16> = used.keys().copied().collect();
+        let fixtures = self.show.fixtures.len();
+        let mut lines = vec![format!(
+            "{fixtures} fixture{}, {slots} slot{}, universes {}",
+            if fixtures == 1 { "" } else { "s" },
+            if slots == 1 { "" } else { "s" },
+            if universes.is_empty() {
+                "none".to_string()
+            } else {
+                universes
+                    .iter()
+                    .map(|number| number.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+        )];
+        let conflicts = patch::conflicts(&ranges);
+        if conflicts.is_empty() {
+            lines.push("no overlaps".into());
+        }
+        for (first, second) in conflicts {
+            lines.push(format!("overlap: fixtures {first} and {second}"));
+        }
+
+        for universe in &self.show.universes {
+            if !universes.contains(&universe.number) {
+                continue;
+            }
+            let in_universe: Vec<PatchRange> = ranges
+                .iter()
+                .filter(|(_, range)| range.universe == universe.number)
+                .map(|(_, range)| *range)
+                .collect();
+            let gaps = patch::gaps(&in_universe, universe.size, 8);
+            let usage = format!(
+                "universe {}: {} of {} slots used",
+                universe.number,
+                used.get(&universe.number).copied().unwrap_or(0),
+                universe.size
+            );
+            let largest = gaps.iter().copied().max_by_key(|(_, length)| *length);
+            match largest {
+                Some((start, length)) => {
+                    lines.push(format!(
+                        "{usage}, largest gap {length} slots at {}.{:03}",
+                        universe.number, start
+                    ));
+                    for (other_start, other_length) in &gaps {
+                        if Some((*other_start, *other_length)) != largest {
+                            lines.push(format!(
+                                "  gap {other_length} slots at {}.{:03}",
+                                universe.number, other_start
+                            ));
+                        }
+                    }
+                }
+                None => lines.push(usage),
+            }
+        }
+        for problem in problems {
+            lines.push(format!("Warning: {problem}"));
+        }
+        CommandOutcome::with_lines(lines)
+    }
+
     fn unpatch(&mut self, fixtures: Vec<u16>) -> Result<CommandOutcome, CommandError> {
         let selected = fixtures.clone();
         let message = self.mutate(|show| {
@@ -1193,6 +1458,128 @@ impl Engine {
             .selection
             .retain(|number| !fixtures.contains(number));
         Ok(CommandOutcome::message(message))
+    }
+
+    /// `Patch Import "rig.csv"`: replace the patch from a spreadsheet.
+    ///
+    /// The whole file is checked before `mutate` sees it, so a bad row leaves
+    /// the existing patch exactly as it was.
+    fn import_patch(&mut self, path: &str) -> Result<CommandOutcome, CommandError> {
+        let text = std::fs::read_to_string(path).map_err(|error| {
+            CommandError::with_hint(
+                format!("cannot read `{path}`: {error}"),
+                "`Report Patch` writes a file in this format",
+            )
+        })?;
+        let parsed = csv::parse_patch(&text).map_err(CommandError::new)?;
+
+        let mut fixtures = Vec::with_capacity(parsed.rows.len());
+        let mut numbers = BTreeSet::new();
+        let mut placed: Vec<(u16, PatchRange)> = Vec::new();
+        for (index, row) in parsed.rows.iter().enumerate() {
+            let line = index + 2;
+            if !numbers.insert(row.number) {
+                return Err(CommandError::with_hint(
+                    format!("line {line}: fixture number {} appears twice", row.number),
+                    "each row needs a unique fixture number",
+                ));
+            }
+            let fixture_type = self.show.find_type(&row.type_key).ok_or_else(|| {
+                CommandError::with_hint(
+                    format!("line {line}: unknown fixture type `{}`", row.type_key),
+                    "import the fixture type first: `Import Gdtf \"file.gdtf\"`",
+                )
+            })?;
+            let mode = fixture_type.mode(&row.mode).ok_or_else(|| {
+                CommandError::with_hint(
+                    format!(
+                        "line {line}: `{}` has no mode `{}`",
+                        fixture_type.key(),
+                        row.mode
+                    ),
+                    format!(
+                        "modes: {}",
+                        fixture_type
+                            .modes
+                            .iter()
+                            .map(|mode| mode.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                )
+            })?;
+            let universe = self.show.universe(row.universe).ok_or_else(|| {
+                CommandError::with_hint(
+                    format!("line {line}: universe {} does not exist", row.universe),
+                    format!(
+                        "defined universes: {}",
+                        self.show
+                            .universes
+                            .iter()
+                            .map(|universe| universe.number.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                )
+            })?;
+            let range =
+                PatchRange::new(row.universe, row.address, mode.footprint()).ok_or_else(|| {
+                    CommandError::new(format!(
+                        "line {line}: cannot patch {} channels at {}.{:03}",
+                        mode.footprint(),
+                        row.universe,
+                        row.address
+                    ))
+                })?;
+            if !range.fits(universe.size) {
+                return Err(CommandError::new(format!(
+                    "line {line}: fixture needs {} channels at {}.{:03} but universe {} has {} slots",
+                    mode.footprint(),
+                    row.universe,
+                    row.address,
+                    row.universe,
+                    universe.size
+                )));
+            }
+            if let Some((other, _)) = placed.iter().find(|(_, other)| other.overlaps(&range)) {
+                return Err(CommandError::new(format!(
+                    "line {line}: fixture {} overlaps fixture {other} at {}.{:03}",
+                    row.number, row.universe, range.start
+                )));
+            }
+            placed.push((row.number, range));
+            fixtures.push(Fixture {
+                number: row.number,
+                name: row.name.clone(),
+                type_key: fixture_type.key(),
+                mode: mode.name.clone(),
+                universe: row.universe,
+                address: row.address,
+                home: Default::default(),
+            });
+        }
+        fixtures.sort_by_key(|fixture| fixture.number);
+        let count = fixtures.len();
+        let message = self.mutate(|show| {
+            show.fixtures = fixtures;
+            Ok(format!("Imported {count} fixtures from {path}"))
+        })?;
+        let live: BTreeSet<u16> = self
+            .show
+            .fixtures
+            .iter()
+            .map(|fixture| fixture.number)
+            .collect();
+        self.desk.selection.retain(|number| live.contains(number));
+
+        let mut lines = vec![message];
+        lines.extend(
+            parsed
+                .warnings
+                .into_iter()
+                .map(|warning| format!("Warning: {warning}")),
+        );
+        Ok(CommandOutcome::with_lines(lines))
     }
 
     fn import_gdtf(&mut self, path: &str) -> Result<CommandOutcome, CommandError> {
@@ -1850,6 +2237,127 @@ impl Engine {
             Ok(format!("Deleted palette {feature} {number}"))
         })?;
         Ok(CommandOutcome::message(message))
+    }
+
+    /// `Report <kind> [<sequence>] <file>`: write what the listings already say.
+    /// Reports are read-only: no journal entry, no undo step, no revision bump.
+    fn report(
+        &self,
+        kind: ReportKind,
+        sequence: Option<u16>,
+        path: &str,
+    ) -> Result<CommandOutcome, CommandError> {
+        let (label, text) = match kind {
+            ReportKind::Patch => ("patch", csv::write_patch(&self.patch_rows()?)),
+            ReportKind::Cues => ("cues", self.cues_report(sequence, path)?),
+            ReportKind::Palettes => ("palettes", text_of(self.palette_list())),
+            ReportKind::Status => ("status", text_of(self.status_report())),
+            ReportKind::Show => ("show", self.show_report()),
+        };
+        crate::store::write_atomic(Path::new(path), text.as_bytes())
+            .map_err(|error| CommandError::new(format!("cannot write `{path}`: {error}")))?;
+        Ok(CommandOutcome::message(format!(
+            "Wrote {label} report to {path}"
+        )))
+    }
+
+    /// One row per fixture in fixture-number order, the same columns import
+    /// reads.
+    fn patch_rows(&self) -> Result<Vec<csv::PatchRow>, CommandError> {
+        let mut fixtures: Vec<&Fixture> = self.show.fixtures.iter().collect();
+        fixtures.sort_by_key(|fixture| fixture.number);
+        let mut rows = Vec::with_capacity(fixtures.len());
+        for fixture in fixtures {
+            self.show.mode_for(fixture).map_err(|error| {
+                CommandError::new(format!("fixture {}: {error}", fixture.number))
+            })?;
+            rows.push(csv::PatchRow {
+                number: fixture.number,
+                name: fixture.name.clone(),
+                type_key: fixture.type_key.clone(),
+                mode: fixture.mode.clone(),
+                universe: fixture.universe,
+                address: fixture.address,
+            });
+        }
+        Ok(rows)
+    }
+
+    /// A cues report is CSV when the file ends in `.csv`, and the ordinary
+    /// listing otherwise. Cue values are never part of it: this is the list as
+    /// data, not a way to move programming between shows.
+    fn cues_report(&self, sequence: Option<u16>, path: &str) -> Result<String, CommandError> {
+        let sequences: Vec<&Sequence> = match sequence {
+            Some(number) => vec![self.show.sequence(number).ok_or_else(|| {
+                CommandError::with_hint(
+                    format!("sequence {number} does not exist"),
+                    "`Sequence` lists the stored cue lists",
+                )
+            })?],
+            None => self.show.sequences.iter().collect(),
+        };
+        if path.to_ascii_lowercase().ends_with(".csv") {
+            let mut rows = Vec::new();
+            for sequence in &sequences {
+                for cue in &sequence.cues {
+                    rows.push(vec![
+                        sequence.number.to_string(),
+                        format_cue_number(cue.number),
+                        cue.name.clone(),
+                        format!("{:.1}", cue.fade),
+                        format!("{:.1}", cue.delay),
+                        format_trigger(cue.trigger, cue.trigger_time),
+                        if cue.mib { "yes" } else { "no" }.to_string(),
+                        if cue.blocked { "yes" } else { "no" }.to_string(),
+                    ]);
+                }
+            }
+            return Ok(csv::write_records(
+                &[
+                    "sequence", "number", "name", "fade", "delay", "trigger", "mib", "blocked",
+                ],
+                &rows,
+            ));
+        }
+        if sequences.is_empty() {
+            return Ok(text_of(self.sequence_list(None)));
+        }
+        let mut lines = Vec::new();
+        for sequence in sequences {
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
+            lines.extend(self.sequence_list(Some(sequence.number)).lines);
+        }
+        Ok(lines.join("\n") + "\n")
+    }
+
+    /// Every listing the shell shows, in window order, as one Markdown file.
+    fn show_report(&self) -> String {
+        let playback = join_sections(vec![
+            self.sequence_list(None).lines,
+            self.executor_list(None).lines,
+        ]);
+        let pools = join_sections(vec![
+            self.group_list().lines,
+            self.world_list().lines,
+            self.filter_list().lines,
+            self.effect_list(None).lines,
+        ]);
+        let sections = [
+            ("Sheet", self.sheet().lines),
+            ("Playback", playback),
+            ("Pools", pools),
+            ("Timecode", self.timecode_list(None).lines),
+            ("Status", self.status_report().lines),
+        ];
+        let mut text = format!("# {}\n", self.show.name);
+        for (title, lines) in sections {
+            text.push_str(&format!("\n## {title}\n\n"));
+            text.push_str(&lines.join("\n"));
+            text.push('\n');
+        }
+        text
     }
 
     fn palette_list(&self) -> CommandOutcome {
@@ -5123,6 +5631,9 @@ pub const HELP: &[&str] = &[
     "At 50 / Full / Off                     apply to the current selection",
     "Clear | Clear Values | Clear All        selection / programmer values",
     "Patch Fixture 1 At 1.001 Type \"<fixture type>\" [Mode \"<mode>\"]",
+    "Clone Fixture 1 At 1.101 [Count 8] [Step 4]   copy a fixture across the rig",
+    "Patch Check / Patch Import \"rig.csv\"          check or replace the patch",
+    "Report Patch|Cues|Palettes|Status|Show [<sequence>] \"file\"",
     "Unpatch Fixture 1 Thru 3",
     "Import Gdtf \"file.gdtf\"                load a GDTF fixture type",
     "New [Show] [\"name\"]                    start an empty show",
@@ -5174,6 +5685,36 @@ pub const HELP: &[&str] = &[
     "Help                                   this list",
     "Separate several commands with `;`.",
 ];
+
+fn next_fixture_number(used: &mut BTreeSet<u16>) -> Result<u16, CommandError> {
+    let mut candidate = 1u16;
+    loop {
+        if !used.contains(&candidate) {
+            used.insert(candidate);
+            return Ok(candidate);
+        }
+        candidate = candidate
+            .checked_add(1)
+            .ok_or_else(|| CommandError::new("no free fixture numbers left"))?;
+    }
+}
+
+fn text_of(outcome: CommandOutcome) -> String {
+    let mut text = outcome.lines.join("\n");
+    text.push('\n');
+    text
+}
+
+fn join_sections(sections: Vec<Vec<String>>) -> Vec<String> {
+    let mut lines = Vec::new();
+    for section in sections {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.extend(section);
+    }
+    lines
+}
 
 /// Apply a parsed trigger to a cue. A `Go` keeps the stored time, so switching
 /// back and forth does not lose the number.
@@ -5325,6 +5866,10 @@ mod tests {
 
     fn engine() -> Engine {
         Engine::new(demo_show())
+    }
+
+    fn temp_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("openlight-engine-{}-{name}", std::process::id()))
     }
 
     fn two_fixture_engine() -> Engine {
@@ -7529,6 +8074,259 @@ mod tests {
         let frame = engine.render();
         assert_eq!(frame.slot(1, 1), Some(127), "coarse");
         assert_eq!(frame.slot(1, 2), Some(255), "fine");
+    }
+
+    #[test]
+    fn clone_copies_type_mode_home_and_numbers_from_the_next_free() {
+        let mut engine = Engine::new(demo_show());
+        engine.execute("Patch Fixture 2 At 1.201").unwrap();
+        engine.show.fixtures[0].home.insert("Dimmer".into(), 0.4);
+        let outcome = engine.execute("Clone Fixture 1 At 1.101 Count 8").unwrap();
+        assert!(outcome.lines[0].contains("8 new fixtures"), "{outcome:?}");
+
+        let clones: Vec<&Fixture> = engine
+            .show
+            .fixtures
+            .iter()
+            .filter(|fixture| fixture.address >= 101 && fixture.address < 200)
+            .collect();
+        assert_eq!(clones.len(), 8);
+        assert_eq!((clones[0].number, clones[7].number), (3, 10));
+        assert_eq!((clones[0].address, clones[7].address), (101, 129));
+        assert_eq!(clones[0].name, "Demo Wash 2");
+        assert_eq!(clones[7].name, "Demo Wash 9");
+        assert_eq!(clones[0].type_key, "OpenLight Demo Wash");
+        assert_eq!(clones[0].mode, "4ch");
+        assert_eq!(clones[0].home.get("Dimmer"), Some(&0.4));
+        assert!(engine.show.validate().is_empty());
+    }
+
+    #[test]
+    fn a_clone_that_would_overlap_changes_nothing() {
+        let mut engine = Engine::new(demo_show());
+        let before = engine.show.clone();
+
+        let error = engine.execute("Clone Fixture 1 At 1.002").unwrap_err();
+        assert!(error.message.contains("overlap fixture 1"), "{error}");
+        assert_eq!(engine.show, before);
+
+        let error = engine
+            .execute("Clone Fixture 1 At 1.101 Count 2 Step 2")
+            .unwrap_err();
+        assert!(error.message.contains("overlap clone 1"), "{error}");
+        assert_eq!(engine.show, before);
+
+        let error = engine.execute("Clone Fixture 1 At 1.510").unwrap_err();
+        assert!(error.message.contains("needs 4 slots"), "{error}");
+        assert_eq!(engine.show, before);
+    }
+
+    #[test]
+    fn patch_check_reports_usage_gaps_and_overlaps() {
+        let mut engine = Engine::new(demo_show());
+        let before = engine.revision;
+        let text = engine.execute("Patch Check").unwrap().lines.join("\n");
+        assert!(text.contains("1 fixture, 4 slots, universes 1"), "{text}");
+        assert!(text.contains("no overlaps"), "{text}");
+        assert!(
+            text.contains("universe 1: 4 of 512 slots used, largest gap 508 slots at 1.005"),
+            "{text}"
+        );
+        assert_eq!(engine.revision, before, "a check is not a change");
+
+        let mut show = demo_show();
+        show.fixtures.push(Fixture {
+            number: 2,
+            name: "Overlap".into(),
+            type_key: "OpenLight Demo Wash".into(),
+            mode: "4ch".into(),
+            universe: 1,
+            address: 2,
+            home: Default::default(),
+        });
+        let mut engine = Engine::new(show);
+        let text = engine.execute("Patch Check").unwrap().lines.join("\n");
+        assert!(text.contains("overlap: fixtures 1 and 2"), "{text}");
+
+        let mut show = demo_show();
+        show.fixtures[0].address = 510;
+        let mut engine = Engine::new(show);
+        let text = engine.execute("Patch Check").unwrap().lines.join("\n");
+        assert!(
+            text.contains("needs 4 slots but universe 1 has 512 slots"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn patch_import_replaces_the_rig_and_reads_a_quoted_comma() {
+        let path = temp_path("import.csv");
+        std::fs::write(
+            &path,
+            "number,name,type,mode,universe,address\n\
+             1,First,OpenLight Demo Wash,4ch,1,1\n\
+             2,\"Second, warm\",OpenLight Demo Wash,4ch,1,5\n",
+        )
+        .unwrap();
+        let mut engine = Engine::new(demo_show());
+        engine
+            .execute(&format!(r#"Patch Import "{}""#, path.display()))
+            .unwrap();
+        assert_eq!(engine.show.fixtures.len(), 2);
+        assert_eq!(engine.show.fixtures[1].name, "Second, warm");
+        assert_eq!(engine.show.fixtures[1].address, 5);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_bad_patch_import_leaves_every_fixture_in_place() {
+        let path = temp_path("bad-import.csv");
+        std::fs::write(
+            &path,
+            "number,name,type,mode,universe,address\n\
+             1,First,OpenLight Demo Wash,4ch,1,1\n\
+             2,Second,OpenLight Demo Wash,4ch,1,510\n",
+        )
+        .unwrap();
+        let mut engine = Engine::new(demo_show());
+        engine.execute("Fixture 1 At 50").unwrap();
+        let before = engine.show.clone();
+        let error = engine
+            .execute(&format!(r#"Patch Import "{}""#, path.display()))
+            .unwrap_err();
+        assert!(error.message.starts_with("line 3:"), "{error}");
+        assert!(error.message.contains("512 slots"), "{error}");
+        assert_eq!(engine.show, before);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_unknown_type_in_a_patch_import_names_the_import_command() {
+        let path = temp_path("unknown-type.csv");
+        std::fs::write(
+            &path,
+            "number,name,type,mode,universe,address\n1,A,Nope,4ch,1,1\n",
+        )
+        .unwrap();
+        let mut engine = Engine::new(demo_show());
+        let error = engine
+            .execute(&format!(r#"Patch Import "{}""#, path.display()))
+            .unwrap_err();
+        assert!(error.message.contains("unknown fixture type"), "{error}");
+        assert!(error.hint.unwrap().contains("Import Gdtf"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn report_patch_round_trips_through_import() {
+        let mut engine = Engine::new(demo_show());
+        let path = temp_path("patch-roundtrip.csv");
+        engine
+            .execute(&format!(r#"Report Patch "{}""#, path.display()))
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.starts_with("number,name,type,mode,universe,address"),
+            "{text}"
+        );
+        assert!(
+            text.contains("1,Demo Wash,OpenLight Demo Wash,4ch,1,1"),
+            "{text}"
+        );
+
+        let mut fresh = Engine::new(Show::new());
+        fresh.show.fixture_types.push(demo_fixture_type());
+        fresh
+            .execute(&format!(r#"Patch Import "{}""#, path.display()))
+            .unwrap();
+        assert_eq!(fresh.show.fixtures, engine.show.fixtures);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn report_cues_writes_csv_or_the_listing() {
+        let mut engine = Engine::new(demo_show());
+        engine.execute(r#"Store Cue 1 "Warm" Fade 2"#).unwrap();
+
+        let csv = temp_path("cues.csv");
+        engine
+            .execute(&format!(r#"Report Cues 1 "{}""#, csv.display()))
+            .unwrap();
+        let text = std::fs::read_to_string(&csv).unwrap();
+        assert!(
+            text.starts_with("sequence,number,name,fade,delay,trigger,mib,blocked"),
+            "{text}"
+        );
+        assert!(text.contains("1,1,Warm,2.0,0.0,Go,no,no"), "{text}");
+
+        let txt = temp_path("cues.txt");
+        engine
+            .execute(&format!(r#"Report Cues 1 "{}""#, txt.display()))
+            .unwrap();
+        let text = std::fs::read_to_string(&txt).unwrap();
+        assert!(text.contains("Sequence 1"), "{text}");
+        let _ = std::fs::remove_file(&csv);
+        let _ = std::fs::remove_file(&txt);
+    }
+
+    #[test]
+    fn report_show_contains_every_listing_and_changes_nothing() {
+        let mut engine = Engine::new(demo_show());
+        engine.execute("Fixture 1 At 50").unwrap();
+        let before_show = engine.show.clone();
+        let before_revision = engine.revision;
+        let before_selection = engine.desk.selection.clone();
+
+        let path = temp_path("show-report.md");
+        engine
+            .execute(&format!(r#"Report Show "{}""#, path.display()))
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with("# Untitled Show"), "{text}");
+        for heading in [
+            "## Sheet",
+            "## Playback",
+            "## Pools",
+            "## Timecode",
+            "## Status",
+        ] {
+            assert!(text.contains(heading), "{heading} missing from {text}");
+        }
+        let sheet = engine.execute("Sheet").unwrap().lines.join("\n");
+        assert!(text.contains(&sheet), "the sheet listing is included");
+        let sequences = engine.execute("Sequence").unwrap().lines.join("\n");
+        assert!(
+            text.contains(&sequences),
+            "the sequence listing is included"
+        );
+
+        assert_eq!(engine.show, before_show);
+        assert_eq!(engine.revision, before_revision);
+        assert_eq!(engine.desk.selection, before_selection);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reports_do_not_journal_or_bump_the_revision() {
+        let mut engine = Engine::new(demo_show());
+        let journal = temp_path("report.journal");
+        let _ = std::fs::remove_file(&journal);
+        engine.set_journal(Some(
+            crate::journal::Journal::open(journal.clone()).unwrap(),
+        ));
+        let before = engine.revision;
+
+        let path = temp_path("status-report.txt");
+        engine
+            .execute(&format!(r#"Report Status "{}""#, path.display()))
+            .unwrap();
+        assert_eq!(engine.revision, before);
+        assert_eq!(engine.journal().unwrap().entries(), 0);
+        assert_eq!(engine.journal().unwrap().rev(), 0);
+
+        engine.set_journal(None);
+        let _ = std::fs::remove_file(&journal);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

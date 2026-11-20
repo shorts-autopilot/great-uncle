@@ -15,6 +15,10 @@
 //! Clear | Clear Values | Clear All
 //! Patch Fixture 1 At 1.001 Type "X" [Mode "4ch"]
 //! Unpatch Fixture 1 Thru 3
+//! Clone Fixture 1 At 1.101 [Count 8] [Step 4]  copy a fixture across the rig
+//! Patch Check                             overlaps, gaps and overflow
+//! Patch Import "rig.csv"                  replace the patch from a spreadsheet
+//! Report Patch|Cues|Palettes|Status|Show [<sequence>] "file"
 //! Import Gdtf "file.gdtf"
 //! New [Show] ["name"]
 //! Store Palette <Feature> <n> ["name"]    capture the programmer
@@ -130,6 +134,16 @@ pub enum PlaybackRef {
     Executor(u16),
 }
 
+/// Which report `Report` writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportKind {
+    Patch,
+    Cues,
+    Palettes,
+    Status,
+    Show,
+}
+
 /// A channel set after an attribute: `Gobo 2` or `Gobo "Rotate CW"`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SetTarget {
@@ -170,6 +184,20 @@ pub enum Command {
     },
     Unpatch {
         fixtures: Vec<u16>,
+    },
+    /// `Clone Fixture 1 At 1.101 [Count 8] [Step 4]`.
+    Clone {
+        fixture: u16,
+        universe: u16,
+        address: u16,
+        count: Option<u16>,
+        step: Option<u16>,
+    },
+    /// `Patch Check`: overlaps, overflow and gaps, without changing anything.
+    PatchCheck,
+    /// `Patch Import "rig.csv"`: replace the patch from a spreadsheet.
+    ImportPatch {
+        path: String,
     },
     ImportGdtf {
         path: String,
@@ -447,6 +475,12 @@ pub enum Command {
     },
     Sheet,
     Status,
+    /// `Report <kind> [<sequence>] "<file>"`.
+    Report {
+        kind: ReportKind,
+        sequence: Option<u16>,
+        path: String,
+    },
     Save {
         path: String,
     },
@@ -485,7 +519,9 @@ impl Command {
             | Command::ListMasters
             | Command::ListEffects { .. }
             | Command::ListTimecodes { .. }
-            | Command::Unlock { .. } => false,
+            | Command::Unlock { .. }
+            | Command::PatchCheck
+            | Command::Report { .. } => false,
             // Listing a channel's sets changes nothing.
             Command::SetChannelSet { target: None, .. } => false,
             // Listing a cue's timing table changes nothing.
@@ -840,6 +876,9 @@ impl Parser<'_> {
             self.expect_end()?;
             return Ok(Command::Clear { all, values });
         }
+        if word.eq_ignore_ascii_case("clone") {
+            return self.clone_fixture();
+        }
         if word.eq_ignore_ascii_case("patch") {
             return self.patch();
         }
@@ -1007,6 +1046,9 @@ impl Parser<'_> {
         if word.eq_ignore_ascii_case("status") {
             self.expect_end()?;
             return Ok(Command::Status);
+        }
+        if word.eq_ignore_ascii_case("report") {
+            return self.report();
         }
         if word.eq_ignore_ascii_case("output") {
             self.eat_word("status");
@@ -1357,7 +1399,74 @@ impl Parser<'_> {
         }
     }
 
+    /// `Report <kind> [<sequence>] <file>`. Only a cues report takes a target.
+    fn report(&mut self) -> Result<Command, CommandError> {
+        let name = self.name_token("report kind")?;
+        let kind = match name.to_ascii_lowercase().as_str() {
+            "patch" => ReportKind::Patch,
+            "cues" | "cue" => ReportKind::Cues,
+            "palettes" | "palette" => ReportKind::Palettes,
+            "status" => ReportKind::Status,
+            "show" => ReportKind::Show,
+            _ => {
+                return Err(CommandError::with_hint(
+                    format!("unknown report kind `{name}`"),
+                    "use `Report Patch`, `Cues`, `Palettes`, `Status` or `Show`",
+                ))
+            }
+        };
+        let sequence = if kind == ReportKind::Cues && matches!(self.peek(), Some(Token::Number(_)))
+        {
+            Some(self.whole_number("sequence number")?)
+        } else {
+            None
+        };
+        let path = self.path_token()?;
+        self.expect_end()?;
+        Ok(Command::Report {
+            kind,
+            sequence,
+            path,
+        })
+    }
+
+    /// `Clone Fixture <n> At <universe>.<address> [Count <k>] [Step <slots>]`.
+    fn clone_fixture(&mut self) -> Result<Command, CommandError> {
+        self.eat_word("fixture");
+        let fixture = self.fixture_number()?;
+        self.eat_word("at");
+        let (universe, address) = self.patch_address()?;
+        let mut count = None;
+        let mut step = None;
+        loop {
+            if self.eat_word("count") {
+                count = Some(self.whole_number("clone count")?);
+            } else if self.eat_word("step") {
+                step = Some(self.whole_number("clone step")?);
+            } else {
+                break;
+            }
+        }
+        self.expect_end()?;
+        Ok(Command::Clone {
+            fixture,
+            universe,
+            address,
+            count,
+            step,
+        })
+    }
+
     fn patch(&mut self) -> Result<Command, CommandError> {
+        if self.eat_word("check") {
+            self.expect_end()?;
+            return Ok(Command::PatchCheck);
+        }
+        if self.eat_word("import") {
+            let path = self.path_token()?;
+            self.expect_end()?;
+            return Ok(Command::ImportPatch { path });
+        }
         self.eat_word("fixture");
         let fixture = self.fixture_number()?;
         self.eat_word("at");
@@ -3345,6 +3454,8 @@ mod tests {
             "Preview",
             "Preview Off",
             "Fixture 1 Gobo",
+            "Patch Check",
+            "Report Status \"status.txt\"",
         ] {
             assert!(!command(line).mutates(), "{line} must not mutate");
         }
@@ -3359,6 +3470,7 @@ mod tests {
             "Store Cue 1",
             "Delete Cue 1",
             "Patch Fixture 1 At 1.001",
+            "Clone Fixture 1 At 1.101",
             "New",
             "Save \"a.olshow\"",
             "Import Gdtf \"a.gdtf\"",
@@ -3372,6 +3484,80 @@ mod tests {
         assert!(command("Lock").mutates());
         assert!(command("Blind").mutates());
         assert!(command("Highlight").mutates());
+    }
+
+    #[test]
+    fn parses_clone_patch_tools_and_reports() {
+        assert_eq!(
+            command("Clone Fixture 1 At 1.101"),
+            Command::Clone {
+                fixture: 1,
+                universe: 1,
+                address: 101,
+                count: None,
+                step: None
+            }
+        );
+        assert_eq!(
+            command("Clone Fixture 2 At 2.010 Count 8 Step 6"),
+            Command::Clone {
+                fixture: 2,
+                universe: 2,
+                address: 10,
+                count: Some(8),
+                step: Some(6)
+            }
+        );
+        assert_eq!(command("Patch Check"), Command::PatchCheck);
+        assert_eq!(
+            command(r#"Patch Import "rig.csv""#),
+            Command::ImportPatch {
+                path: "rig.csv".into()
+            }
+        );
+        assert_eq!(
+            command(r#"Report Patch "patch.csv""#),
+            Command::Report {
+                kind: ReportKind::Patch,
+                sequence: None,
+                path: "patch.csv".into()
+            }
+        );
+        assert_eq!(
+            command(r#"Report Cues 3 "cues.csv""#),
+            Command::Report {
+                kind: ReportKind::Cues,
+                sequence: Some(3),
+                path: "cues.csv".into()
+            }
+        );
+        assert_eq!(
+            command(r#"Report Cues "cues.csv""#),
+            Command::Report {
+                kind: ReportKind::Cues,
+                sequence: None,
+                path: "cues.csv".into()
+            }
+        );
+        assert_eq!(
+            command(r#"Report Show "show.md""#),
+            Command::Report {
+                kind: ReportKind::Show,
+                sequence: None,
+                path: "show.md".into()
+            }
+        );
+        assert!(error("Clone Fixture 1 At 1.101 Count 0")
+            .message
+            .contains("clone count 0"));
+        assert!(error(r#"Report Nope "x""#)
+            .hint
+            .unwrap()
+            .contains("Report Patch"));
+        assert!(!command(r#"Report Status "status.txt""#).mutates());
+        assert!(!command("Patch Check").mutates());
+        assert!(command("Clone Fixture 1 At 1.101").mutates());
+        assert!(command(r#"Patch Import "rig.csv""#).mutates());
     }
 
     #[test]

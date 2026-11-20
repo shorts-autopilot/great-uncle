@@ -19,7 +19,7 @@ profiles that you supply.
 | 2 | Palettes, cues, sequences, executor faders | done — see [`docs/PHASE2.md`](docs/PHASE2.md) |
 | 3 | Groups, worlds, filters, masters, effects | done — see [`docs/PHASE3.md`](docs/PHASE3.md) |
 | 4 | Timecode, move-in-black, undo, first UI shell | done — see [`docs/PHASE4.md`](docs/PHASE4.md) |
-| 5+ | desk state, output, journal, blackout/lock, cues, timing, home, cue editing, viewing, 16-bit | in progress — 03, 04, 05, 06, 01, 02, 07, 10, 09 and 08 built; see [`docs/PHASE5.md`](docs/PHASE5.md) |
+| 5+ | desk state, output, journal, blackout/lock, cues, timing, home, cue editing, viewing, 16-bit, patch tools | in progress — 03, 04, 05, 06, 01, 02, 07, 10, 09, 08 and 11 built; see [`docs/PHASE5.md`](docs/PHASE5.md) |
 | 5+ | patch tools, GUI, … | designed — see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 
 It is a console with a command line, a full-screen terminal shell, a script
@@ -57,13 +57,18 @@ without sending it and prints its first non-zero channels in `Sheet`, while
 can never be stored. A profile's fine DMX slot is real precision now: a 16-bit
 attribute renders two bytes, and a channel's named sets are addressable by
 number or exact name (`Fixture 1 Gobo 2`, `Fixture 1 Gobo "Rotate CW"`), with a
-listing that shows every band and where the wheel currently lands. There is no
-desktop GUI yet.
+listing that shows every band and where the wheel currently lands. Patching a
+whole rig no longer means typing every address: `Clone Fixture 1 At 1.101 Count
+8` copies a fixture across a universe atomically, `Patch Check` reports overlaps,
+gaps and footprint overflow, and `Patch Import` / `Report Patch` round-trip the
+patch through a spreadsheet. `Report Cues`, `Report Palettes`, `Report Status`
+and `Report Show` write the listings as files, and `--check` runs the patch
+check for CI. There is no desktop GUI yet.
 
 ## Quick start
 
 ```bash
-cargo test --workspace            # 327 tests, no hardware needed
+cargo test --workspace            # 350 tests, no hardware needed
 cargo run -p openlight-console    # interactive console
 cargo run -p openlight-console -- --ui   # full-screen terminal shell
 ```

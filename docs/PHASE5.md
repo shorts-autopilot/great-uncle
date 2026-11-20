@@ -169,6 +169,40 @@ both the physical band and the DMX bytes, including the fine byte on a 16-bit
 channel. A mode that uses one slot twice — coarse or fine — is rejected at load
 with both attributes named. Show v10.
 
+## Patch tools and reports (11)
+
+Patching is no longer one fixture at a time. `Clone Fixture 1 At 1.101 Count 8`
+copies the source's type, mode, home and name, numbers the copies from the next
+free fixture number, and places them at the source mode's footprint apart (or
+`Step` slots apart). Every range is checked against the whole patch and the
+clones among themselves before anything is inserted, so a failed clone leaves
+the rig untouched.
+
+```
+Clone Fixture 1 At 1.101 Count 8     eight copies, atomically
+Patch Check                          usage, gaps, overlaps, overflow
+Patch Import "rig.csv"               replace the patch from a spreadsheet
+Report Patch "patch.csv"            one row per fixture, same columns
+Report Cues 1 "cues.csv"            the cue list as data
+Report Show "show.md"               every shell listing as one document
+```
+
+`Patch Check` is read-only and reports gaps larger than eight slots, the largest
+one with its address, plus any overlap, overflow, undefined universe or
+unresolvable type/mode. `--check` prints it and exits non-zero on a problem, so
+a rig can be checked before a fit-up.
+
+The patch CSV has exactly `number,name,type,mode,universe,address`. Import
+requires the header, matches it case-insensitively, ignores unknown columns with
+a warning, and validates every row before replacing the patch: duplicate
+numbers, unknown types, missing modes, overlapping ranges and overflow all name
+the row and leave the old patch in place. Quoted fields may contain a comma; a
+malformed quote or a row of the wrong width is refused rather than guessed at.
+
+Reports route through the same listing functions the shell uses, so a report
+cannot disagree with the screen. They write a file and nothing else: no journal
+entry, no undo step, no revision bump.
+
 ## Known limitations
 
 - **No DMX hardware in the test environment.** Timing is exercised against a
@@ -180,5 +214,5 @@ with both attributes named. Show v10.
 - **Home is per fixture and attribute.** There is no per-mode home table, no
   park/default distinction and no automatic re-seed when a profile is
   re-imported.
-- **Only ten of the eighteen roadmap designs are built.** The remaining
-  eight are listed in [`ROADMAP.md`](ROADMAP.md).
+- **Only eleven of the eighteen roadmap designs are built.** The remaining
+  seven are listed in [`ROADMAP.md`](ROADMAP.md).

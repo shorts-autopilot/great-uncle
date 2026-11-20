@@ -3,7 +3,7 @@
 Phase 4 closed the first loop: the desk plays cues, follows timecode, moves in
 black and can undo. This document is the **design set for the next eighteen
 pieces of work**, ranked by value to a working desk. Each item has a design in
-[`docs/design/`](design/). Ten of them are built so far, in the order the
+[`docs/design/`](design/). Eleven of them are built so far, in the order the
 designs ask for:
 
 | Item | State |
@@ -18,7 +18,8 @@ designs ask for:
 | 10 cue-editing safety | **built** — cue `blocked`/`shield`, `Sequence::rebase`, `Update`, `Store … Merge`/`Replace`, `Cue n Move`/`Copy`/`Show`, `Delete Cue` names a blocking timecode event, show v9 |
 | 09 blind, preview and highlight | **built** — desk `blind`/`highlight` and a transient preview, `Blind [Off]`, `Preview [Cue n] [Sequence n]` / `Preview Off`, `Highlight [Off]`, highlight as a render-stage override that no store can capture |
 | 08 16-bit attributes and channel sets | **built** — `Channel.fine_offset`, one 16-bit interpolation split into coarse and fine bytes, `raw16_from_level` / `level_from_raw16`, named sets addressable by index or exact name, slot-collision validation, show v10 |
-| the other eight | designed, not built |
+| 11 patch tools and reports | **built** — atomic `Clone Fixture … Count … Step …`, read-only `Patch Check` with gap/overlap/overflow reporting, `Patch Import` / `Report Patch` through a minimal CSV, `Report Cues|Palettes|Status|Show`, `--check` |
+| the other seven | designed, not built |
 
 The designs are written to be implemented one at a time. Every one names the
 files it touches, the command grammar it adds, the show/desk format change it
@@ -82,9 +83,9 @@ beneath everything (07), cue editing that cannot silently change other cues
 (10), a way to see what you are doing without the rig seeing it (09), and
 attributes that need more than one byte (08).
 
-The last eight are reach: patch tooling (11), remote surfaces (12, 13),
-animation and timecode depth (14, 15), the command line as a product (16),
-release engineering (17), and only then a native window (18).
+The last seven are reach: remote surfaces (12, 13), animation and timecode
+depth (14, 15), the command line as a product (16), release engineering (17),
+and only then a native window (18).
 
 ## Three kinds of state
 

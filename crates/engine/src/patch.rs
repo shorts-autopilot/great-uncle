@@ -40,6 +40,43 @@ impl PatchRange {
     }
 }
 
+/// Unpatched runs in one universe, as `(start, length)`, in ascending start
+/// order. Runs of exactly `minimum` slots are not reported: the patch check
+/// asks for gaps larger than a threshold.
+///
+/// Ranges are clipped to `size` and overlaps are merged, so a broken patch still
+/// produces sensible gaps instead of double-counting or underflowing.
+pub fn gaps(ranges: &[PatchRange], size: u16, minimum: u16) -> Vec<(u16, u16)> {
+    let mut spans: Vec<(u16, u16)> = ranges
+        .iter()
+        .filter(|range| range.start <= size)
+        .map(|range| (range.start, range.end.min(size)))
+        .collect();
+    spans.sort_unstable();
+
+    let mut runs = Vec::new();
+    let mut cursor = 1u16;
+    for (start, end) in spans {
+        if start > cursor {
+            let length = start - cursor;
+            if length > minimum {
+                runs.push((cursor, length));
+            }
+        }
+        cursor = cursor.max(end.saturating_add(1));
+        if cursor > size {
+            break;
+        }
+    }
+    if cursor <= size {
+        let length = size - cursor + 1;
+        if length > minimum {
+            runs.push((cursor, length));
+        }
+    }
+    runs
+}
+
 /// All overlapping pairs, as `(lower fixture number, higher fixture number)`.
 pub fn conflicts(ranges: &[(u16, PatchRange)]) -> Vec<(u16, u16)> {
     let mut pairs = Vec::new();
@@ -91,6 +128,48 @@ mod tests {
             (9, PatchRange::new(1, 100, 1).unwrap()),
         ];
         assert_eq!(conflicts(&ranges), vec![(3, 7)]);
+    }
+
+    #[test]
+    fn gaps_report_runs_longer_than_the_minimum() {
+        let ranges = [
+            PatchRange::new(1, 1, 4).unwrap(),
+            PatchRange::new(1, 10, 3).unwrap(),
+        ];
+        assert_eq!(gaps(&ranges, 20, 2), vec![(5, 5), (13, 8)]);
+        assert_eq!(
+            gaps(&ranges, 20, 8),
+            Vec::new(),
+            "a run of exactly the minimum is not reported"
+        );
+    }
+
+    #[test]
+    fn a_range_ending_at_the_universe_size_has_no_trailing_gap() {
+        let ranges = [
+            PatchRange::new(1, 1, 4).unwrap(),
+            PatchRange::new(1, 8, 13).unwrap(),
+        ];
+        assert_eq!(gaps(&ranges, 20, 2), vec![(5, 3)]);
+    }
+
+    #[test]
+    fn a_full_universe_has_no_gaps() {
+        assert!(gaps(&[PatchRange::new(1, 1, 20).unwrap()], 20, 0).is_empty());
+        assert_eq!(
+            gaps(&[], 20, 2),
+            vec![(1, 20)],
+            "an empty universe is one big gap"
+        );
+    }
+
+    #[test]
+    fn overlapping_ranges_are_merged_before_gaps_are_measured() {
+        let ranges = [
+            PatchRange::new(1, 1, 10).unwrap(),
+            PatchRange::new(1, 5, 11).unwrap(),
+        ];
+        assert_eq!(gaps(&ranges, 20, 2), vec![(16, 5)]);
     }
 
     #[test]
