@@ -17,7 +17,13 @@
 //! Store Palette <Feature> <n> ["name"]    capture the programmer
 //! Delete Palette <Feature> <n> | Palette
 //! Store Cue 1 ["name"] [Fade 2] [Delay 0.5] [Mib [On|Off]] [Sequence 2]
+//! Store Cue 1 Merge | Replace           merge into the cue, or hold only the programmer
 //! Store Cue 2 Follow 1.5 | Time 0.5      automatic triggers
+//! Update [Cue 2] [Sequence 1]            merge the programmer into a cue
+//! Cue 2 Block | Unblock                 stop / resume tracking
+//! Cue 2 Shield Pan [Off] | Shield       assert an attribute, or list the shields
+//! Cue 2 Move 5 | Cue 2 Copy 5 [Sequence 2]
+//! Cue 2 Show                            print the cue's absolute state
 //! Cue 2 Trigger Go | Follow 1 | Time 2   retime without re-storing
 //! Delete Cue 1 [Sequence 2] | Sequence [2]
 //! Assign Executor 1 Sequence 1
@@ -99,6 +105,18 @@ pub struct TriggerArg {
     pub time: f64,
 }
 
+/// How `Store Cue` treats what the cue already holds.
+///
+/// `Merge` is the default: the programmer's attributes are written into the
+/// cue and everything else it stored stays. `Replace` is the explicit "make
+/// this cue match the programmer" form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StoreMode {
+    #[default]
+    Merge,
+    Replace,
+}
+
 /// Which playback a `Go`, `Back`, `Pause` or `Release` addresses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaybackRef {
@@ -155,6 +173,44 @@ pub enum Command {
         delay: Option<f64>,
         mib: Option<bool>,
         trigger: Option<TriggerArg>,
+        mode: StoreMode,
+    },
+    /// `Update [Cue 2] [Sequence 1]`: merge the programmer into a cue, defaulting
+    /// to the cue currently running on that sequence.
+    Update {
+        sequence: u16,
+        cue: Option<f64>,
+    },
+    /// `Cue 2 Block` / `Cue 2 Unblock`.
+    CueBlock {
+        sequence: u16,
+        number: f64,
+        on: bool,
+    },
+    /// `Cue 2 Shield Pan [Off]`, or no attribute to list the shields.
+    CueShield {
+        sequence: u16,
+        number: f64,
+        attribute: Option<String>,
+        off: bool,
+    },
+    /// `Cue 2 Show`: the absolute state, not the stored delta.
+    CueShow {
+        sequence: u16,
+        number: f64,
+    },
+    /// `Cue 2 Move 5`: renumber a cue, keeping every look where it was.
+    CueMove {
+        sequence: u16,
+        number: f64,
+        to: f64,
+    },
+    /// `Cue 2 Copy 5 [Sequence 2]`: deep-copy a cue, timing and shield included.
+    CueCopy {
+        sequence: u16,
+        number: f64,
+        to: f64,
+        target: Option<u16>,
     },
     /// `Cue 2 Trigger Follow 1.5`: retime a stored cue without re-storing it.
     CueTrigger {
@@ -406,6 +462,11 @@ impl Command {
                 off: false,
                 ..
             } => false,
+            // Listing a cue's shields or absolute state changes nothing.
+            Command::CueShield {
+                attribute: None, ..
+            }
+            | Command::CueShow { .. } => false,
             // Listing a fixture's home changes nothing.
             Command::SetHome {
                 attribute: None, ..
@@ -604,6 +665,14 @@ const RESERVED: &[&str] = &[
     "spread",
     "on",
     "mib",
+    "merge",
+    "replace",
+    "block",
+    "unblock",
+    "shield",
+    "move",
+    "copy",
+    "update",
     "timecode",
     "fps",
     "add",
@@ -787,6 +856,9 @@ impl Parser<'_> {
         }
         if word.eq_ignore_ascii_case("cue") {
             return self.cue_command();
+        }
+        if word.eq_ignore_ascii_case("update") {
+            return self.update();
         }
         if word.eq_ignore_ascii_case("sequence") || word.eq_ignore_ascii_case("sequences") {
             let only = if matches!(self.peek(), Some(Token::Number(_))) {
@@ -1548,6 +1620,7 @@ impl Parser<'_> {
             let mut mib = None;
             let mut trigger = None;
             let mut sequence = 1;
+            let mut mode = StoreMode::Merge;
             loop {
                 if self.eat_word("fade") {
                     fade = Some(self.seconds("fade")?);
@@ -1572,6 +1645,10 @@ impl Parser<'_> {
                         self.eat_word("on");
                         mib = Some(true);
                     }
+                } else if self.eat_word("merge") {
+                    mode = StoreMode::Merge;
+                } else if self.eat_word("replace") {
+                    mode = StoreMode::Replace;
                 } else if self.eat_word("sequence") {
                     sequence = self.whole_number("sequence number")?;
                 } else if self.eat_word("in") {
@@ -1598,6 +1675,7 @@ impl Parser<'_> {
                 delay,
                 mib,
                 trigger,
+                mode,
             });
         }
         Err(CommandError::with_hint(
@@ -1780,6 +1858,75 @@ impl Parser<'_> {
                 stagger,
             });
         }
+        if self.eat_word("block") {
+            let sequence = self.sequence_suffix()?;
+            self.expect_end()?;
+            return Ok(Command::CueBlock {
+                sequence,
+                number,
+                on: true,
+            });
+        }
+        if self.eat_word("unblock") {
+            let sequence = self.sequence_suffix()?;
+            self.expect_end()?;
+            return Ok(Command::CueBlock {
+                sequence,
+                number,
+                on: false,
+            });
+        }
+        if self.eat_word("show") {
+            let sequence = self.sequence_suffix()?;
+            self.expect_end()?;
+            return Ok(Command::CueShow { sequence, number });
+        }
+        if self.eat_word("move") {
+            let to = self.cue_number()?;
+            let sequence = self.sequence_suffix()?;
+            self.expect_end()?;
+            return Ok(Command::CueMove {
+                sequence,
+                number,
+                to,
+            });
+        }
+        if self.eat_word("copy") {
+            let to = self.cue_number()?;
+            let target = if self.eat_word("sequence") {
+                Some(self.whole_number("sequence number")?)
+            } else if self.eat_word("in") {
+                self.eat_word("sequence");
+                Some(self.whole_number("sequence number")?)
+            } else {
+                None
+            };
+            self.expect_end()?;
+            return Ok(Command::CueCopy {
+                sequence: 1,
+                number,
+                to,
+                target,
+            });
+        }
+        if self.eat_word("shield") {
+            let attribute = self.optional_attribute_name();
+            let off = self.eat_word("off");
+            if off && attribute.is_none() {
+                return Err(CommandError::with_hint(
+                    "`Shield Off` needs an attribute",
+                    "use `Cue 2 Shield Pan Off`, or `Cue 2 Shield` to list",
+                ));
+            }
+            let sequence = self.sequence_suffix()?;
+            self.expect_end()?;
+            return Ok(Command::CueShield {
+                sequence,
+                number,
+                attribute,
+                off,
+            });
+        }
         if self.eat_word("timing") {
             let attribute = self.optional_attribute_name();
             let mut fade = None;
@@ -1826,8 +1973,27 @@ impl Parser<'_> {
         }
         Err(CommandError::with_hint(
             format!("cue {number} needs an action"),
-            "use `Cue 2 Trigger Follow 1.5`, `Cue 2 Timing ColorAdd_R Fade 0.5`, or `Sequence 1` to list the cues",
+            "use `Cue 2 Show`, `Cue 2 Trigger Follow 1.5`, `Cue 2 Timing ColorAdd_R Fade 0.5`, or `Sequence 1` to list the cues",
         ))
+    }
+
+    /// `Update [Cue <n>] [Sequence <n>]`: merge the programmer into a named cue,
+    /// or into the cue that sequence is running.
+    fn update(&mut self) -> Result<Command, CommandError> {
+        let cue = if self.eat_word("cue") {
+            Some(self.cue_number()?)
+        } else {
+            None
+        };
+        let mut sequence = 1;
+        if self.eat_word("sequence") {
+            sequence = self.whole_number("sequence number")?;
+        } else if self.eat_word("in") {
+            self.eat_word("sequence");
+            sequence = self.whole_number("sequence number")?;
+        }
+        self.expect_end()?;
+        Ok(Command::Update { sequence, cue })
     }
 
     fn sequence_suffix(&mut self) -> Result<u16, CommandError> {
@@ -2208,6 +2374,7 @@ mod tests {
                 delay: Some(0.5),
                 mib: None,
                 trigger: None,
+                mode: StoreMode::Merge,
             }
         );
         assert_eq!(
@@ -2220,6 +2387,7 @@ mod tests {
                 delay: None,
                 mib: None,
                 trigger: None,
+                mode: StoreMode::Merge,
             }
         );
         assert_eq!(
@@ -2232,6 +2400,7 @@ mod tests {
                 delay: None,
                 mib: Some(true),
                 trigger: None,
+                mode: StoreMode::Merge,
             }
         );
         assert_eq!(
@@ -2244,6 +2413,7 @@ mod tests {
                 delay: None,
                 mib: Some(false),
                 trigger: None,
+                mode: StoreMode::Merge,
             }
         );
         assert_eq!(
@@ -2259,6 +2429,7 @@ mod tests {
                     trigger: Trigger::Follow,
                     time: 1.5,
                 }),
+                mode: StoreMode::Merge,
             }
         );
         assert_eq!(
@@ -2374,6 +2545,136 @@ mod tests {
                 number: 1
             }
         );
+    }
+
+    #[test]
+    fn parses_cue_editing_commands() {
+        assert_eq!(
+            command("Store Cue 4 Replace"),
+            Command::StoreCue {
+                sequence: 1,
+                number: 4.0,
+                name: None,
+                fade: None,
+                delay: None,
+                mib: None,
+                trigger: None,
+                mode: StoreMode::Replace,
+            }
+        );
+        assert_eq!(
+            command("Store Cue 4 Merge"),
+            Command::StoreCue {
+                sequence: 1,
+                number: 4.0,
+                name: None,
+                fade: None,
+                delay: None,
+                mib: None,
+                trigger: None,
+                mode: StoreMode::Merge,
+            }
+        );
+        assert_eq!(
+            command("Update"),
+            Command::Update {
+                sequence: 1,
+                cue: None
+            }
+        );
+        assert_eq!(
+            command("Update Cue 2"),
+            Command::Update {
+                sequence: 1,
+                cue: Some(2.0)
+            }
+        );
+        assert_eq!(
+            command("Update Sequence 3"),
+            Command::Update {
+                sequence: 3,
+                cue: None
+            }
+        );
+        assert_eq!(
+            command("Cue 2 Block"),
+            Command::CueBlock {
+                sequence: 1,
+                number: 2.0,
+                on: true
+            }
+        );
+        assert_eq!(
+            command("Cue 2 Unblock Sequence 2"),
+            Command::CueBlock {
+                sequence: 2,
+                number: 2.0,
+                on: false
+            }
+        );
+        assert_eq!(
+            command("Cue 2 Shield Pan"),
+            Command::CueShield {
+                sequence: 1,
+                number: 2.0,
+                attribute: Some("Pan".into()),
+                off: false
+            }
+        );
+        assert_eq!(
+            command("Cue 2 Shield Pan Off"),
+            Command::CueShield {
+                sequence: 1,
+                number: 2.0,
+                attribute: Some("Pan".into()),
+                off: true
+            }
+        );
+        assert_eq!(
+            command("Cue 2 Shield"),
+            Command::CueShield {
+                sequence: 1,
+                number: 2.0,
+                attribute: None,
+                off: false
+            }
+        );
+        assert_eq!(
+            command("Cue 2 Show"),
+            Command::CueShow {
+                sequence: 1,
+                number: 2.0
+            }
+        );
+        assert_eq!(
+            command("Cue 2 Move 5"),
+            Command::CueMove {
+                sequence: 1,
+                number: 2.0,
+                to: 5.0
+            }
+        );
+        assert_eq!(
+            command("Cue 2 Copy 5 Sequence 2"),
+            Command::CueCopy {
+                sequence: 1,
+                number: 2.0,
+                to: 5.0,
+                target: Some(2)
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_incomplete_cue_editing_commands() {
+        assert!(error("Cue 2 Shield Off")
+            .message
+            .contains("needs an attribute"));
+        assert!(error("Update Cue").message.contains("cue number"));
+        assert!(error("Cue 2 Move").message.contains("cue number"));
+        assert!(error("Cue 2 Copy 5 Sequence")
+            .message
+            .contains("sequence number"));
     }
 
     #[test]

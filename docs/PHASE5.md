@@ -103,6 +103,26 @@ not mention colour does not freeze it. Loading a pre-v8 show reports every
 fixture whose profile default is not zero before the operator sees it move.
 Show v8.
 
+## Cue-editing safety (10)
+
+A cue can stop tracking: `Cue n Block` materialises the state at that cue and
+stores it whole, so later edits to earlier cues no longer move it; `Unblock`
+turns it back into a delta. `Cue n Shield <attribute>` asserts one attribute at
+the level it has at that cue and stores that level, so the shield survives the
+very upstream edit it exists to block; `Cue n Shield` lists what is shielded and
+`Cue n Shield <attribute> Off` removes the assertion. Both are visible in the
+`Sequence` listing and in `Cue n Show`, which prints the cue's absolute state —
+the look it actually produces, not the stored delta.
+
+`Update [Cue n] [Sequence n]` merges the programmer's touched attributes into a
+cue, defaulting to the cue that sequence is running, without retyping the list.
+`Store Cue n` now merges by default, keeping values the cue already held;
+`Store Cue n Replace` keeps exactly what the programmer has. `Cue n Move m` and
+`Cue n Copy m [Sequence s]` renumber or copy a cue, timing and shields included,
+and `Sequence::rebase` rewrites every delta so no cue's look moves. `Delete Cue`
+refuses when a timecode event starts the cue and names the event and position
+instead of failing with a generic validation error. Show v9.
+
 ## Known limitations
 
 - **No DMX hardware in the test environment.** Timing is exercised against a
@@ -114,5 +134,5 @@ Show v8.
 - **Home is per fixture and attribute.** There is no per-mode home table, no
   park/default distinction and no automatic re-seed when a profile is
   re-imported.
-- **Only seven of the eighteen roadmap designs are built.** The remaining
-  eleven are listed in [`ROADMAP.md`](ROADMAP.md).
+- **Only eight of the eighteen roadmap designs are built.** The remaining
+  ten are listed in [`ROADMAP.md`](ROADMAP.md).

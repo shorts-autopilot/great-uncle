@@ -13,6 +13,12 @@
 //! `Time` counts from the previous cue's start. Both are resolved by
 //! [`Playback::due`], a pure function of the show, the runs and an instant, so
 //! the chain can be tested without a clock.
+//!
+//! A cue can stop tracking (`blocked`), which turns its stored levels into a
+//! complete state instead of a delta, and it can shield an attribute at a fixed
+//! level so an edit upstream does not move it. Structural edits (move, copy,
+//! delete, block) go through [`Sequence::rebase`], which rewrites the deltas so
+//! every cue's absolute look is unchanged.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -191,6 +197,14 @@ pub struct Cue {
     /// the cue's target state lists the fixtures.
     #[serde(default)]
     pub stagger: f64,
+    /// Stop tracking here: `levels` is the complete state, not a delta.
+    #[serde(default)]
+    pub blocked: bool,
+    /// Attributes asserted at a fixed value here: an upstream edit does not
+    /// change them. The value is stored rather than just a flag, because a flag
+    /// cannot survive the very upstream edit it is meant to block.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub shield: BTreeMap<String, f64>,
     /// Tracked values: only what changes relative to the previous cue.
     #[serde(default)]
     pub levels: Levels,
@@ -270,7 +284,7 @@ impl Sequence {
     pub fn state_at(&self, index: usize) -> Levels {
         let mut state = Levels::new();
         for cue in self.cues.iter().take(index.saturating_add(1)) {
-            state.overlay(&cue.levels);
+            state = cue_state(cue, &state);
         }
         state
     }
@@ -279,10 +293,84 @@ impl Sequence {
     pub fn state_before(&self, index: usize) -> Levels {
         let mut state = Levels::new();
         for cue in self.cues.iter().take(index) {
-            state.overlay(&cue.levels);
+            state = cue_state(cue, &state);
         }
         state
     }
+
+    /// Rewrite every cue's stored levels so the accumulated state at each cue is
+    /// unchanged, respecting blocked cues and shields.
+    ///
+    /// Every structural edit (move, copy, delete, block/unblock) and every store
+    /// that can change an earlier cue goes through this. Without it, reordering
+    /// deltas silently changes looks, and a shield would only hold until the
+    /// next edit upstream.
+    pub fn rebase(&mut self) {
+        let mut state = Levels::new();
+        for cue in &mut self.cues {
+            let absolute = cue_state(cue, &state);
+            cue.levels = if cue.blocked {
+                absolute.clone()
+            } else {
+                absolute.difference(&state)
+            };
+            state = absolute;
+        }
+    }
+
+    /// Remove a shield and put the attribute back into tracking. The level a
+    /// rebase baked into this cue's delta belonged to the shield, so it is
+    /// dropped; the cue inherits the upstream value again.
+    pub fn remove_shield(&mut self, index: usize, attribute: &str) {
+        let Some(cue) = self.cues.get_mut(index) else {
+            return;
+        };
+        let key = cue
+            .shield
+            .keys()
+            .find(|name| name.eq_ignore_ascii_case(attribute))
+            .cloned();
+        if let Some(key) = key {
+            cue.shield.remove(&key);
+        }
+        if !cue.blocked {
+            let fixtures: Vec<u16> = cue.levels.fixtures().map(|(number, _)| number).collect();
+            for fixture in fixtures {
+                cue.levels.remove(fixture, attribute);
+            }
+        }
+        self.rebase();
+    }
+}
+
+/// The complete state a cue leaves behind.
+///
+/// A blocked cue replaces the inherited state; a tracking cue overlays its
+/// delta. Shields are applied last so the stored level wins over whatever the
+/// accumulated state says.
+fn cue_state(cue: &Cue, inherited: &Levels) -> Levels {
+    let mut absolute = if cue.blocked {
+        cue.levels.clone()
+    } else {
+        let mut absolute = inherited.clone();
+        absolute.overlay(&cue.levels);
+        absolute
+    };
+    for (attribute, level) in &cue.shield {
+        let fixtures: Vec<u16> = absolute
+            .fixtures()
+            .filter(|(_, attributes)| {
+                attributes
+                    .keys()
+                    .any(|name| name.eq_ignore_ascii_case(attribute))
+            })
+            .map(|(number, _)| number)
+            .collect();
+        for fixture in fixtures {
+            absolute.set(fixture, attribute, *level);
+        }
+    }
+    absolute
 }
 
 /// A playback can be started from a sequence directly or through an executor.
@@ -904,6 +992,8 @@ mod tests {
             trigger_time: 0.0,
             timing: BTreeMap::new(),
             stagger: 0.0,
+            blocked: false,
+            shield: BTreeMap::new(),
             levels,
         }
     }
@@ -1812,5 +1902,189 @@ mod tests {
         assert_eq!(format_cue_number(2.25), "2.25");
         assert_eq!(format_cue_number(2.125), "2.125");
         assert_eq!(format_cue_number(f64::NAN), "?");
+    }
+
+    fn states(sequence: &Sequence) -> Vec<Levels> {
+        (0..sequence.cues.len())
+            .map(|index| sequence.state_at(index))
+            .collect()
+    }
+
+    #[test]
+    fn rebase_preserves_every_cue_and_is_idempotent() {
+        let mut sequence = Sequence {
+            number: 1,
+            name: String::new(),
+            cues: vec![
+                cue(1.0, 0.0, levels(&[(1, "Dimmer", 0.4)])),
+                cue(
+                    2.0,
+                    0.0,
+                    levels(&[(1, "Dimmer", 1.0), (1, "ColorAdd_R", 0.5)]),
+                ),
+                cue(3.0, 0.0, levels(&[(2, "Dimmer", 0.8)])),
+                Cue {
+                    blocked: true,
+                    levels: levels(&[(1, "Dimmer", 0.2), (2, "ColorAdd_R", 1.0)]),
+                    ..cue(4.0, 0.0, Levels::new())
+                },
+            ],
+        };
+        let before = states(&sequence);
+        sequence.rebase();
+        assert_eq!(states(&sequence), before);
+
+        let stored: Vec<Levels> = sequence.cues.iter().map(|cue| cue.levels.clone()).collect();
+        sequence.rebase();
+        assert_eq!(
+            sequence
+                .cues
+                .iter()
+                .map(|cue| cue.levels.clone())
+                .collect::<Vec<_>>(),
+            stored,
+            "a second rebase changes nothing"
+        );
+    }
+
+    /// A small deterministic generator, so the property test needs no crate.
+    fn pick(seed: &mut u64, bound: u64) -> u64 {
+        *seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (*seed >> 33) % bound
+    }
+
+    #[test]
+    fn rebase_preserves_state_for_generated_sequences() {
+        let attributes = ["Dimmer", "ColorAdd_R", "ColorAdd_G"];
+        let mut seed = 0x5eed_u64;
+        for _ in 0..250 {
+            let length = 1 + pick(&mut seed, 7) as usize;
+            let mut cues = Vec::new();
+            for index in 0..length {
+                let mut levels = Levels::new();
+                for _ in 0..pick(&mut seed, 4) {
+                    let fixture = 1 + pick(&mut seed, 2) as u16;
+                    let attribute = attributes[pick(&mut seed, attributes.len() as u64) as usize];
+                    let level = pick(&mut seed, 101) as f64 / 100.0;
+                    levels.set(fixture, attribute, level);
+                }
+                let mut shield = BTreeMap::new();
+                if pick(&mut seed, 4) == 0 {
+                    let attribute = attributes[pick(&mut seed, attributes.len() as u64) as usize];
+                    shield.insert(attribute.to_string(), pick(&mut seed, 101) as f64 / 100.0);
+                }
+                cues.push(Cue {
+                    blocked: pick(&mut seed, 6) == 0,
+                    shield,
+                    ..cue(index as f64 + 1.0, 0.0, levels)
+                });
+            }
+            let mut sequence = Sequence {
+                number: 1,
+                name: String::new(),
+                cues,
+            };
+            let before = states(&sequence);
+            let before_indices: Vec<Levels> = (0..sequence.cues.len())
+                .map(|index| sequence.state_before(index))
+                .collect();
+            sequence.rebase();
+            assert_eq!(states(&sequence), before);
+            assert_eq!(
+                (0..sequence.cues.len())
+                    .map(|index| sequence.state_before(index))
+                    .collect::<Vec<_>>(),
+                before_indices
+            );
+        }
+    }
+
+    #[test]
+    fn a_blocked_cue_ignores_a_later_upstream_edit() {
+        let mut sequence = Sequence {
+            number: 1,
+            name: String::new(),
+            cues: vec![
+                cue(1.0, 0.0, levels(&[(1, "Dimmer", 0.4)])),
+                Cue {
+                    blocked: true,
+                    levels: levels(&[(1, "Dimmer", 1.0), (1, "ColorAdd_R", 0.2)]),
+                    ..cue(2.0, 0.0, Levels::new())
+                },
+            ],
+        };
+        sequence.rebase();
+        sequence.cues[0].levels = levels(&[(1, "Dimmer", 0.9), (1, "ColorAdd_R", 0.8)]);
+        sequence.cues[0].blocked = false;
+        sequence.rebase();
+        let state = sequence.state_at(1);
+        assert_eq!(state.get(1, "Dimmer"), Some(1.0));
+        assert_eq!(state.get(1, "ColorAdd_R"), Some(0.2));
+    }
+
+    #[test]
+    fn a_shield_holds_while_other_attributes_ripple() {
+        let mut sequence = Sequence {
+            number: 1,
+            name: String::new(),
+            cues: vec![
+                cue(
+                    1.0,
+                    0.0,
+                    levels(&[(1, "Dimmer", 0.4), (1, "ColorAdd_R", 0.5)]),
+                ),
+                Cue {
+                    shield: BTreeMap::from([("ColorAdd_R".to_string(), 0.5)]),
+                    ..cue(2.0, 0.0, levels(&[(1, "Dimmer", 1.0)]))
+                },
+            ],
+        };
+        sequence.rebase();
+        sequence.cues[0].levels = levels(&[(1, "Dimmer", 0.9), (1, "ColorAdd_R", 1.0)]);
+        sequence.rebase();
+        let state = sequence.state_at(1);
+        assert_eq!(state.get(1, "Dimmer"), Some(1.0));
+        assert_eq!(state.get(1, "ColorAdd_R"), Some(0.5), "the shield holds");
+
+        sequence.remove_shield(1, "ColorAdd_R");
+        assert_eq!(
+            sequence.state_at(1).get(1, "ColorAdd_R"),
+            Some(1.0),
+            "without the shield the upstream value comes through"
+        );
+    }
+
+    #[test]
+    fn unblock_restores_delta_behaviour() {
+        let mut sequence = Sequence {
+            number: 1,
+            name: String::new(),
+            cues: vec![
+                cue(1.0, 0.0, levels(&[(1, "Dimmer", 0.4)])),
+                Cue {
+                    blocked: true,
+                    levels: levels(&[(1, "Dimmer", 1.0)]),
+                    ..cue(2.0, 0.0, Levels::new())
+                },
+            ],
+        };
+        sequence.rebase();
+        sequence.cues[0].levels = levels(&[(1, "Dimmer", 0.4), (1, "ColorAdd_R", 0.7)]);
+        sequence.rebase();
+        assert_eq!(
+            sequence.state_at(1).get(1, "ColorAdd_R"),
+            None,
+            "a blocked cue does not inherit the later colour"
+        );
+
+        sequence.cues[1].blocked = false;
+        sequence.rebase();
+        assert_eq!(
+            sequence.state_at(1).get(1, "ColorAdd_R"),
+            Some(0.7),
+            "unblocked, the cue tracks the upstream colour again"
+        );
     }
 }

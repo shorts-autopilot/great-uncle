@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::command::{self, Command, CommandError, Level, LevelSource, PlaybackRef, TriggerArg};
+use crate::command::{
+    self, Command, CommandError, Level, LevelSource, PlaybackRef, StoreMode, TriggerArg,
+};
 use crate::desk::{Desk, RunState};
 use crate::effect::{Effect, Effects, Waveform, MAX_RATE_HZ, MAX_SPREAD_DEGREES};
 use crate::fixture_type::{FixtureType, DIMMER};
@@ -40,6 +42,7 @@ struct CueSpec {
     delay: Option<f64>,
     mib: Option<bool>,
     trigger: Option<TriggerArg>,
+    mode: StoreMode,
 }
 
 /// Everything `Cue <n> Timing …` carries before it is applied.
@@ -436,6 +439,7 @@ impl Engine {
                 delay,
                 mib,
                 trigger,
+                mode,
             } => self.store_cue(CueSpec {
                 sequence,
                 number,
@@ -444,7 +448,32 @@ impl Engine {
                 delay,
                 mib,
                 trigger,
+                mode,
             }),
+            Command::Update { sequence, cue } => self.update_cue(sequence, cue),
+            Command::CueBlock {
+                sequence,
+                number,
+                on,
+            } => self.cue_block(sequence, number, on),
+            Command::CueShield {
+                sequence,
+                number,
+                attribute,
+                off,
+            } => self.cue_shield(sequence, number, attribute, off),
+            Command::CueShow { sequence, number } => self.cue_show(sequence, number),
+            Command::CueMove {
+                sequence,
+                number,
+                to,
+            } => self.cue_move(sequence, number, to),
+            Command::CueCopy {
+                sequence,
+                number,
+                to,
+                target,
+            } => self.cue_copy(sequence, number, to, target),
             Command::CueTrigger {
                 sequence,
                 number,
@@ -1655,6 +1684,7 @@ impl Engine {
             delay,
             mib,
             trigger,
+            mode,
         } = spec;
         if sequence_number == 0 {
             return Err(CommandError::new("sequence number 0 is not allowed"));
@@ -1678,25 +1708,7 @@ impl Engine {
             }
         }
 
-        let targets = self.programmer_targets()?;
-        let mut captured = Levels::new();
-        for target in &targets {
-            if let Some(fixture) = self.show.fixture(*target) {
-                let Ok((fixture_type, _)) = self.show.mode_for(fixture) else {
-                    continue;
-                };
-                for (number, attributes) in self.desk.programmer.fixtures() {
-                    if number != *target {
-                        continue;
-                    }
-                    for (attribute, level) in attributes {
-                        if self.attribute_allowed(fixture_type, attribute) {
-                            captured.set(*target, attribute, *level);
-                        }
-                    }
-                }
-            }
-        }
+        let captured = self.capture_programmer()?;
 
         let cue_name = name.clone().unwrap_or_default();
         let name_label = name
@@ -1718,8 +1730,6 @@ impl Engine {
             let existing = sequence.cue_index(number);
             let insertion = existing.unwrap_or_else(|| sequence.insertion_index(number));
             let previous = sequence.state_before(insertion);
-            let delta = captured.difference(&previous);
-            values = delta.len();
             let fade = fade.unwrap_or_else(|| {
                 existing
                     .and_then(|index| sequence.cues.get(index))
@@ -1751,9 +1761,33 @@ impl Engine {
                     if let Some(trigger) = trigger {
                         apply_trigger(cue, trigger);
                     }
-                    cue.levels = delta;
+                    let blocked = cue.blocked;
+                    match mode {
+                        StoreMode::Merge => {
+                            if blocked {
+                                // A blocked cue holds the whole state, so the
+                                // programmer lands on the state before it.
+                                let mut absolute = previous.clone();
+                                absolute.overlay(&captured);
+                                cue.levels = absolute;
+                            } else {
+                                cue.levels.overlay(&captured);
+                            }
+                        }
+                        StoreMode::Replace => {
+                            cue.levels = if blocked {
+                                captured.clone()
+                            } else {
+                                captured.difference(&previous)
+                            };
+                        }
+                    }
+                    sequence.rebase();
+                    values = sequence.cues[index].levels.len();
                 }
                 None => {
+                    let levels = captured.difference(&previous);
+                    values = levels.len();
                     let mut cue = Cue {
                         number,
                         name: cue_name.clone(),
@@ -1764,19 +1798,28 @@ impl Engine {
                         trigger_time: 0.0,
                         timing: Default::default(),
                         stagger: 0.0,
-                        levels: delta,
+                        blocked: false,
+                        shield: Default::default(),
+                        levels,
                     };
                     if let Some(trigger) = trigger {
                         apply_trigger(&mut cue, trigger);
                     }
                     sequence.cues.insert(insertion, cue);
+                    sequence.rebase();
                 }
             }
             show.sequences.sort_by_key(|sequence| sequence.number);
             let mib_label = if mib.unwrap_or(existing_mib) { ", mib" } else { "" };
             Ok(format!(
                 "{} cue {}{name_label} in sequence {sequence_number} (fade {}s, delay {}s{mib_label}, {values} tracked values)",
-                if created { "Stored" } else { "Updated" },
+                if created {
+                    "Stored"
+                } else if mode == StoreMode::Replace {
+                    "Updated (replace)"
+                } else {
+                    "Updated (merge)"
+                },
                 format_cue_number(number),
                 fade,
                 delay
@@ -1791,6 +1834,448 @@ impl Engine {
             );
         }
         Ok(CommandOutcome::with_lines(lines))
+    }
+
+    /// The programmer values a store or update captures, through the active
+    /// filter. Selection and world rules are the same as `Store`'s.
+    fn capture_programmer(&self) -> Result<Levels, CommandError> {
+        let targets = self.programmer_targets()?;
+        let mut captured = Levels::new();
+        for target in &targets {
+            let Some(fixture) = self.show.fixture(*target) else {
+                continue;
+            };
+            let Ok((fixture_type, _)) = self.show.mode_for(fixture) else {
+                continue;
+            };
+            for (number, attributes) in self.desk.programmer.fixtures() {
+                if number != *target {
+                    continue;
+                }
+                for (attribute, level) in attributes {
+                    if self.attribute_allowed(fixture_type, attribute) {
+                        captured.set(*target, attribute, *level);
+                    }
+                }
+            }
+        }
+        Ok(captured)
+    }
+
+    /// `Update [Cue <n>] [Sequence <n>]`: merge the programmer's touched
+    /// attributes into a cue, defaulting to the cue that sequence is running.
+    /// One undo step, like every other show edit.
+    fn update_cue(
+        &mut self,
+        sequence_number: u16,
+        number: Option<f64>,
+    ) -> Result<CommandOutcome, CommandError> {
+        if sequence_number == 0 {
+            return Err(CommandError::new("sequence number 0 is not allowed"));
+        }
+        let Some(sequence) = self.show.sequence(sequence_number) else {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence_number} does not exist"),
+                "`Sequence` lists the sequences",
+            ));
+        };
+        let number = match number {
+            Some(number) => number,
+            None => self.running_cue_number(sequence_number).ok_or_else(|| {
+                CommandError::with_hint(
+                    format!("sequence {sequence_number} is not running"),
+                    "name the cue to update: `Update Cue 2`",
+                )
+            })?,
+        };
+        let label = format_cue_number(number);
+        let Some(index) = sequence.cue_index(number) else {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence_number} has no cue {label}"),
+                format!("`Sequence {sequence_number}` lists its cues"),
+            ));
+        };
+        let captured = self.capture_programmer()?;
+        if captured.is_empty() {
+            return Err(CommandError::with_hint(
+                "the programmer is empty",
+                "select a fixture and give it a level first",
+            ));
+        }
+        let absolute = sequence.state_at(index);
+        let changed = captured
+            .fixtures()
+            .map(|(fixture, attributes)| {
+                attributes
+                    .iter()
+                    .filter(|(attribute, level)| absolute.get(fixture, attribute) != Some(**level))
+                    .count()
+            })
+            .sum::<usize>();
+        let message = self.mutate(|show| {
+            let message = format!(
+                "Updated cue {label} in sequence {sequence_number} ({changed} values changed)"
+            );
+            let Some(sequence_index) = show.sequence_index(sequence_number) else {
+                return Ok(message);
+            };
+            let sequence = &mut show.sequences[sequence_index];
+            // Merge by attribute: a blocked cue already holds the whole state,
+            // so overlaying the programmer is the same edit there.
+            if let Some(cue) = sequence.cues.get_mut(index) {
+                cue.levels.overlay(&captured);
+            }
+            sequence.rebase();
+            Ok(message)
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    /// The cue a sequence is running, whether it was started directly or
+    /// through an executor assigned to it.
+    fn running_cue_number(&self, sequence_number: u16) -> Option<f64> {
+        self.playback.runs().find_map(|(target, run)| {
+            let matches = match target {
+                Target::Sequence(number) => number == sequence_number,
+                Target::Executor(number) => {
+                    self.show.executor(number).map(|executor| executor.sequence)
+                        == Some(sequence_number)
+                }
+            };
+            matches.then_some(run.cue_number)
+        })
+    }
+
+    /// `Cue <n> Block` / `Cue <n> Unblock`: stop or resume tracking at a cue.
+    /// Blocking materialises the state the cue leaves behind, so later edits to
+    /// earlier cues no longer move it; unblocking turns it back into a delta.
+    fn cue_block(
+        &mut self,
+        sequence_number: u16,
+        number: f64,
+        on: bool,
+    ) -> Result<CommandOutcome, CommandError> {
+        let Some(sequence) = self.show.sequence(sequence_number) else {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence_number} does not exist"),
+                "`Sequence` lists the sequences",
+            ));
+        };
+        let label = format_cue_number(number);
+        let Some(index) = sequence.cue_index(number) else {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence_number} has no cue {label}"),
+                format!("`Sequence {sequence_number}` lists its cues"),
+            ));
+        };
+        let message = self.mutate(|show| {
+            let Some(sequence_index) = show.sequence_index(sequence_number) else {
+                return Ok(String::new());
+            };
+            let sequence = &mut show.sequences[sequence_index];
+            if on {
+                let state = sequence.state_at(index);
+                if let Some(cue) = sequence.cues.get_mut(index) {
+                    cue.levels = state;
+                    cue.blocked = true;
+                }
+            } else if let Some(cue) = sequence.cues.get_mut(index) {
+                cue.blocked = false;
+            }
+            sequence.rebase();
+            Ok(if on {
+                format!("Cue {label} in sequence {sequence_number} blocks tracking: it holds the whole state")
+            } else {
+                format!("Cue {label} in sequence {sequence_number} tracks again")
+            })
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    /// `Cue <n> Shield <attribute> [Off]`: assert an attribute at the level it
+    /// has at this cue, or remove the assertion. With no attribute it lists the
+    /// shields, so one is never an invisible flag.
+    fn cue_shield(
+        &mut self,
+        sequence_number: u16,
+        number: f64,
+        attribute: Option<String>,
+        off: bool,
+    ) -> Result<CommandOutcome, CommandError> {
+        let Some(sequence) = self.show.sequence(sequence_number) else {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence_number} does not exist"),
+                "`Sequence` lists the sequences",
+            ));
+        };
+        let label = format_cue_number(number);
+        let Some(index) = sequence.cue_index(number) else {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence_number} has no cue {label}"),
+                format!("`Sequence {sequence_number}` lists its cues"),
+            ));
+        };
+        let Some(typed) = attribute else {
+            let cue = &sequence.cues[index];
+            if cue.shield.is_empty() {
+                return Ok(CommandOutcome::message(format!(
+                    "Cue {label} in sequence {sequence_number}: no shields."
+                )));
+            }
+            let mut lines = vec![format!(
+                "Cue {label} in sequence {sequence_number}: {} shields",
+                cue.shield.len()
+            )];
+            lines.push(format!("{:<16} {:>6}", "Attribute", "Level"));
+            for (attribute, level) in &cue.shield {
+                lines.push(format!(
+                    "{:<16} {:>5.0}%",
+                    truncate(attribute, 16),
+                    level * 100.0
+                ));
+            }
+            return Ok(CommandOutcome::with_lines(lines));
+        };
+        let canonical = self.resolve_cue_attribute(sequence_number, index, &typed)?;
+        if off {
+            let message = self.mutate(|show| {
+                let Some(sequence_index) = show.sequence_index(sequence_number) else {
+                    return Ok(String::new());
+                };
+                show.sequences[sequence_index].remove_shield(index, &canonical);
+                Ok(format!(
+                    "Cue {label} in sequence {sequence_number}: `{canonical}` follows the cue again"
+                ))
+            })?;
+            return Ok(CommandOutcome::message(message));
+        }
+
+        let state = sequence.state_at(index);
+        let values: Vec<f64> = state
+            .fixtures()
+            .filter_map(|(_, attributes)| {
+                attributes
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(&canonical))
+                    .map(|(_, level)| *level)
+            })
+            .collect();
+        if values.is_empty() {
+            return Err(CommandError::with_hint(
+                format!("cue {label} has no `{canonical}` level to shield"),
+                "give the attribute a value in an earlier cue, or block the cue first",
+            ));
+        }
+        let level = values[0];
+        if values.iter().any(|value| (value - level).abs() > 1e-9) {
+            return Err(CommandError::with_hint(
+                format!("the fixtures at cue {label} have different `{canonical}` levels"),
+                "a shield asserts one level for every fixture; set them equal first",
+            ));
+        }
+        let message = self.mutate(|show| {
+            let Some(sequence_index) = show.sequence_index(sequence_number) else {
+                return Ok(String::new());
+            };
+            let sequence = &mut show.sequences[sequence_index];
+            if let Some(cue) = sequence.cues.get_mut(index) {
+                let key = cue
+                    .shield
+                    .keys()
+                    .find(|name| name.eq_ignore_ascii_case(&canonical))
+                    .cloned();
+                if let Some(key) = key {
+                    cue.shield.remove(&key);
+                }
+                cue.shield.insert(canonical.clone(), level);
+            }
+            sequence.rebase();
+            Ok(format!(
+                "Cue {label} in sequence {sequence_number}: `{canonical}` is shielded at {}%",
+                (level * 100.0).round() as i64
+            ))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    /// `Cue <n> Show`: the state the cue actually produces, not its stored
+    /// delta. This is the question an operator has, and the delta cannot be
+    /// read by eye.
+    fn cue_show(&self, sequence_number: u16, number: f64) -> Result<CommandOutcome, CommandError> {
+        let Some(sequence) = self.show.sequence(sequence_number) else {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence_number} does not exist"),
+                "`Sequence` lists the sequences",
+            ));
+        };
+        let label = format_cue_number(number);
+        let Some(index) = sequence.cue_index(number) else {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence_number} has no cue {label}"),
+                format!("`Sequence {sequence_number}` lists its cues"),
+            ));
+        };
+        let cue = &sequence.cues[index];
+        let state = sequence.state_at(index);
+        let mut lines = vec![format!(
+            "Cue {label} in sequence {sequence_number}: absolute state (fade {:.1}s, delay {:.1}s{})",
+            cue.fade,
+            cue.delay,
+            if cue.blocked { ", blocked" } else { "" }
+        )];
+        if state.is_empty() {
+            lines.push("No values.".to_string());
+            return Ok(CommandOutcome::with_lines(lines));
+        }
+        lines.push(format!("{:<7} {}", "Fixture", "Values"));
+        for (fixture, attributes) in state.fixtures() {
+            let mut parts: Vec<String> = attributes
+                .iter()
+                .map(|(attribute, level)| {
+                    format!("{attribute} {}%", (level * 100.0).round() as i64)
+                })
+                .collect();
+            parts.sort();
+            lines.push(format!("{:<7} {}", fixture, parts.join("  ")));
+        }
+        if !cue.shield.is_empty() {
+            let shields: Vec<String> = cue
+                .shield
+                .iter()
+                .map(|(attribute, level)| {
+                    format!("{attribute} {}%", (level * 100.0).round() as i64)
+                })
+                .collect();
+            lines.push(format!("Shields: {}", shields.join(", ")));
+        }
+        Ok(CommandOutcome::with_lines(lines))
+    }
+
+    /// `Cue <n> Move <m>`: renumber a cue in place. The cue numbers, not the
+    /// positions, are what playback references, so the cue keeps its look and
+    /// its timing; `rebase` keeps every other cue where it was.
+    fn cue_move(
+        &mut self,
+        sequence_number: u16,
+        number: f64,
+        to: f64,
+    ) -> Result<CommandOutcome, CommandError> {
+        if !to.is_finite() || !(0.0..=MAX_CUE_NUMBER).contains(&to) {
+            return Err(CommandError::new(format!(
+                "cue number {to} is outside 0..={MAX_CUE_NUMBER}"
+            )));
+        }
+        let Some(sequence) = self.show.sequence(sequence_number) else {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence_number} does not exist"),
+                "`Sequence` lists the sequences",
+            ));
+        };
+        let label = format_cue_number(number);
+        let target_label = format_cue_number(to);
+        if sequence.cue_index(number).is_none() {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence_number} has no cue {label}"),
+                format!("`Sequence {sequence_number}` lists its cues"),
+            ));
+        }
+        if (number - to).abs() < 1e-9 {
+            return Ok(CommandOutcome::message(format!(
+                "Cue {label} is already cue {target_label} in sequence {sequence_number}"
+            )));
+        }
+        if sequence.cue_index(to).is_some() {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence_number} already has cue {target_label}"),
+                "move it to a free number, or delete the cue first",
+            ));
+        }
+        let message = self.mutate(|show| {
+            let Some(sequence_index) = show.sequence_index(sequence_number) else {
+                return Ok(String::new());
+            };
+            let sequence = &mut show.sequences[sequence_index];
+            let Some(position) = sequence.cue_index(number) else {
+                return Ok(String::new());
+            };
+            let mut cue = sequence.cues.remove(position);
+            cue.number = to;
+            let insertion = sequence.insertion_index(to);
+            sequence.cues.insert(insertion, cue);
+            sequence.rebase();
+            Ok(format!(
+                "Moved cue {label} to {target_label} in sequence {sequence_number}"
+            ))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    /// `Cue <n> Copy <m> [Sequence <s>]`: deep-copy a cue, timing and shields
+    /// included. Copying into another sequence rebases both lists.
+    fn cue_copy(
+        &mut self,
+        sequence_number: u16,
+        number: f64,
+        to: f64,
+        target: Option<u16>,
+    ) -> Result<CommandOutcome, CommandError> {
+        if !to.is_finite() || !(0.0..=MAX_CUE_NUMBER).contains(&to) {
+            return Err(CommandError::new(format!(
+                "cue number {to} is outside 0..={MAX_CUE_NUMBER}"
+            )));
+        }
+        let target_sequence = target.unwrap_or(sequence_number);
+        let Some(source) = self.show.sequence(sequence_number) else {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence_number} does not exist"),
+                "`Sequence` lists the sequences",
+            ));
+        };
+        let label = format_cue_number(number);
+        let target_label = format_cue_number(to);
+        if source.cue_index(number).is_none() {
+            return Err(CommandError::with_hint(
+                format!("sequence {sequence_number} has no cue {label}"),
+                format!("`Sequence {sequence_number}` lists its cues"),
+            ));
+        }
+        let Some(destination) = self.show.sequence(target_sequence) else {
+            return Err(CommandError::with_hint(
+                format!("sequence {target_sequence} does not exist"),
+                format!("store a cue there first: `Store Cue 1 Sequence {target_sequence}`"),
+            ));
+        };
+        if destination.cue_index(to).is_some() {
+            return Err(CommandError::with_hint(
+                format!("sequence {target_sequence} already has cue {target_label}"),
+                "copy it to a free number, or delete the cue first",
+            ));
+        }
+        let message = self.mutate(|show| {
+            let Some(source_index) = show.sequence_index(sequence_number) else {
+                return Ok(String::new());
+            };
+            let Some(destination_index) = show.sequence_index(target_sequence) else {
+                return Ok(String::new());
+            };
+            let Some(position) = show.sequences[source_index].cue_index(number) else {
+                return Ok(String::new());
+            };
+            let mut cue = show.sequences[source_index].cues[position].clone();
+            cue.number = to;
+            let insertion = show.sequences[destination_index].insertion_index(to);
+            show.sequences[destination_index]
+                .cues
+                .insert(insertion, cue);
+            show.sequences[destination_index].rebase();
+            if source_index != destination_index {
+                show.sequences[source_index].rebase();
+            }
+            Ok(format!(
+                "Copied cue {label} to cue {target_label} in sequence {target_sequence}"
+            ))
+        })?;
+        Ok(CommandOutcome::message(message))
     }
 
     /// Retime one cue's trigger. This is a show edit with one undo step, and it
@@ -2129,18 +2614,33 @@ impl Engine {
                     "sequence {sequence_number} has no cue {}",
                     format_cue_number(number)
                 ),
-                "`Sequence {sequence_number}` lists its cues",
+                format!("`Sequence {sequence_number}` lists its cues"),
             ));
+        }
+        // The generic validation failure says the show would be invalid; this
+        // says which event depends on the cue and how to remove it.
+        for timecode in &self.show.timecodes {
+            if let Some(event) = timecode.events.iter().find(|event| {
+                event.sequence == sequence_number && (event.cue - number).abs() < 1e-9
+            }) {
+                return Err(CommandError::with_hint(
+                    format!(
+                        "cue {} is started by timecode {} at {}; remove the event first",
+                        format_cue_number(number),
+                        timecode.number,
+                        event.at
+                    ),
+                    format!("`Timecode {} Remove {}`", timecode.number, event.at),
+                ));
+            }
         }
         let message = self.mutate(|show| {
             if let Some(index) = show.sequence_index(sequence_number) {
-                let cues = &mut show.sequences[index].cues;
-                if let Some(position) = cues
-                    .iter()
-                    .position(|cue| (cue.number - number).abs() < 1e-9)
-                {
-                    cues.remove(position);
+                let sequence = &mut show.sequences[index];
+                if let Some(position) = sequence.cue_index(number) {
+                    sequence.cues.remove(position);
                 }
+                sequence.rebase();
             }
             Ok(format!(
                 "Deleted cue {} from sequence {sequence_number}",
@@ -2164,18 +2664,19 @@ impl Engine {
                         return CommandOutcome::with_lines(lines);
                     }
                     lines.push(format!(
-                        "{:<6} {:<18} {:>6} {:>6} {:<13} {:<4} {}",
-                        "Cue", "Name", "Fade", "Delay", "Trigger", "Mib", "Values"
+                        "{:<6} {:<18} {:>6} {:>6} {:<13} {:<4} {:<4} {}",
+                        "Cue", "Name", "Fade", "Delay", "Trigger", "Mib", "Blk", "Values"
                     ));
                     for cue in &sequence.cues {
                         lines.push(format!(
-                            "{:<6} {:<18} {:>5.1}s {:>5.1}s {:<13} {:<4} {}{}",
+                            "{:<6} {:<18} {:>5.1}s {:>5.1}s {:<13} {:<4} {:<4} {}{}",
                             format_cue_number(cue.number),
                             truncate(&cue.name, 18),
                             cue.fade,
                             cue.delay,
                             format_trigger(cue.trigger, cue.trigger_time),
                             if cue.mib { "yes" } else { "-" },
+                            if cue.blocked { "yes" } else { "-" },
                             cue.levels.len(),
                             if cue.levels.is_empty() {
                                 " (empty)"
@@ -2202,6 +2703,13 @@ impl Engine {
                         }
                         if cue.stagger > 0.0 {
                             lines.push(format!("  Stagger {:.2}s between fixtures", cue.stagger));
+                        }
+                        for (attribute, level) in &cue.shield {
+                            lines.push(format!(
+                                "  Shield  {:<16} {}%",
+                                truncate(attribute, 16),
+                                (level * 100.0).round() as i64
+                            ));
                         }
                     }
                     CommandOutcome::with_lines(lines)
@@ -4189,6 +4697,12 @@ pub const HELP: &[&str] = &[
     "Delete Palette Color 1 / Palette        delete or list palettes",
     "Store Cue 1 [\"name\"] [Fade 2] [Delay 0.5] [Mib] [Sequence 2]",
     "Store Cue 2 Follow 1.5 / Time 0.5  start without a button",
+    "Store Cue 4 Merge / Replace           merge into the cue, or hold only the programmer",
+    "Update [Cue 2] [Sequence 1]          merge the programmer into a cue",
+    "Cue 2 Block / Unblock                stop or resume tracking",
+    "Cue 2 Shield Pan [Off] / Shield      assert an attribute, or list the shields",
+    "Cue 2 Move 5 / Cue 2 Copy 5 [Sequence 2]",
+    "Cue 2 Show                           show the cue's absolute state",
     "Cue 2 Trigger Go / Follow 1 / Time 2  retime a stored cue",
     "Cue 2 Timing ColorAdd_R Fade 0.5 [Delay 0] [Curve EaseOut]",
     "Cue 2 Timing ColorAdd_R / Timing / Timing ColorAdd_R Off",
@@ -4851,6 +5365,263 @@ mod tests {
             Some(0.6)
         );
         assert_eq!(sequence.cue(2.0).unwrap().levels.len(), 1);
+    }
+
+    #[test]
+    fn update_merges_only_touched_attributes_and_is_one_undo_step() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 20").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Clear Values").unwrap();
+        engine.execute("Fixture 1 At ColorAdd_R 50").unwrap();
+        engine.execute("Store Cue 2").unwrap();
+        engine.execute("Clear Values").unwrap();
+
+        engine.execute("Fixture 1 At 80").unwrap();
+        let outcome = engine.execute("Update Cue 2").unwrap();
+        assert!(outcome.lines[0].contains("Updated cue 2"), "{outcome:?}");
+        let cue = engine.show.sequence(1).unwrap().cue(2.0).unwrap();
+        assert_eq!(cue.levels.get(1, "Dimmer"), Some(0.8));
+        assert_eq!(
+            cue.levels.get(1, "ColorAdd_R"),
+            Some(0.5),
+            "the untouched attribute keeps its tracked value"
+        );
+
+        engine.execute("Undo").unwrap();
+        let cue = engine.show.sequence(1).unwrap().cue(2.0).unwrap();
+        assert_eq!(cue.levels.get(1, "Dimmer"), None, "one undo step");
+    }
+
+    #[test]
+    fn update_without_a_running_cue_errors_with_a_hint() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        let error = engine.execute("Update").unwrap_err();
+        assert!(error.message.contains("not running"), "{error}");
+        assert!(
+            error
+                .hint
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Update Cue 2"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn merge_keeps_other_values_and_replace_drops_them() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 20").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Fixture 1 At ColorAdd_R 50").unwrap();
+        engine.execute("Store Cue 2").unwrap();
+        engine.execute("Clear Values").unwrap();
+
+        engine.execute("Fixture 1 At 80").unwrap();
+        let outcome = engine.execute("Store Cue 2").unwrap();
+        assert!(outcome.lines[0].contains("merge"), "{outcome:?}");
+        let cue = engine.show.sequence(1).unwrap().cue(2.0).unwrap();
+        assert_eq!(cue.levels.get(1, "Dimmer"), Some(0.8));
+        assert_eq!(cue.levels.get(1, "ColorAdd_R"), Some(0.5));
+
+        engine.execute("Clear Values").unwrap();
+        engine.execute("Fixture 1 At 90").unwrap();
+        let outcome = engine.execute("Store Cue 2 Replace").unwrap();
+        assert!(outcome.lines[0].contains("replace"), "{outcome:?}");
+        let cue = engine.show.sequence(1).unwrap().cue(2.0).unwrap();
+        assert_eq!(cue.levels.get(1, "Dimmer"), Some(0.9));
+        assert_eq!(
+            cue.levels.get(1, "ColorAdd_R"),
+            None,
+            "replace drops what the programmer no longer has"
+        );
+    }
+
+    #[test]
+    fn storing_into_a_blocked_cue_keeps_it_blocked_and_absolute() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 20").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 2").unwrap();
+        engine.execute("Cue 2 Block").unwrap();
+        {
+            let cue = engine.show.sequence(1).unwrap().cue(2.0).unwrap();
+            assert!(cue.blocked);
+            assert_eq!(cue.levels.get(1, "Dimmer"), Some(1.0));
+            assert_eq!(cue.levels.len(), 1, "the absolute state, not a delta");
+        }
+
+        engine.execute("Clear Values").unwrap();
+        engine.execute("Fixture 1 At 40").unwrap();
+        engine.execute("Store Cue 2").unwrap();
+        let cue = engine.show.sequence(1).unwrap().cue(2.0).unwrap();
+        assert!(cue.blocked);
+        assert_eq!(cue.levels.get(1, "Dimmer"), Some(0.4));
+        assert_eq!(cue.levels.len(), 1);
+    }
+
+    #[test]
+    fn move_keeps_looks_and_refuses_a_taken_number() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 20").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Fixture 1 At 40").unwrap();
+        engine.execute("Store Cue 2").unwrap();
+
+        let error = engine.execute("Cue 1 Move 2").unwrap_err();
+        assert!(error.message.contains("already has cue 2"), "{error}");
+
+        engine.execute("Cue 1 Move 5").unwrap();
+        let sequence = engine.show.sequence(1).unwrap();
+        assert!(sequence.cue(1.0).is_none());
+        assert_eq!(
+            sequence.cue(5.0).unwrap().levels.get(1, "Dimmer"),
+            Some(0.2),
+            "the moved cue still holds its own look"
+        );
+        assert_eq!(
+            sequence.state_at(1).get(1, "Dimmer"),
+            Some(0.2),
+            "and its absolute state is unchanged"
+        );
+    }
+
+    #[test]
+    fn copy_carries_timing_and_a_shield_to_another_sequence() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 20").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Fixture 1 At 80").unwrap();
+        engine.execute("Store Cue 2 Fade 1.5").unwrap();
+        engine.execute("Cue 2 Shield Dimmer").unwrap();
+        engine.execute("Store Cue 1 Sequence 2").unwrap();
+
+        let outcome = engine.execute("Cue 2 Copy 5 Sequence 2").unwrap();
+        assert!(
+            outcome.lines[0].contains("Copied cue 2 to cue 5"),
+            "{outcome:?}"
+        );
+        let copy = engine.show.sequence(2).unwrap().cue(5.0).unwrap();
+        assert_eq!(copy.fade, 1.5);
+        assert_eq!(copy.shield.get("Dimmer"), Some(&0.8));
+    }
+
+    #[test]
+    fn delete_cue_names_the_timecode_event_that_blocks_it() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Store Timecode 1").unwrap();
+        engine
+            .execute("Timecode 1 Add 00:00:10:00 Sequence 1 Cue 1")
+            .unwrap();
+
+        let error = engine.execute("Delete Cue 1").unwrap_err();
+        assert!(
+            error.message.contains("timecode 1 at 00:00:10:00"),
+            "{error}"
+        );
+        assert!(
+            error
+                .hint
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Timecode 1 Remove 00:00:10:00"),
+            "{error}"
+        );
+        assert!(engine.show.sequence(1).unwrap().cue(1.0).is_some());
+    }
+
+    #[test]
+    fn a_blocked_cue_absorbs_a_later_upstream_edit() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 20").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 2").unwrap();
+        engine.execute("Cue 2 Block").unwrap();
+        engine.execute("Clear Values").unwrap();
+        engine.execute("Fixture 1 At 40").unwrap();
+        engine.execute("Update Cue 1").unwrap();
+
+        assert_eq!(
+            engine
+                .show
+                .sequence(1)
+                .unwrap()
+                .state_at(1)
+                .get(1, "Dimmer"),
+            Some(1.0),
+            "the blocked cue ignored the edit to cue 1"
+        );
+        assert_eq!(
+            engine
+                .show
+                .sequence(1)
+                .unwrap()
+                .state_at(0)
+                .get(1, "Dimmer"),
+            Some(0.4)
+        );
+    }
+
+    #[test]
+    fn a_shield_lists_and_holds_until_removed() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 20").unwrap();
+        engine.execute("Fixture 1 At ColorAdd_R 50").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Clear Values").unwrap();
+        engine.execute("Fixture 1 At 80").unwrap();
+        engine.execute("Store Cue 2").unwrap();
+        engine.execute("Cue 2 Shield ColorAdd_R").unwrap();
+
+        let listing = engine.execute("Cue 2 Shield").unwrap().lines.join("\n");
+        assert!(
+            listing.contains("ColorAdd_R") && listing.contains("50%"),
+            "{listing}"
+        );
+
+        engine.execute("Clear Values").unwrap();
+        engine.execute("Fixture 1 At ColorAdd_R Full").unwrap();
+        engine.execute("Update Cue 1").unwrap();
+        let state = engine.show.sequence(1).unwrap().state_at(1);
+        assert_eq!(state.get(1, "ColorAdd_R"), Some(0.5), "the shield holds");
+        assert_eq!(state.get(1, "Dimmer"), Some(0.8), "other values track");
+
+        engine.execute("Cue 2 Shield ColorAdd_R Off").unwrap();
+        assert_eq!(
+            engine
+                .show
+                .sequence(1)
+                .unwrap()
+                .state_at(1)
+                .get(1, "ColorAdd_R"),
+            Some(1.0),
+            "removing the shield lets the upstream value through"
+        );
+    }
+
+    #[test]
+    fn cue_show_prints_the_absolute_state_and_the_listing_marks_blocks() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 20").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Fixture 1 At 80").unwrap();
+        engine.execute("Store Cue 2").unwrap();
+        engine.execute("Cue 2 Block").unwrap();
+
+        let shown = engine.execute("Cue 2 Show").unwrap().lines.join("\n");
+        assert!(shown.contains("absolute state"), "{shown}");
+        assert!(shown.contains("blocked"), "{shown}");
+        assert!(shown.contains("Dimmer 80%"), "{shown}");
+
+        let listed = engine.execute("Sequence 1").unwrap().lines.join("\n");
+        assert!(listed.contains("Blk"), "{listed}");
+        assert!(listed.contains("yes"), "{listed}");
     }
 
     #[test]

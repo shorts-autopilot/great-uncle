@@ -10,10 +10,12 @@
 //! the desk file, because they are handles rather than programming. Version 6
 //! adds cue triggers and executor modes. Version 7 adds per-attribute timing,
 //! curves and stagger. Version 8 adds each fixture's home look, the base that
-//! renders when neither the programmer nor playback has a value. Older files
-//! still load: new sections default to empty, the v5 upgrade hands the values
-//! it finds in an old file to the desk through a [`LoadReport`], and the v8
-//! upgrade reports any fixture whose profile default is not zero.
+//! renders when neither the programmer nor playback has a value. Version 9 adds
+//! cue `blocked` and `shield`, the two ways an operator stops tracking from
+//! rippling through the rest of the list. Older files still load: new sections
+//! default to empty, the v5 upgrade hands the values it finds in an old file to
+//! the desk through a [`LoadReport`], and the v8 upgrade reports any fixture
+//! whose profile default is not zero.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -31,9 +33,9 @@ use crate::pools::{Filter, Group, World, MAX_GROUP_FIXTURES, MAX_POOL_OBJECTS};
 use crate::timecode::{self, TimecodeShow, MAX_FPS, MAX_TIMECODES, MAX_TIMECODE_EVENTS, MIN_FPS};
 
 pub const SHOW_FORMAT: &str = "openlight-show";
-pub const SHOW_VERSION: u32 = 8;
+pub const SHOW_VERSION: u32 = 9;
 /// Older documents that still load, oldest first.
-pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8];
+pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9];
 /// Fastest rate master accepted, as a factor (400%).
 pub const MAX_RATE_MASTER: f64 = 4.0;
 pub const MAX_UNIVERSE_SIZE: u16 = 512;
@@ -525,6 +527,10 @@ impl Show {
                     sequence.cues.len()
                 ));
             }
+            // The state a cue leaves behind, so a shield can be checked against
+            // the attributes the cue actually has. Kept in step with
+            // `Sequence::rebase`, which is what makes a stored shield hold.
+            let mut state = Levels::new();
             for cue in &sequence.cues {
                 let label = format_cue_number(cue.number);
                 if !cue.number.is_finite() || !(0.0..=MAX_CUE_NUMBER).contains(&cue.number) {
@@ -604,6 +610,65 @@ impl Show {
                         ));
                     }
                 }
+
+                // Blocked cues store the whole state; tracking cues store a
+                // delta. A shield is an assertion, so its attribute must exist
+                // in the state the cue leaves behind; rebase applies the level
+                // to every fixture that has it.
+                let mut absolute = if cue.blocked {
+                    cue.levels.clone()
+                } else {
+                    let mut absolute = state.clone();
+                    absolute.overlay(&cue.levels);
+                    absolute
+                };
+                let mut shield_names = BTreeSet::new();
+                for (attribute, level) in &cue.shield {
+                    if attribute.trim().is_empty() {
+                        problems.push(format!(
+                            "sequence {} cue {label}: shield without an attribute",
+                            sequence.number
+                        ));
+                    }
+                    if !shield_names.insert(attribute.trim().to_ascii_lowercase()) {
+                        problems.push(format!(
+                            "sequence {} cue {label}: shield `{attribute}` is listed twice",
+                            sequence.number
+                        ));
+                    }
+                    if !level.is_finite() || !(0.0..=1.0).contains(level) {
+                        problems.push(format!(
+                            "sequence {} cue {label}: shield `{attribute}` is {level}, expected 0..=1",
+                            sequence.number
+                        ));
+                    }
+                    let known = absolute.fixtures().any(|(_, attributes)| {
+                        attributes
+                            .keys()
+                            .any(|name| name.eq_ignore_ascii_case(attribute))
+                    });
+                    if !known {
+                        problems.push(format!(
+                            "sequence {} cue {label}: shield `{attribute}` is not an attribute of the cue's fixtures",
+                            sequence.number
+                        ));
+                    }
+                }
+                for (attribute, level) in &cue.shield {
+                    let fixtures: Vec<u16> = absolute
+                        .fixtures()
+                        .filter(|(_, attributes)| {
+                            attributes
+                                .keys()
+                                .any(|name| name.eq_ignore_ascii_case(attribute))
+                        })
+                        .map(|(number, _)| number)
+                        .collect();
+                    for fixture in fixtures {
+                        absolute.set(fixture, attribute, *level);
+                    }
+                }
+                state = absolute;
             }
             // Playback advances through the list in order, so a cue that is out
             // of order or repeated is rejected here, not discovered mid-show.
@@ -1174,7 +1239,7 @@ mod tests {
             .read_to_string(&mut text)
             .unwrap();
         assert!(text.contains("\"format\": \"openlight-show\""));
-        assert!(text.contains("\"version\": 8"));
+        assert!(text.contains("\"version\": 9"));
         assert!(text.contains("OpenLight Demo Wash"), "types are embedded");
         let _ = fs::remove_file(&path);
     }
@@ -1184,13 +1249,13 @@ mod tests {
         let path = temp_path("future");
         fs::write(
             &path,
-            r#"{"format":"openlight-show","version":9,"name":"x","fixture_types":[],"universes":[],"fixtures":[]}"#,
+            r#"{"format":"openlight-show","version":10,"name":"x","fixture_types":[],"universes":[],"fixtures":[]}"#,
         )
         .unwrap();
         let error = Show::load(&path).unwrap_err();
         assert!(matches!(
             error,
-            ShowError::UnsupportedVersion { found: 9, .. }
+            ShowError::UnsupportedVersion { found: 10, .. }
         ));
         let _ = fs::remove_file(&path);
     }
@@ -1422,6 +1487,8 @@ mod tests {
                 trigger_time: 0.0,
                 timing: BTreeMap::new(),
                 stagger: 0.0,
+                blocked: false,
+                shield: BTreeMap::new(),
                 levels: Levels::new(),
             }],
         });
@@ -1531,6 +1598,97 @@ mod tests {
     }
 
     #[test]
+    fn version_eight_shows_upgrade_with_no_blocks_or_shields() {
+        let path = temp_path("v8-blocked");
+        fs::write(
+            &path,
+            r#"{
+                "format": "openlight-show",
+                "version": 8,
+                "name": "Old",
+                "sequences": [{"number": 1, "cues": [{"number": 1}]}]
+            }"#,
+        )
+        .unwrap();
+        let (show, _) = Show::load_with_report(&path).unwrap();
+        assert_eq!(show.version, SHOW_VERSION);
+        let cue = &show.sequences[0].cues[0];
+        assert!(!cue.blocked);
+        assert!(cue.shield.is_empty());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn block_and_shield_roundtrip() {
+        use crate::playback::{Cue, Sequence, Trigger};
+
+        let mut show = demo_show();
+        let mut levels = Levels::new();
+        levels.set(1, "Dimmer", 1.0);
+        show.sequences.push(Sequence {
+            number: 1,
+            name: "Main".into(),
+            cues: vec![Cue {
+                number: 1.0,
+                name: String::new(),
+                fade: 0.0,
+                delay: 0.0,
+                mib: false,
+                trigger: Trigger::Go,
+                trigger_time: 0.0,
+                timing: BTreeMap::new(),
+                stagger: 0.0,
+                blocked: true,
+                shield: BTreeMap::from([("Dimmer".to_string(), 0.5)]),
+                levels,
+            }],
+        });
+        let path = temp_path("blocked-roundtrip");
+        show.save(&path).unwrap();
+        let loaded = Show::load(&path).unwrap();
+        assert!(loaded.sequences[0].cues[0].blocked);
+        assert_eq!(loaded.sequences[0].cues[0].shield.get("Dimmer"), Some(&0.5));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_shield_must_name_an_attribute_the_cue_has() {
+        use crate::playback::{Cue, Sequence, Trigger};
+
+        let mut show = demo_show();
+        let mut levels = Levels::new();
+        levels.set(1, "Dimmer", 0.5);
+        show.sequences.push(Sequence {
+            number: 1,
+            name: "Main".into(),
+            cues: vec![Cue {
+                number: 1.0,
+                name: String::new(),
+                fade: 0.0,
+                delay: 0.0,
+                mib: false,
+                trigger: Trigger::Go,
+                trigger_time: 0.0,
+                timing: BTreeMap::new(),
+                stagger: 0.0,
+                blocked: false,
+                shield: BTreeMap::from([("Bogus".to_string(), 0.5), ("Dimmer".to_string(), 1.5)]),
+                levels,
+            }],
+        });
+        let problems = show.validate();
+        for expected in [
+            "shield `Bogus` is not an attribute",
+            "shield `Dimmer` is 1.5",
+        ] {
+            assert!(
+                problems.iter().any(|problem| problem.contains(expected)),
+                "missing `{expected}` in {problems:#?}"
+            );
+        }
+    }
+
+    #[test]
     fn home_resolves_stored_then_profile_then_zero() {
         let mut show = demo_show();
         assert_eq!(show.home_level(&show.fixtures[0], "Dimmer"), 0.0);
@@ -1595,6 +1753,8 @@ mod tests {
                 trigger_time: 0.0,
                 timing,
                 stagger: -0.5,
+                blocked: false,
+                shield: BTreeMap::new(),
                 levels,
             }],
         });
@@ -1687,6 +1847,8 @@ mod tests {
                     trigger_time: 0.0,
                     timing: BTreeMap::new(),
                     stagger: 0.0,
+                    blocked: false,
+                    shield: BTreeMap::new(),
                     levels: Levels::new(),
                 },
                 Cue {
@@ -1699,6 +1861,8 @@ mod tests {
                     trigger_time: 0.0,
                     timing: BTreeMap::new(),
                     stagger: 0.0,
+                    blocked: false,
+                    shield: BTreeMap::new(),
                     levels: Levels::new(),
                 },
                 Cue {
@@ -1711,6 +1875,8 @@ mod tests {
                     trigger_time: 0.0,
                     timing: BTreeMap::new(),
                     stagger: 0.0,
+                    blocked: false,
+                    shield: BTreeMap::new(),
                     levels: Levels::new(),
                 },
             ],
