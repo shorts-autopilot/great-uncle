@@ -203,6 +203,23 @@ Reports route through the same listing functions the shell uses, so a report
 cannot disagree with the screen. They write a file and nothing else: no journal
 entry, no undo step, no revision bump.
 
+## Effects: BPM, multi-attribute and phase (14)
+
+An effect can drive several attributes at once, each with its own amplitude and
+phase: `Store Effect 1 "Circle" Attributes Pan Tilt Phase Pan 0 Tilt 90` makes
+the pair move a quarter cycle apart. `Effect 1 Attributes …` replaces the target
+list, and `Effect 1 Attribute Pan Size 30 Phase 120` edits one target without
+touching the others. Fixtures missing a target are skipped, and the listing
+says how many fixtures lack it.
+
+`Rate 1/4` makes an effect musical: its cycles are derived from the desk tempo
+at evaluation time, so `Tempo 128` retimes every running musical effect without
+restarting its phase. `Rate 2hz` is a free rate and ignores the tempo;
+`Effect 1 Tempo Off` freezes the current derived rate into hertz. `Tempo 128`
+sets the desk tempo directly and `Tap` (or `Tap Tempo`) averages the last taps,
+with a gap longer than two seconds starting a new count-in. Show v11; a v10
+effect becomes one target with its old size and phase 0.
+
 ## Known limitations
 
 - **No DMX hardware in the test environment.** Timing is exercised against a
@@ -214,5 +231,5 @@ entry, no undo step, no revision bump.
 - **Home is per fixture and attribute.** There is no per-mode home table, no
   park/default distinction and no automatic re-seed when a profile is
   re-imported.
-- **Only eleven of the eighteen roadmap designs are built.** The remaining
-  seven are listed in [`ROADMAP.md`](ROADMAP.md).
+- **Only twelve of the eighteen roadmap designs are built.** The remaining
+  six are listed in [`ROADMAP.md`](ROADMAP.md).

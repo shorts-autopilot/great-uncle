@@ -1,12 +1,17 @@
 //! Parameter effects (phasers).
 //!
-//! An effect is a stored, numbered waveform that modulates one attribute of the
-//! fixtures it is applied to. Effects run as a **live layer on top of the
-//! programmed level**: the base is the programmer over the running playback, the
-//! waveform adds an offset in −size..=+size, and the result is clamped to 0..100%
-//! before the intensity masters are applied. Nothing is written into the
-//! programmer, cues or palettes, and running assignments are not saved with the
-//! show, so load starts with every effect stopped.
+//! An effect is a stored, numbered waveform that modulates one or more
+//! attributes of the fixtures it is applied to. Effects run as a **live layer on
+//! top of the programmed level**: the base is the programmer over the running
+//! playback, the waveform adds an offset in −size..=+size, and the result is
+//! clamped to 0..100% before the intensity masters are applied. Nothing is
+//! written into the programmer, cues or palettes, and running assignments are
+//! not saved with the show, so load starts with every effect stopped.
+//!
+//! An effect has one or more targets, each with its own size and phase. A
+//! target's rate is either a free rate in hertz or a beat division evaluated
+//! against the desk tempo at render time, so changing `Tempo` retimes every
+//! musical effect without editing them.
 //!
 //! The waveform is a pure function of time, so the engine tick can evaluate it
 //! without sleeping and tests can drive it with explicit instants.
@@ -14,26 +19,27 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::show::Show;
 
 /// Fastest effect accepted, in cycles per second.
 pub const MAX_RATE_HZ: f64 = 100.0;
-/// Largest phase spread accepted, in degrees.
+/// Largest phase spread or target phase accepted, in degrees.
 pub const MAX_SPREAD_DEGREES: f64 = 360.0;
 pub const MAX_EFFECTS: usize = 4096;
+/// Slowest and fastest desk tempo accepted, in beats per minute.
+pub const MIN_BPM: f64 = 20.0;
+pub const MAX_BPM: f64 = 300.0;
+/// The tempo a fresh desk starts at.
+pub const DEFAULT_BPM: f64 = 120.0;
 
-fn default_attribute() -> String {
-    "Dimmer".into()
+fn default_size() -> f64 {
+    0.5
 }
 
 fn default_rate() -> f64 {
     1.0
-}
-
-fn default_size() -> f64 {
-    0.5
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -88,26 +94,189 @@ impl Waveform {
     }
 }
 
+/// One attribute an effect modulates, with its own amplitude and phase.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Effect {
-    pub number: u16,
-    #[serde(default)]
-    pub name: String,
-    /// Attribute to modulate, e.g. `Dimmer` or `ColorAdd_R`.
-    #[serde(default = "default_attribute")]
+pub struct EffectTarget {
     pub attribute: String,
-    #[serde(default)]
-    pub waveform: Waveform,
-    /// Cycles per second at a 100% rate master.
-    #[serde(default = "default_rate")]
-    pub rate_hz: f64,
     /// Amplitude around the base level, 0..=1.
     #[serde(default = "default_size")]
     pub size: f64,
-    /// Phase offset between consecutive fixtures, in degrees.
+    /// Phase offset in degrees, 0..=360.
     #[serde(default)]
+    pub phase: f64,
+}
+
+/// A musical beat division. `1/4` is one beat per cycle, `1/2` two beats, and
+/// a triplet is 1.5 times the plain division's beats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum BeatDivision {
+    #[serde(rename = "1/1")]
+    Whole,
+    #[serde(rename = "1/2")]
+    Half,
+    #[default]
+    #[serde(rename = "1/4")]
+    Quarter,
+    #[serde(rename = "1/8")]
+    Eighth,
+    #[serde(rename = "1/16")]
+    Sixteenth,
+    #[serde(rename = "1/32")]
+    ThirtySecond,
+    #[serde(rename = "1/2T")]
+    HalfTriplet,
+    #[serde(rename = "1/4T")]
+    QuarterTriplet,
+    #[serde(rename = "1/8T")]
+    EighthTriplet,
+    #[serde(rename = "1/16T")]
+    SixteenthTriplet,
+}
+
+impl BeatDivision {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.trim().to_ascii_uppercase().as_str() {
+            "1/1" => Some(Self::Whole),
+            "1/2" => Some(Self::Half),
+            "1/4" => Some(Self::Quarter),
+            "1/8" => Some(Self::Eighth),
+            "1/16" => Some(Self::Sixteenth),
+            "1/32" => Some(Self::ThirtySecond),
+            "1/2T" => Some(Self::HalfTriplet),
+            "1/4T" => Some(Self::QuarterTriplet),
+            "1/8T" => Some(Self::EighthTriplet),
+            "1/16T" => Some(Self::SixteenthTriplet),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Whole => "1/1",
+            Self::Half => "1/2",
+            Self::Quarter => "1/4",
+            Self::Eighth => "1/8",
+            Self::Sixteenth => "1/16",
+            Self::ThirtySecond => "1/32",
+            Self::HalfTriplet => "1/2T",
+            Self::QuarterTriplet => "1/4T",
+            Self::EighthTriplet => "1/8T",
+            Self::SixteenthTriplet => "1/16T",
+        }
+    }
+
+    pub fn names() -> &'static str {
+        "1/1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/2T, 1/4T, 1/8T or 1/16T"
+    }
+
+    pub const fn is_triplet(self) -> bool {
+        matches!(
+            self,
+            Self::HalfTriplet | Self::QuarterTriplet | Self::EighthTriplet | Self::SixteenthTriplet
+        )
+    }
+
+    /// Beats one cycle takes. Triplets are 1.5 times the plain division.
+    pub const fn beats(self) -> f64 {
+        let plain = match self {
+            Self::Whole => 4.0,
+            Self::Half => 2.0,
+            Self::Quarter => 1.0,
+            Self::Eighth => 0.5,
+            Self::Sixteenth => 0.25,
+            Self::ThirtySecond => 0.125,
+            Self::HalfTriplet => 2.0,
+            Self::QuarterTriplet => 1.0,
+            Self::EighthTriplet => 0.5,
+            Self::SixteenthTriplet => 0.25,
+        };
+        if self.is_triplet() {
+            plain * 1.5
+        } else {
+            plain
+        }
+    }
+}
+
+/// An effect's musical rate. `bpm` records the tempo it was chosen at for
+/// reference and for a later `Tempo Off`; running effects always follow the
+/// desk tempo.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Tempo {
+    pub bpm: f64,
+    pub division: BeatDivision,
+}
+
+impl Tempo {
+    pub fn cycles_per_second(&self, desk_bpm: f64) -> f64 {
+        if !desk_bpm.is_finite() || desk_bpm <= 0.0 {
+            return 0.0;
+        }
+        (desk_bpm / 60.0) / self.division.beats()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Effect {
+    pub number: u16,
+    pub name: String,
+    pub waveform: Waveform,
+    pub targets: Vec<EffectTarget>,
+    /// `Some` means musical: the division is evaluated against the desk tempo.
+    /// `None` means `rate_hz` is authoritative.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tempo: Option<Tempo>,
+    pub rate_hz: f64,
+    /// Phase offset between consecutive fixtures, in degrees.
     pub spread: f64,
+}
+
+/// The persisted shape, which also accepts the v10 `attribute`/`size` pair.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EffectWire {
+    number: u16,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    waveform: Waveform,
+    #[serde(default)]
+    targets: Option<Vec<EffectTarget>>,
+    #[serde(default)]
+    tempo: Option<Tempo>,
+    #[serde(default)]
+    rate_hz: Option<f64>,
+    #[serde(default)]
+    spread: Option<f64>,
+    #[serde(default)]
+    attribute: Option<String>,
+    #[serde(default)]
+    size: Option<f64>,
+}
+
+impl<'de> Deserialize<'de> for Effect {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = EffectWire::deserialize(deserializer)?;
+        let targets = wire.targets.unwrap_or_else(|| {
+            // The v10 effect had one attribute and one size.
+            vec![EffectTarget {
+                attribute: wire.attribute.unwrap_or_default(),
+                size: wire.size.unwrap_or_else(default_size),
+                phase: 0.0,
+            }]
+        });
+        Ok(Self {
+            number: wire.number,
+            name: wire.name,
+            waveform: wire.waveform,
+            targets,
+            tempo: wire.tempo,
+            rate_hz: wire.rate_hz.unwrap_or_else(default_rate),
+            spread: wire.spread.unwrap_or(0.0),
+        })
+    }
 }
 
 impl Effect {
@@ -117,6 +286,36 @@ impl Effect {
         } else {
             format!("Effect {} \"{}\"", self.number, self.name)
         }
+    }
+
+    /// Cycles per second right now: the desk tempo for a musical effect, else
+    /// the stored free rate.
+    pub fn effective_rate(&self, desk_tempo: f64) -> f64 {
+        match &self.tempo {
+            Some(tempo) => tempo.cycles_per_second(desk_tempo),
+            None => self.rate_hz,
+        }
+    }
+
+    /// How the rate reads in a listing or message.
+    pub fn rate_label(&self, desk_tempo: f64) -> String {
+        match &self.tempo {
+            Some(tempo) => format!(
+                "{} @ {} BPM",
+                tempo.division.label(),
+                desk_tempo.round() as i64
+            ),
+            None => format!("{} Hz", self.rate_hz),
+        }
+    }
+
+    /// The targets' attribute names, for listings and messages.
+    pub fn target_names(&self) -> String {
+        self.targets
+            .iter()
+            .map(|target| target.attribute.as_str())
+            .collect::<Vec<_>>()
+            .join("+")
     }
 }
 
@@ -171,19 +370,28 @@ impl Effects {
     /// Current offsets for every running fixture/attribute pair.
     ///
     /// `rate_master` scales every effect's speed; it is a desk fader, not show
-    /// data, so it is passed in rather than read from the show.
-    pub fn output(&self, show: &Show, rate_master: f64, now: Instant) -> EffectOutput {
+    /// data. `desk_tempo` is read for musical targets at evaluation time.
+    pub fn output(
+        &self,
+        show: &Show,
+        rate_master: f64,
+        desk_tempo: f64,
+        now: Instant,
+    ) -> EffectOutput {
         let mut output = EffectOutput::default();
         for run in &self.runs {
             let Some(effect) = show.effect(run.effect) else {
                 continue;
             };
-            let rate = effect.rate_hz * rate_master;
+            let rate = effect.effective_rate(desk_tempo) * rate_master;
             let elapsed = now.saturating_duration_since(run.started).as_secs_f64();
             for (index, fixture) in run.fixtures.iter().enumerate() {
-                let phase = elapsed.mul_add(rate, index as f64 * effect.spread / 360.0);
-                let offset = effect.size * effect.waveform.value(phase);
-                output.add(*fixture, &effect.attribute, offset);
+                let spread = index as f64 * effect.spread / 360.0;
+                for target in &effect.targets {
+                    let phase = elapsed.mul_add(rate, spread + target.phase / 360.0);
+                    let offset = target.size * effect.waveform.value(phase);
+                    output.add(*fixture, &target.attribute, offset);
+                }
             }
         }
         output
@@ -221,14 +429,22 @@ mod tests {
     use crate::test_support::demo_show;
     use std::time::Duration;
 
+    fn target(attribute: &str, size: f64, phase: f64) -> EffectTarget {
+        EffectTarget {
+            attribute: attribute.into(),
+            size,
+            phase,
+        }
+    }
+
     fn effect() -> Effect {
         Effect {
             number: 1,
             name: "Pulse".into(),
-            attribute: "Dimmer".into(),
             waveform: Waveform::Sine,
+            targets: vec![target("Dimmer", 0.5, 0.0)],
+            tempo: None,
             rate_hz: 1.0,
-            size: 0.5,
             spread: 0.0,
         }
     }
@@ -259,6 +475,27 @@ mod tests {
     }
 
     #[test]
+    fn beat_divisions_turn_into_cycles_at_the_desk_tempo() {
+        let tempo = |division| Tempo {
+            bpm: DEFAULT_BPM,
+            division,
+        };
+        assert!((tempo(BeatDivision::Quarter).cycles_per_second(120.0) - 2.0).abs() < 1e-12);
+        assert!((tempo(BeatDivision::Half).cycles_per_second(120.0) - 1.0).abs() < 1e-12);
+        assert!((tempo(BeatDivision::Eighth).cycles_per_second(120.0) - 4.0).abs() < 1e-12);
+        assert!(
+            (tempo(BeatDivision::QuarterTriplet).cycles_per_second(120.0) - 2.0 / 1.5).abs()
+                < 1e-12
+        );
+        assert!((tempo(BeatDivision::Whole).cycles_per_second(120.0) - 0.5).abs() < 1e-12);
+        assert_eq!(
+            BeatDivision::parse("1/4t"),
+            Some(BeatDivision::QuarterTriplet)
+        );
+        assert_eq!(BeatDivision::parse("1/3"), None);
+    }
+
+    #[test]
     fn an_effect_oscillates_around_the_base_at_its_rate() {
         let mut show = demo_show();
         show.effects.push(effect());
@@ -266,13 +503,13 @@ mod tests {
         let mut effects = Effects::default();
         effects.start(1, vec![1], start);
 
-        let quarter = effects.output(&show, 1.0, start + Duration::from_millis(250));
+        let quarter = effects.output(&show, 1.0, 120.0, start + Duration::from_millis(250));
         assert!((quarter.get(1, "Dimmer").unwrap() - 0.5).abs() < 1e-9);
 
-        let three_quarter = effects.output(&show, 1.0, start + Duration::from_millis(750));
+        let three_quarter = effects.output(&show, 1.0, 120.0, start + Duration::from_millis(750));
         assert!((three_quarter.get(1, "Dimmer").unwrap() + 0.5).abs() < 1e-9);
 
-        let cycle = effects.output(&show, 1.0, start + Duration::from_secs(1));
+        let cycle = effects.output(&show, 1.0, 120.0, start + Duration::from_secs(1));
         assert!(cycle.get(1, "Dimmer").unwrap().abs() < 1e-9);
     }
 
@@ -287,10 +524,10 @@ mod tests {
         let mut effects = Effects::default();
         effects.start(1, vec![1, 2], start);
 
-        let output = effects.output(&show, 1.0, start);
+        let output = effects.output(&show, 1.0, 120.0, start);
         assert!(output.get(1, "Dimmer").unwrap().abs() < 1e-9);
         assert!(output.get(2, "Dimmer").unwrap().abs() < 1e-9);
-        let quarter = effects.output(&show, 1.0, start + Duration::from_millis(250));
+        let quarter = effects.output(&show, 1.0, 120.0, start + Duration::from_millis(250));
         assert!((quarter.get(1, "Dimmer").unwrap() - 0.5).abs() < 1e-9);
         assert!((quarter.get(2, "Dimmer").unwrap() + 0.5).abs() < 1e-9);
     }
@@ -303,11 +540,77 @@ mod tests {
         let mut effects = Effects::default();
         effects.start(1, vec![1], start);
 
-        let output = effects.output(&show, 2.0, start + Duration::from_millis(125));
+        let output = effects.output(&show, 2.0, 120.0, start + Duration::from_millis(125));
         assert!(
             (output.get(1, "Dimmer").unwrap() - 0.5).abs() < 1e-9,
             "a quarter cycle takes 125 ms at 2 Hz"
         );
+    }
+
+    #[test]
+    fn a_musical_effect_follows_a_tempo_change_without_restarting() {
+        let mut show = demo_show();
+        show.effects.push(Effect {
+            tempo: Some(Tempo {
+                bpm: 120.0,
+                division: BeatDivision::Quarter,
+            }),
+            targets: vec![target("Dimmer", 0.5, 0.0)],
+            ..effect()
+        });
+        let start = Instant::now();
+        let mut effects = Effects::default();
+        effects.start(1, vec![1], start);
+
+        let at_120 = effects.output(&show, 1.0, 120.0, start + Duration::from_millis(125));
+        assert!((at_120.get(1, "Dimmer").unwrap() - 0.5).abs() < 1e-9);
+        // At half the tempo the same elapsed time is only an eighth of a cycle.
+        let at_60 = effects.output(&show, 1.0, 60.0, start + Duration::from_millis(125));
+        let expected = 0.5 * (0.125 * std::f64::consts::TAU).sin();
+        assert!(
+            (at_60.get(1, "Dimmer").unwrap() - expected).abs() < 1e-9,
+            "the run kept its start time"
+        );
+    }
+
+    #[test]
+    fn two_targets_with_a_quarter_cycle_phase_difference_are_orthogonal() {
+        let mut show = demo_show();
+        show.effects.push(Effect {
+            targets: vec![target("Pan", 0.5, 0.0), target("Tilt", 0.5, 90.0)],
+            ..effect()
+        });
+        let start = Instant::now();
+        let mut effects = Effects::default();
+        effects.start(1, vec![1], start);
+
+        for quarter in [1u64, 3, 5, 7] {
+            let at = start + Duration::from_millis(250 * quarter);
+            let output = effects.output(&show, 1.0, 120.0, at);
+            let pan = output.get(1, "Pan").unwrap();
+            let tilt = output.get(1, "Tilt").unwrap();
+            let expected_pan = 0.5 * (quarter as f64 * 0.25 * std::f64::consts::TAU).sin();
+            let expected_tilt =
+                0.5 * ((quarter as f64 * 0.25 + 0.25) * std::f64::consts::TAU).sin();
+            assert!(
+                (pan - expected_pan).abs() < 1e-9 && (tilt - expected_tilt).abs() < 1e-9,
+                "at quarter {quarter}: pan {pan}, tilt {tilt}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_target_the_fixture_lacks_does_not_disturb_the_others() {
+        let mut show = demo_show();
+        show.effects.push(Effect {
+            targets: vec![target("Dimmer", 0.5, 0.0), target("Nope", 0.4, 0.0)],
+            ..effect()
+        });
+        let start = Instant::now();
+        let mut effects = Effects::default();
+        effects.start(1, vec![1], start);
+        let output = effects.output(&show, 1.0, 120.0, start + Duration::from_millis(250));
+        assert!((output.get(1, "Dimmer").unwrap() - 0.5).abs() < 1e-9);
     }
 
     #[test]

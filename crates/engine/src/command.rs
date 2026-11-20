@@ -47,8 +47,10 @@
 //! Delete Filter 1 | Filter
 //! Master Grand At 75 | Master Rate At 200 | Master Group 1 At 50 | Master
 //! Effect 1 On [Fixture 1 Thru 4] | Effect 1 Off | Effect Off | Effect
-//! Store Effect 1 ["name"] [Attribute Dimmer] [Waveform Sine]
-//!              [Rate 1] [Size 50] [Spread 0]
+//! Store Effect 1 ["name"] [Attributes Pan Tilt] [Waveform Sine]
+//!              [Rate 1 | 1/4] [Size 50] [Phase Pan 0 Tilt 90] [Spread 0]
+//! Effect 1 Attributes Pan Tilt | Effect 1 Attribute Pan Size 30 Phase 90
+//! Effect 1 Rate 1/4 | Effect 1 Tempo Off | Tempo 128 | Tap Tempo
 //! Delete Effect 1 | Effect
 //! Undo | Redo
 //! Store Timecode 1 ["name"] [Fps 25] | Delete Timecode 1 | Timecode [1]
@@ -142,6 +144,14 @@ pub enum ReportKind {
     Palettes,
     Status,
     Show,
+}
+
+/// A rate after `Rate`: a free rate in hertz, or a musical division such as
+/// `1/4`. The engine turns the division into a `Tempo`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EffectRate {
+    Hz(f64),
+    Division(String),
 }
 
 /// A channel set after an attribute: `Gobo 2` or `Gobo "Rotate CW"`.
@@ -385,10 +395,11 @@ pub enum Command {
     StoreEffect {
         number: u16,
         name: Option<String>,
-        attribute: Option<String>,
+        targets: Option<Vec<String>>,
         waveform: Option<String>,
-        rate: Option<f64>,
+        rate: Option<EffectRate>,
         size: Option<f64>,
+        phases: Vec<(String, f64)>,
         spread: Option<f64>,
     },
     DeleteEffect {
@@ -404,6 +415,30 @@ pub enum Command {
     EffectOff {
         effect: Option<u16>,
     },
+    /// `Effect 1 Attributes Pan Tilt`: replace the target list.
+    SetEffectAttributes {
+        effect: u16,
+        attributes: Vec<String>,
+    },
+    /// `Effect 1 Attribute Pan Size 30 Phase 90`: edit one target.
+    SetEffectTarget {
+        effect: u16,
+        attribute: String,
+        size: Option<f64>,
+        phase: Option<f64>,
+    },
+    SetEffectRate {
+        effect: u16,
+        rate: EffectRate,
+    },
+    /// `Effect 1 Tempo Off`: keep the current musical rate as a free rate.
+    SetEffectFreeRate {
+        effect: u16,
+    },
+    SetTempo {
+        bpm: f64,
+    },
+    TapTempo,
     StoreTimecode {
         number: u16,
         name: Option<String>,
@@ -658,7 +693,10 @@ pub fn lex(line: &str) -> Result<Vec<Token>, CommandError> {
                 // `1.001` is a patch address and `00:00:10:00` is a timecode;
                 // both are one token that the parser validates.
                 while index < chars.len()
-                    && (chars[index].is_ascii_digit() || chars[index] == '.' || chars[index] == ':')
+                    && (chars[index].is_ascii_digit()
+                        || chars[index] == '.'
+                        || chars[index] == ':'
+                        || chars[index] == '/')
                 {
                     index += 1;
                 }
@@ -733,8 +771,12 @@ const RESERVED: &[&str] = &[
     "rate",
     "effect",
     "attribute",
+    "attributes",
     "waveform",
     "size",
+    "phase",
+    "tempo",
+    "tap",
     "spread",
     "on",
     "mib",
@@ -965,6 +1007,16 @@ impl Parser<'_> {
         }
         if word.eq_ignore_ascii_case("effect") || word.eq_ignore_ascii_case("effects") {
             return self.effect_command();
+        }
+        if word.eq_ignore_ascii_case("tempo") {
+            let bpm = self.number_value("tempo")?;
+            self.expect_end()?;
+            return Ok(Command::SetTempo { bpm });
+        }
+        if word.eq_ignore_ascii_case("tap") {
+            self.eat_word("tempo");
+            self.expect_end()?;
+            return Ok(Command::TapTempo);
         }
         if word.eq_ignore_ascii_case("timecode") || word.eq_ignore_ascii_case("timecodes") {
             return self.timecode_command();
@@ -1675,6 +1727,59 @@ impl Parser<'_> {
                 effect: Some(number),
             });
         }
+        if self.eat_word("attributes") {
+            let attributes = self.effect_attribute_list()?;
+            self.expect_end()?;
+            return Ok(Command::SetEffectAttributes {
+                effect: number,
+                attributes,
+            });
+        }
+        if self.eat_word("attribute") {
+            let attribute = self.name_token("attribute")?;
+            let mut size = None;
+            let mut phase = None;
+            loop {
+                if self.eat_word("size") {
+                    size = Some(self.number_value("size")?);
+                } else if self.eat_word("phase") {
+                    phase = Some(self.phase_value()?);
+                } else {
+                    break;
+                }
+            }
+            if size.is_none() && phase.is_none() {
+                return Err(CommandError::with_hint(
+                    format!("`Effect {number} Attribute {attribute}` changes nothing"),
+                    "add `Size <percent>` or `Phase <degrees>`",
+                ));
+            }
+            self.expect_end()?;
+            return Ok(Command::SetEffectTarget {
+                effect: number,
+                attribute,
+                size,
+                phase,
+            });
+        }
+        if self.eat_word("rate") {
+            let rate = self.effect_rate()?;
+            self.expect_end()?;
+            return Ok(Command::SetEffectRate {
+                effect: number,
+                rate,
+            });
+        }
+        if self.eat_word("tempo") {
+            if self.eat_word("off") {
+                self.expect_end()?;
+                return Ok(Command::SetEffectFreeRate { effect: number });
+            }
+            return Err(CommandError::with_hint(
+                "an effect's tempo can only be turned off",
+                "use `Effect 1 Rate 1/4` to make it musical",
+            ));
+        }
         Err(CommandError::with_hint(
             format!(
                 "unexpected {}",
@@ -1818,20 +1923,25 @@ impl Parser<'_> {
         if self.eat_word("effect") {
             let number = self.whole_number("effect number")?;
             let name = self.optional_name()?;
-            let mut attribute = None;
+            let mut targets = None;
             let mut waveform = None;
             let mut rate = None;
             let mut size = None;
+            let mut phases = Vec::new();
             let mut spread = None;
             loop {
-                if self.eat_word("attribute") {
-                    attribute = Some(self.name_token("attribute")?);
+                if self.eat_word("attributes") {
+                    targets = Some(self.effect_attribute_list()?);
+                } else if self.eat_word("attribute") {
+                    targets = Some(vec![self.name_token("attribute")?]);
                 } else if self.eat_word("waveform") {
                     waveform = Some(self.name_token("waveform")?);
                 } else if self.eat_word("rate") {
-                    rate = Some(self.number_value("rate")?);
+                    rate = Some(self.effect_rate()?);
                 } else if self.eat_word("size") {
                     size = Some(self.number_value("size")?);
+                } else if self.eat_word("phase") {
+                    phases.extend(self.effect_phase_pairs()?);
                 } else if self.eat_word("spread") {
                     spread = Some(self.number_value("spread")?);
                 } else {
@@ -1842,10 +1952,11 @@ impl Parser<'_> {
             return Ok(Command::StoreEffect {
                 number,
                 name,
-                attribute,
+                targets,
                 waveform,
                 rate,
                 size,
+                phases,
                 spread,
             });
         }
@@ -2366,6 +2477,91 @@ impl Parser<'_> {
             }
             _ => None,
         }
+    }
+
+    /// Whether the next word starts another effect option, so an attribute
+    /// list knows where to stop.
+    fn at_effect_option(&self) -> bool {
+        matches!(self.peek(), Some(Token::Word(word))
+            if ["attribute", "attributes", "waveform", "rate", "size", "phase", "spread", "tempo", "on", "off"]
+                .iter()
+                .any(|keyword| word.eq_ignore_ascii_case(keyword)))
+    }
+
+    fn effect_attribute_list(&mut self) -> Result<Vec<String>, CommandError> {
+        let mut attributes = Vec::new();
+        while let Some(Token::Word(word)) = self.peek().cloned() {
+            if self.at_effect_option() {
+                break;
+            }
+            self.position += 1;
+            attributes.push(word);
+        }
+        if attributes.is_empty() {
+            return Err(CommandError::with_hint(
+                "`Attributes` needs at least one attribute",
+                "list them by name, e.g. `Attributes Pan Tilt`",
+            ));
+        }
+        Ok(attributes)
+    }
+
+    /// `Phase Pan 0 Tilt 90`, repeated until the next effect option.
+    fn effect_phase_pairs(&mut self) -> Result<Vec<(String, f64)>, CommandError> {
+        let mut phases = Vec::new();
+        while !self.at_effect_option() {
+            let Some(Token::Word(attribute)) = self.peek().cloned() else {
+                break;
+            };
+            if !matches!(self.tokens.get(self.position + 1), Some(Token::Number(_))) {
+                break;
+            }
+            self.position += 1;
+            phases.push((attribute, self.phase_value()?));
+        }
+        if phases.is_empty() {
+            return Err(CommandError::with_hint(
+                "`Phase` needs an attribute and degrees",
+                "use `Phase Pan 0 Tilt 90`",
+            ));
+        }
+        Ok(phases)
+    }
+
+    /// `Rate 2` / `Rate 2hz` is free, `Rate 1/4` is musical.
+    fn effect_rate(&mut self) -> Result<EffectRate, CommandError> {
+        let Some(token) = self.bump() else {
+            return Err(CommandError::new("expected a rate"));
+        };
+        let raw = match token {
+            Token::Number(raw) | Token::Word(raw) => raw,
+            other => return Err(CommandError::new(format!("expected a rate, got {other}"))),
+        };
+        if raw.contains('/') {
+            return Ok(EffectRate::Division(raw));
+        }
+        let lower = raw.to_ascii_lowercase();
+        let number = lower.strip_suffix("hz").unwrap_or(&lower);
+        let value: f64 = number
+            .parse()
+            .map_err(|_| CommandError::new(format!("`{raw}` is not a rate")))?;
+        if !value.is_finite() || value < 0.0 {
+            return Err(CommandError::new(format!(
+                "rate {raw} is not a positive number"
+            )));
+        }
+        Ok(EffectRate::Hz(value))
+    }
+
+    fn phase_value(&mut self) -> Result<f64, CommandError> {
+        let value = self.number_value("phase")?;
+        if !value.is_finite() || !(0.0..=crate::effect::MAX_SPREAD_DEGREES).contains(&value) {
+            return Err(CommandError::new(format!(
+                "phase {value} is outside 0..={} degrees",
+                crate::effect::MAX_SPREAD_DEGREES
+            )));
+        }
+        Ok(value)
     }
 
     fn number_value(&mut self, what: &str) -> Result<f64, CommandError> {
@@ -3365,10 +3561,11 @@ mod tests {
             Command::StoreEffect {
                 number: 2,
                 name: Some("Pulse".into()),
-                attribute: Some("ColorAdd_R".into()),
+                targets: Some(vec!["ColorAdd_R".into()]),
                 waveform: Some("Square".into()),
-                rate: Some(2.0),
+                rate: Some(EffectRate::Hz(2.0)),
                 size: Some(25.0),
+                phases: Vec::new(),
                 spread: Some(90.0)
             }
         );
@@ -3377,13 +3574,70 @@ mod tests {
             Command::StoreEffect {
                 number: 2,
                 name: Some("Default".into()),
-                attribute: None,
+                targets: None,
                 waveform: None,
                 rate: None,
                 size: None,
+                phases: Vec::new(),
                 spread: None
             }
         );
+        assert_eq!(
+            command(r#"Store Effect 1 "Circle" Rate 1/4 Attributes Pan Tilt Phase Pan 0 Tilt 90"#),
+            Command::StoreEffect {
+                number: 1,
+                name: Some("Circle".into()),
+                targets: Some(vec!["Pan".into(), "Tilt".into()]),
+                waveform: None,
+                rate: Some(EffectRate::Division("1/4".into())),
+                size: None,
+                phases: vec![("Pan".into(), 0.0), ("Tilt".into(), 90.0)],
+                spread: None
+            }
+        );
+        assert_eq!(
+            command("Effect 1 Attributes Pan Tilt"),
+            Command::SetEffectAttributes {
+                effect: 1,
+                attributes: vec!["Pan".into(), "Tilt".into()]
+            }
+        );
+        assert_eq!(
+            command("Effect 1 Attribute Pan Size 30 Phase 120"),
+            Command::SetEffectTarget {
+                effect: 1,
+                attribute: "Pan".into(),
+                size: Some(30.0),
+                phase: Some(120.0)
+            }
+        );
+        assert_eq!(
+            command("Effect 1 Rate 2hz"),
+            Command::SetEffectRate {
+                effect: 1,
+                rate: EffectRate::Hz(2.0)
+            }
+        );
+        assert_eq!(
+            command("Effect 1 Rate 1/4"),
+            Command::SetEffectRate {
+                effect: 1,
+                rate: EffectRate::Division("1/4".into())
+            }
+        );
+        assert_eq!(
+            command("Effect 1 Tempo Off"),
+            Command::SetEffectFreeRate { effect: 1 }
+        );
+        assert_eq!(command("Tempo 128"), Command::SetTempo { bpm: 128.0 });
+        assert_eq!(command("Tap"), Command::TapTempo);
+        assert_eq!(command("Tap Tempo"), Command::TapTempo);
+        assert!(error("Effect 1 Attribute Pan Phase 400")
+            .message
+            .contains("outside 0..=360"));
+        assert!(error("Effect 1 Attribute Pan Phase -10")
+            .message
+            .contains("not a positive number"));
         assert_eq!(
             command("Delete Effect 2"),
             Command::DeleteEffect { number: 2 }

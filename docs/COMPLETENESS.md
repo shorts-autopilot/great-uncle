@@ -57,7 +57,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 2 | Executors | playback/exec | 5 | 1 not-started, 2 in-progress, 2 implemented | Special executors and executor pages need designs. |
 | 2 | Masters | playback/masters | 7 | 3 not-started, 1 in-progress, 3 implemented | Selected, time and timing masters need designs. |
 | 3 | Recipes | playback/recipes | 1 | 1 not-started | Needs a design. |
-| 3 | Phasers | phaser | 6 | 3 not-started, 1 in-progress, 2 implemented | Item 14 adds multi-attribute/phase effects; the phaser editor and circle/rainbow presets need a design. |
+| 3 | Phasers | phaser | 6 | 3 not-started, 1 in-progress, 2 implemented | Item 14 supplies multi-attribute/phase effects; the phaser editor and circle/rainbow presets still need a design. |
 | 3 | Generator - Random | generator | 1 | 1 not-started | Needs a design. |
 | 7 | Bitmap | media | 1 | 1 out-of-scope | Bitmap/pixel mapping is outside the design set. |
 | 4 | XYZ | programmer | 3 | 3 not-started | Needs a design (XYZ attribute space and marker fixtures). |
@@ -167,7 +167,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 2 | Executors | 1 | 2 | Special executors and executor pages need designs. |
 | 2 | Masters | 3 | 1 | Selected, time and timing masters need designs. |
 | 3 | Recipes | 1 | 0 | Needs a design. |
-| 3 | Phasers | 3 | 1 | Item 14 adds multi-attribute/phase effects; the phaser editor and circle/rainbow presets need a design. |
+| 3 | Phasers | 3 | 1 | Item 14 supplies multi-attribute/phase effects; the phaser editor and circle/rainbow presets still need a design. |
 | 3 | Generator - Random | 1 | 0 | Needs a design. |
 | 4 | XYZ | 3 | 0 | Needs a design (XYZ attribute space and marker fixtures). |
 | 4 | Tags | 1 | 0 | Needs a small design. |

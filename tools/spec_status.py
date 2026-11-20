@@ -428,7 +428,7 @@ CHAPTER_NOTES = {
     "executor": "Special executors and executor pages need designs.",
     "masters": "Selected, time and timing masters need designs.",
     "recipes": "Needs a design.",
-    "phaser": "Item 14 adds multi-attribute/phase effects; the phaser editor and circle/rainbow presets need a design.",
+    "phaser": "Item 14 supplies multi-attribute/phase effects; the phaser editor and circle/rainbow presets still need a design.",
     "generator": "Needs a design.",
     "xyz": "Needs a design (XYZ attribute space and marker fixtures).",
     "tags": "Needs a small design.",

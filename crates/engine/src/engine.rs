@@ -12,12 +12,15 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::command::{
-    self, Command, CommandError, Level, LevelSource, PlaybackRef, ReportKind, SetTarget, StoreMode,
-    TriggerArg,
+    self, Command, CommandError, EffectRate, Level, LevelSource, PlaybackRef, ReportKind,
+    SetTarget, StoreMode, TriggerArg,
 };
 use crate::csv;
 use crate::desk::{Desk, Masters, Preview, RunState};
-use crate::effect::{Effect, Effects, Waveform, MAX_RATE_HZ, MAX_SPREAD_DEGREES};
+use crate::effect::{
+    BeatDivision, Effect, EffectTarget, Effects, Tempo, Waveform, MAX_BPM, MAX_RATE_HZ,
+    MAX_SPREAD_DEGREES, MIN_BPM,
+};
 use crate::fixture_type::{Channel, FixtureType, SetSelector, DIMMER};
 use crate::gdtf;
 use crate::history::{History, Snapshot};
@@ -60,10 +63,11 @@ struct TimingSpec {
 struct EffectSpec {
     number: u16,
     name: Option<String>,
-    attribute: Option<String>,
+    targets: Option<Vec<String>>,
     waveform: Option<String>,
-    rate: Option<f64>,
+    rate: Option<EffectRate>,
     size: Option<f64>,
+    phases: Vec<(String, f64)>,
     spread: Option<f64>,
 }
 
@@ -381,9 +385,12 @@ impl Engine {
     }
 
     pub fn render(&self) -> OutputFrame {
-        let effects = self
-            .effects
-            .output(&self.show, self.desk.masters.rate, self.clock);
+        let effects = self.effects.output(
+            &self.show,
+            self.desk.masters.rate,
+            self.desk.tempo,
+            self.clock,
+        );
         // Blind replaces the programmer with an empty level map for this one
         // render. Playback still runs: the programmer is the only layer that
         // goes dark.
@@ -607,24 +614,39 @@ impl Engine {
             Command::StoreEffect {
                 number,
                 name,
-                attribute,
+                targets,
                 waveform,
                 rate,
                 size,
+                phases,
                 spread,
             } => self.store_effect(EffectSpec {
                 number,
                 name,
-                attribute,
+                targets,
                 waveform,
                 rate,
                 size,
+                phases,
                 spread,
             }),
             Command::DeleteEffect { number } => self.delete_effect(number),
             Command::ListEffects { only } => Ok(self.effect_list(only)),
             Command::EffectOn { effect, fixtures } => self.effect_on(effect, fixtures),
             Command::EffectOff { effect } => self.effect_off(effect),
+            Command::SetEffectAttributes { effect, attributes } => {
+                self.set_effect_attributes(effect, attributes)
+            }
+            Command::SetEffectTarget {
+                effect,
+                attribute,
+                size,
+                phase,
+            } => self.set_effect_target(effect, &attribute, size, phase),
+            Command::SetEffectRate { effect, rate } => self.set_effect_rate(effect, rate),
+            Command::SetEffectFreeRate { effect } => self.set_effect_free_rate(effect),
+            Command::SetTempo { bpm } => self.set_tempo(bpm),
+            Command::TapTempo => self.tap_tempo(),
             Command::StoreTimecode { number, name, fps } => self.store_timecode(number, name, fps),
             Command::DeleteTimecode { number } => self.delete_timecode(number),
             Command::AddTimecodeEvent {
@@ -1811,9 +1833,12 @@ impl Engine {
         let mut fixtures: Vec<&Fixture> = self.show.fixtures.iter().collect();
         fixtures.sort_by_key(|fixture| fixture.number);
         let playback = self.playback.output();
-        let effects = self
-            .effects
-            .output(&self.show, self.desk.masters.rate, self.clock);
+        let effects = self.effects.output(
+            &self.show,
+            self.desk.masters.rate,
+            self.desk.tempo,
+            self.clock,
+        );
         let stage = Stage::new(
             &self.show,
             &self.desk.programmer,
@@ -1937,9 +1962,10 @@ impl Engine {
             self.show.effects.len()
         ));
         lines.push(format!(
-            "Masters: grand {}% | rate {}%",
+            "Masters: grand {}% | rate {}% | Tempo {} BPM",
             (self.desk.masters.grand * 100.0).round() as i64,
-            (self.desk.masters.rate * 100.0).round() as i64
+            (self.desk.masters.rate * 100.0).round() as i64,
+            self.desk.tempo.round() as i64
         ));
         lines.push(format!(
             "Blind: {} | Highlight: {} | Preview: {}",
@@ -2009,8 +2035,15 @@ impl Engine {
         ));
         if self.effects.is_running() {
             for (number, fixtures) in self.effects.runs() {
+                let effect = self.show.effect(number);
+                let hz = effect
+                    .map(|effect| effect.effective_rate(self.desk.tempo) * self.desk.masters.rate)
+                    .unwrap_or(0.0);
+                let label = effect
+                    .map(|effect| effect.rate_label(self.desk.tempo))
+                    .unwrap_or_else(|| "missing".into());
                 lines.push(format!(
-                    "Effect {number}: running on {}",
+                    "Effect {number}: {hz:.2} Hz ({label}) on {}",
                     format_fixture_list(fixtures)
                 ));
             }
@@ -4797,14 +4830,153 @@ impl Engine {
         CommandOutcome::with_lines(lines)
     }
 
+    /// Resolve an effect target against the whole patch, accepting a canonical
+    /// or pretty attribute name.
+    fn effect_attribute(&self, requested: &str) -> Result<String, CommandError> {
+        let mut available = BTreeSet::new();
+        for fixture in &self.show.fixtures {
+            let Ok((fixture_type, mode)) = self.show.mode_for(fixture) else {
+                continue;
+            };
+            for channel in &mode.channels {
+                available.insert(fixture_type.pretty_attribute(&channel.attribute));
+            }
+            if let Some(channel) = mode.channel_for(requested) {
+                return Ok(channel.attribute.clone());
+            }
+            if let Some(channel) = mode.channels.iter().find(|channel| {
+                fixture_type
+                    .pretty_attribute(&channel.attribute)
+                    .eq_ignore_ascii_case(requested)
+            }) {
+                return Ok(channel.attribute.clone());
+            }
+        }
+        Err(CommandError::with_hint(
+            format!("no patched fixture has `{requested}`"),
+            if available.is_empty() {
+                "patch fixtures first".to_string()
+            } else {
+                format!(
+                    "attributes: {}",
+                    available.into_iter().collect::<Vec<_>>().join(", ")
+                )
+            },
+        ))
+    }
+
+    fn effect_targets(
+        &self,
+        requested: Option<Vec<String>>,
+        size: Option<f64>,
+        phases: &[(String, f64)],
+    ) -> Result<Vec<EffectTarget>, CommandError> {
+        let requested = requested.unwrap_or_else(|| vec![DIMMER.to_string()]);
+        let size = size.unwrap_or(50.0) / 100.0;
+        if !size.is_finite() || !(0.0..=1.0).contains(&size) {
+            return Err(CommandError::new(
+                "size is a percentage from 0 to 100".to_string(),
+            ));
+        }
+        let mut resolved = Vec::new();
+        for name in requested {
+            let attribute = self.effect_attribute(&name)?;
+            if resolved
+                .iter()
+                .any(|(_, other): &(String, String)| other.eq_ignore_ascii_case(&attribute))
+            {
+                return Err(CommandError::new(format!(
+                    "attribute `{attribute}` appears twice"
+                )));
+            }
+            resolved.push((name, attribute));
+        }
+        for (phase_target, _) in phases {
+            if !resolved.iter().any(|(requested, canonical)| {
+                phase_target.eq_ignore_ascii_case(requested)
+                    || phase_target.eq_ignore_ascii_case(canonical)
+            }) {
+                return Err(CommandError::with_hint(
+                    format!("phase target `{phase_target}` is not in the effect"),
+                    format!(
+                        "targets: {}",
+                        resolved
+                            .iter()
+                            .map(|(_, attribute)| attribute.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                ));
+            }
+        }
+        let mut targets = Vec::new();
+        for (requested, attribute) in resolved {
+            let phase = phases
+                .iter()
+                .find(|(name, _)| {
+                    name.eq_ignore_ascii_case(&requested) || name.eq_ignore_ascii_case(&attribute)
+                })
+                .map(|(_, phase)| *phase)
+                .unwrap_or(0.0);
+            if !phase.is_finite() || !(0.0..=MAX_SPREAD_DEGREES).contains(&phase) {
+                return Err(CommandError::new(format!(
+                    "phase {phase} is outside 0..={MAX_SPREAD_DEGREES} degrees"
+                )));
+            }
+            targets.push(EffectTarget {
+                attribute,
+                size,
+                phase,
+            });
+        }
+        Ok(targets)
+    }
+
+    /// The one authority for an effect's speed: either a free rate or a beat
+    /// division evaluated against the desk tempo.
+    fn effect_rate(&self, rate: Option<EffectRate>) -> Result<(Option<Tempo>, f64), CommandError> {
+        match rate {
+            None => Ok((None, 1.0)),
+            Some(EffectRate::Hz(rate)) => {
+                if !rate.is_finite() || rate <= 0.0 || rate > MAX_RATE_HZ {
+                    return Err(CommandError::new(format!(
+                        "rate {rate} Hz is outside 0..={MAX_RATE_HZ}"
+                    )));
+                }
+                Ok((None, rate))
+            }
+            Some(EffectRate::Division(text)) => {
+                let division = BeatDivision::parse(&text).ok_or_else(|| {
+                    CommandError::with_hint(
+                        format!("unknown rate `{text}`"),
+                        format!("use a rate like 2hz, or {}", BeatDivision::names()),
+                    )
+                })?;
+                let tempo = Tempo {
+                    bpm: self.desk.tempo,
+                    division,
+                };
+                let rate = tempo.cycles_per_second(self.desk.tempo);
+                if !rate.is_finite() || rate <= 0.0 {
+                    return Err(CommandError::new(format!(
+                        "division {} does not produce a usable rate",
+                        division.label()
+                    )));
+                }
+                Ok((Some(tempo), rate))
+            }
+        }
+    }
+
     fn store_effect(&mut self, spec: EffectSpec) -> Result<CommandOutcome, CommandError> {
         let EffectSpec {
             number,
             name,
-            attribute,
+            targets,
             waveform,
             rate,
             size,
+            phases,
             spread,
         } = spec;
         if number == 0 {
@@ -4819,38 +4991,37 @@ impl Engine {
             })?,
             None => Waveform::default(),
         };
-        let attribute = attribute.unwrap_or_else(|| DIMMER.to_string());
-        if attribute.trim().is_empty() {
-            return Err(CommandError::new("an effect needs an attribute"));
-        }
-        let rate_hz = rate.unwrap_or(1.0);
-        if !(0.0..=MAX_RATE_HZ).contains(&rate_hz) {
-            return Err(CommandError::new(format!(
-                "rate {rate_hz} Hz is outside 0..={MAX_RATE_HZ}"
-            )));
-        }
-        let size = size.unwrap_or(50.0) / 100.0;
-        if !(0.0..=1.0).contains(&size) {
-            return Err(CommandError::new(
-                "size is a percentage from 0 to 100".to_string(),
-            ));
-        }
+        let targets = self.effect_targets(targets, size, &phases)?;
+        let (tempo, rate_hz) = self.effect_rate(rate)?;
         let spread = spread.unwrap_or(0.0);
-        if !(0.0..=MAX_SPREAD_DEGREES).contains(&spread) {
+        if !spread.is_finite() || !(0.0..=MAX_SPREAD_DEGREES).contains(&spread) {
             return Err(CommandError::new(format!(
                 "spread {spread} is outside 0..={MAX_SPREAD_DEGREES} degrees"
             )));
         }
+        let target_names = targets
+            .iter()
+            .map(|target| target.attribute.as_str())
+            .collect::<Vec<_>>()
+            .join("+");
+        let rate_label = match &tempo {
+            Some(tempo) => format!(
+                "{} @ {} BPM",
+                tempo.division.label(),
+                self.desk.tempo.round() as i64
+            ),
+            None => format!("{rate_hz} Hz"),
+        };
 
         let mut created = false;
         let message = self.mutate(|show| {
             let effect = Effect {
                 number,
                 name: name.clone().unwrap_or_default(),
-                attribute: attribute.clone(),
                 waveform,
+                targets: targets.clone(),
+                tempo: tempo.clone(),
                 rate_hz,
-                size,
                 spread,
             };
             match show
@@ -4866,13 +5037,230 @@ impl Engine {
             }
             show.effects.sort_by_key(|effect| effect.number);
             Ok(format!(
-                "{} effect {number} ({attribute}, {}, {rate_hz} Hz, {}%, spread {spread}°)",
+                "{} effect {number} ({target_names}, {}, {rate_label}, spread {spread}°)",
                 if created { "Stored" } else { "Updated" },
-                waveform.name(),
-                (size * 100.0).round() as i64
+                waveform.name()
             ))
         })?;
         Ok(CommandOutcome::message(message))
+    }
+
+    fn set_effect_attributes(
+        &mut self,
+        number: u16,
+        attributes: Vec<String>,
+    ) -> Result<CommandOutcome, CommandError> {
+        let Some(effect) = self.show.effect(number).cloned() else {
+            return Err(CommandError::with_hint(
+                format!("effect {number} does not exist"),
+                "`Effect` lists the stored effects",
+            ));
+        };
+        let mut targets = Vec::with_capacity(attributes.len());
+        for requested in attributes {
+            let attribute = self.effect_attribute(&requested)?;
+            if targets
+                .iter()
+                .any(|target: &EffectTarget| target.attribute.eq_ignore_ascii_case(&attribute))
+            {
+                return Err(CommandError::new(format!(
+                    "attribute `{attribute}` appears twice"
+                )));
+            }
+            let target = effect
+                .targets
+                .iter()
+                .find(|target| target.attribute.eq_ignore_ascii_case(&attribute))
+                .cloned()
+                .unwrap_or(EffectTarget {
+                    attribute,
+                    size: 0.5,
+                    phase: 0.0,
+                });
+            targets.push(target);
+        }
+        let count = targets.len();
+        let message = self.mutate(|show| {
+            let index = show
+                .effects
+                .iter()
+                .position(|effect| effect.number == number)
+                .ok_or_else(|| CommandError::new(format!("effect {number} does not exist")))?;
+            show.effects[index].targets = targets;
+            Ok(format!("Effect {number} now has {count} targets"))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn set_effect_target(
+        &mut self,
+        number: u16,
+        attribute: &str,
+        size: Option<f64>,
+        phase: Option<f64>,
+    ) -> Result<CommandOutcome, CommandError> {
+        let Some(effect) = self.show.effect(number).cloned() else {
+            return Err(CommandError::with_hint(
+                format!("effect {number} does not exist"),
+                "`Effect` lists the stored effects",
+            ));
+        };
+        let canonical = if effect
+            .targets
+            .iter()
+            .any(|target| target.attribute.eq_ignore_ascii_case(attribute))
+        {
+            attribute.to_string()
+        } else {
+            self.effect_attribute(attribute)?
+        };
+        let Some(mut target) = effect
+            .targets
+            .iter()
+            .find(|target| target.attribute.eq_ignore_ascii_case(&canonical))
+            .cloned()
+        else {
+            return Err(CommandError::with_hint(
+                format!("effect {number} has no target `{attribute}`"),
+                format!("targets: {}", effect.target_names()),
+            ));
+        };
+        if let Some(percent) = size {
+            let value = percent / 100.0;
+            if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                return Err(CommandError::new(
+                    "size is a percentage from 0 to 100".to_string(),
+                ));
+            }
+            target.size = value;
+        }
+        if let Some(value) = phase {
+            if !value.is_finite() || !(0.0..=MAX_SPREAD_DEGREES).contains(&value) {
+                return Err(CommandError::new(format!(
+                    "phase {value} is outside 0..={MAX_SPREAD_DEGREES} degrees"
+                )));
+            }
+            target.phase = value;
+        }
+        let label = target.attribute.clone();
+        let message = self.mutate(|show| {
+            let effect = show
+                .effects
+                .iter_mut()
+                .find(|effect| effect.number == number)
+                .ok_or_else(|| CommandError::new(format!("effect {number} does not exist")))?;
+            let slot = effect
+                .targets
+                .iter_mut()
+                .find(|target| target.attribute.eq_ignore_ascii_case(&label))
+                .ok_or_else(|| CommandError::new(format!("effect {number} lost its target")))?;
+            *slot = target;
+            Ok(format!(
+                "Effect {number} target `{label}`: size {}% phase {}°",
+                (slot.size * 100.0).round() as i64,
+                slot.phase.round() as i64
+            ))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn set_effect_rate(
+        &mut self,
+        number: u16,
+        rate: EffectRate,
+    ) -> Result<CommandOutcome, CommandError> {
+        if self.show.effect(number).is_none() {
+            return Err(CommandError::with_hint(
+                format!("effect {number} does not exist"),
+                "`Effect` lists the stored effects",
+            ));
+        }
+        let (tempo, rate_hz) = self.effect_rate(Some(rate))?;
+        let label = match &tempo {
+            Some(tempo) => format!(
+                "{} @ {} BPM",
+                tempo.division.label(),
+                self.desk.tempo.round() as i64
+            ),
+            None => format!("{rate_hz} Hz"),
+        };
+        let message = self.mutate(|show| {
+            let effect = show
+                .effects
+                .iter_mut()
+                .find(|effect| effect.number == number)
+                .ok_or_else(|| CommandError::new(format!("effect {number} does not exist")))?;
+            effect.tempo = tempo;
+            effect.rate_hz = rate_hz;
+            Ok(format!("Effect {number} rate {label}"))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn set_effect_free_rate(&mut self, number: u16) -> Result<CommandOutcome, CommandError> {
+        let Some(effect) = self.show.effect(number).cloned() else {
+            return Err(CommandError::with_hint(
+                format!("effect {number} does not exist"),
+                "`Effect` lists the stored effects",
+            ));
+        };
+        if effect.tempo.is_none() {
+            return Err(CommandError::new(format!(
+                "effect {number} already uses a free rate"
+            )));
+        }
+        let rate = effect.effective_rate(self.desk.tempo);
+        if !rate.is_finite() || rate <= 0.0 {
+            return Err(CommandError::new(format!(
+                "effect {number} does not have a usable rate"
+            )));
+        }
+        let message = self.mutate(|show| {
+            let effect = show
+                .effects
+                .iter_mut()
+                .find(|effect| effect.number == number)
+                .ok_or_else(|| CommandError::new(format!("effect {number} does not exist")))?;
+            effect.tempo = None;
+            effect.rate_hz = rate;
+            Ok(format!("Effect {number} is now a free rate of {rate} Hz"))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn set_tempo(&mut self, bpm: f64) -> Result<CommandOutcome, CommandError> {
+        if !bpm.is_finite() || !(MIN_BPM..=MAX_BPM).contains(&bpm) {
+            return Err(CommandError::new(format!(
+                "tempo {bpm} BPM is outside {MIN_BPM}..={MAX_BPM}"
+            )));
+        }
+        let changed = (self.desk.tempo - bpm).abs() > 1e-9;
+        self.desk.tempo = bpm;
+        self.desk.taps.clear();
+        if changed {
+            self.revision += 1;
+        }
+        Ok(CommandOutcome::message(format!(
+            "Tempo {} BPM",
+            bpm.round() as i64
+        )))
+    }
+
+    fn tap_tempo(&mut self) -> Result<CommandOutcome, CommandError> {
+        match self.desk.tap(self.clock) {
+            None => Ok(CommandOutcome::message(format!(
+                "Tap {}; tap again to set the tempo",
+                self.desk.taps.len()
+            ))),
+            Some(bpm) => {
+                let taps = self.desk.taps.len();
+                self.revision += 1;
+                Ok(CommandOutcome::message(format!(
+                    "Tempo {} BPM (from {taps} taps)",
+                    bpm.round() as i64
+                )))
+            }
+        }
     }
 
     fn delete_effect(&mut self, number: u16) -> Result<CommandOutcome, CommandError> {
@@ -4902,33 +5290,50 @@ impl Engine {
             ));
         };
         let targets = self.targets(fixtures)?;
-        self.check_attribute_allowed(&targets, &effect.attribute)?;
+        for target in &effect.targets {
+            self.check_attribute_allowed(&targets, &target.attribute)?;
+        }
+        let mut applied = Vec::new();
         for fixture_number in &targets {
             let Some(fixture) = self.show.fixture(*fixture_number) else {
                 continue;
             };
             let (_, mode) = self.show.mode_for(fixture).map_err(CommandError::new)?;
-            if mode.channel_for(&effect.attribute).is_none() {
-                return Err(CommandError::with_hint(
-                    format!(
-                        "fixture {fixture_number} has no `{}` in mode `{}`",
-                        effect.attribute, fixture.mode
-                    ),
-                    format!("attributes: {}", attribute_list(mode)),
-                ));
+            if effect
+                .targets
+                .iter()
+                .all(|target| mode.channel_for(&target.attribute).is_some())
+            {
+                applied.push(*fixture_number);
             }
         }
-        self.effects.start(number, targets.clone(), self.clock);
+        if applied.is_empty() {
+            return Err(CommandError::with_hint(
+                format!(
+                    "none of the selected fixtures has every target of effect {number} ({})",
+                    effect.target_names()
+                ),
+                "select fixtures that have all of the targets",
+            ));
+        }
+        let skipped = targets.len() - applied.len();
+        self.effects.start(number, applied.clone(), self.clock);
         self.revision += 1;
-        Ok(CommandOutcome::message(format!(
-            "{} on {} ({}, {}, {} Hz, {}%)",
+        let mut message = format!(
+            "{} on {} ({}, {}, {})",
             effect.display_name(),
-            format_fixture_list(&targets),
-            effect.attribute,
+            format_fixture_list(&applied),
+            effect.target_names(),
             effect.waveform.name(),
-            effect.rate_hz * self.desk.masters.rate,
-            (effect.size * 100.0).round() as i64
-        )))
+            effect.rate_label(self.desk.tempo)
+        );
+        if skipped > 0 {
+            message.push_str(&format!(
+                "; {skipped} of {} selected fixtures skipped (missing a target)",
+                targets.len()
+            ));
+        }
+        Ok(CommandOutcome::message(message))
     }
 
     fn effect_off(&mut self, effect: Option<u16>) -> Result<CommandOutcome, CommandError> {
@@ -4966,12 +5371,25 @@ impl Engine {
             });
         }
         let mut lines = vec![format!(
-            "{:<4} {:<20} {:<18} {:<9} {:<8} {:<6} {}",
-            "No.", "Name", "Attribute", "Waveform", "Rate", "Size", "Spread"
+            "{:<4} {:<20} {:<24} {:<9} {:<18} {:>7}  {}",
+            "No.", "Name", "Targets", "Waveform", "Rate", "Spread", "Applies to"
         )];
         for effect in effects {
+            let fixtures = self
+                .show
+                .fixtures
+                .iter()
+                .filter(|fixture| {
+                    self.show.mode_for(fixture).is_ok_and(|(_, mode)| {
+                        effect
+                            .targets
+                            .iter()
+                            .all(|target| mode.channel_for(&target.attribute).is_some())
+                    })
+                })
+                .count();
             lines.push(format!(
-                "{:<4} {:<20} {:<18} {:<9} {:<8} {:<6} {}°",
+                "{:<4} {:<20} {:<24} {:<9} {:<18} {:>7}  {} fixtures",
                 effect.number,
                 truncate(
                     if effect.name.trim().is_empty() {
@@ -4981,12 +5399,39 @@ impl Engine {
                     },
                     20
                 ),
-                truncate(&effect.attribute, 18),
+                truncate(&effect.target_names(), 24),
                 effect.waveform.name(),
-                format!("{} Hz", effect.rate_hz),
-                format!("{}%", (effect.size * 100.0).round() as i64),
-                effect.spread.round() as i64
+                effect.rate_label(self.desk.tempo),
+                format!("{}°", effect.spread.round() as i64),
+                fixtures
             ));
+            for target in &effect.targets {
+                let missing = self
+                    .show
+                    .fixtures
+                    .iter()
+                    .filter(|fixture| {
+                        self.show
+                            .mode_for(fixture)
+                            .is_ok_and(|(_, mode)| mode.channel_for(&target.attribute).is_none())
+                    })
+                    .count();
+                let note = if missing > 0 {
+                    format!(
+                        "  ({missing} of {} fixtures have no {})",
+                        self.show.fixtures.len(),
+                        target.attribute
+                    )
+                } else {
+                    String::new()
+                };
+                lines.push(format!(
+                    "     {:<16} size {:>3}%  phase {:>3}°{note}",
+                    truncate(&target.attribute, 16),
+                    (target.size * 100.0).round() as i64,
+                    target.phase.round() as i64
+                ));
+            }
         }
         for (number, fixtures) in self.effects.runs() {
             if only.is_some_and(|wanted| wanted != number) {
@@ -5669,8 +6114,11 @@ pub const HELP: &[&str] = &[
     "World 1 / World All / Store World 1 \"Front\" / World",
     "Filter 1 / Filter All / Store Filter 1 \"Intensity\" Dimmer Color",
     "Master Grand At 75 / Master Rate At 200 / Master Group 1 At 50 / Master",
-    "Store Effect 1 \"Pulse\" [Attribute Dimmer] [Waveform Sine] [Rate 1] [Size 50] [Spread 0]",
+    "Store Effect 1 \"Pulse\" [Attributes Dimmer Red] [Waveform Sine] [Rate 1 | 1/4] [Size 50] [Phase Red 90] [Spread 0]",
     "Effect 1 On [Fixture 1 Thru 4] / Effect 1 Off / Effect Off / Effect",
+    "Effect 1 Attributes Dimmer Red / Effect 1 Attribute Red Size 30 Phase 90",
+    "Effect 1 Rate 1/4 | 2hz / Effect 1 Tempo Off",
+    "Tempo 128 / Tap Tempo                  set the musical tempo",
     "Blackout [Fade 2] / Blackout Off      darken the rig without losing the look",
     "Blind / Blind Off                      edit without changing the stage",
     "Preview [Cue 14] [Sequence 2] / Preview Off  inspect a cue without sending it",
@@ -6986,6 +7434,178 @@ mod tests {
     }
 
     #[test]
+    fn musical_effects_follow_the_desk_tempo() {
+        let mut engine = engine();
+        let start = engine.clock();
+        engine.tick(start);
+        engine.execute("Fixture 1 At 50").unwrap();
+        engine.execute("Store Effect 1 Rate 1/4").unwrap();
+        engine.execute("Effect 1 On").unwrap();
+        engine
+            .execute("Store Effect 2 Attributes ColorAdd_R Rate 2hz")
+            .unwrap();
+        engine.execute("Effect 2 On").unwrap();
+
+        engine.tick(start + Duration::from_millis(125));
+        assert_eq!(
+            engine.render().slot(1, 1),
+            Some(255),
+            "a quarter beat at 120"
+        );
+        assert_eq!(engine.render().slot(1, 2), Some(128), "2 Hz is free");
+
+        engine.execute("Tempo 140").unwrap();
+        assert_eq!(
+            engine.render().slot(1, 1),
+            Some(251),
+            "the musical effect followed the tempo"
+        );
+        assert_eq!(
+            engine.render().slot(1, 2),
+            Some(128),
+            "the free rate did not"
+        );
+
+        engine.execute("Tempo 60").unwrap();
+        assert_eq!(
+            engine.render().slot(1, 1),
+            Some(218),
+            "the same run is now half as fast"
+        );
+    }
+
+    #[test]
+    fn two_targets_with_ninety_degrees_of_phase_stay_orthogonal() {
+        let mut engine = engine();
+        let start = engine.clock();
+        engine.tick(start);
+        engine.execute("Fixture 1 At Dimmer 50").unwrap();
+        engine.execute("Fixture 1 At ColorAdd_R 50").unwrap();
+        engine
+            .execute("Store Effect 1 Attributes Dimmer ColorAdd_R Rate 1/4 Phase ColorAdd_R 90")
+            .unwrap();
+        engine.execute("Effect 1 On").unwrap();
+
+        engine.tick(start + Duration::from_millis(125));
+        assert_eq!(engine.render().slot(1, 1), Some(255), "dimmer at the top");
+        assert_eq!(engine.render().slot(1, 2), Some(128), "red at the centre");
+
+        engine.tick(start + Duration::from_millis(250));
+        assert_eq!(
+            engine.render().slot(1, 1),
+            Some(128),
+            "dimmer at the centre"
+        );
+        assert_eq!(engine.render().slot(1, 2), Some(0), "red at the bottom");
+
+        engine.tick(start + Duration::from_millis(375));
+        assert_eq!(engine.render().slot(1, 1), Some(0), "dimmer at the bottom");
+        assert_eq!(engine.render().slot(1, 2), Some(128), "red at the centre");
+    }
+
+    #[test]
+    fn tempo_and_taps_set_the_desk_tempo() {
+        let mut engine = engine();
+        let start = engine.clock();
+        engine.tick(start);
+        assert!(engine
+            .execute("Status")
+            .unwrap()
+            .lines
+            .iter()
+            .any(|line| line.contains("Tempo 120 BPM")));
+        assert!(engine.execute("Tempo 10").is_err());
+        engine.execute("Tempo 128").unwrap();
+        assert_eq!(engine.desk.tempo, 128.0);
+
+        let first = engine.execute("Tap").unwrap();
+        assert!(first.lines[0].contains("tap again"), "{first:?}");
+        engine.tick(start + Duration::from_millis(500));
+        let second = engine.execute("Tap Tempo").unwrap();
+        assert!(second.lines[0].contains("Tempo 120 BPM"), "{second:?}");
+        assert_eq!(engine.desk.tempo, 120.0);
+    }
+
+    #[test]
+    fn effects_edit_targets_rate_and_tempo() {
+        let mut engine = engine();
+        engine
+            .execute(
+                "Store Effect 1 \"Mix\" Attributes Dimmer ColorAdd_R Rate 1/4 Phase ColorAdd_R 90",
+            )
+            .unwrap();
+        let effect = &engine.show.effects[0];
+        assert_eq!(effect.targets.len(), 2);
+        assert_eq!(effect.targets[1].attribute, "ColorAdd_R");
+        assert_eq!(effect.targets[1].phase, 90.0);
+        assert_eq!(effect.rate_hz, 2.0);
+        assert!(effect.tempo.is_some());
+
+        engine
+            .execute("Effect 1 Attribute ColorAdd_R Size 30 Phase 180")
+            .unwrap();
+        assert_eq!(engine.show.effects[0].targets[1].size, 0.3);
+        assert_eq!(engine.show.effects[0].targets[1].phase, 180.0);
+
+        engine
+            .execute("Effect 1 Attributes Dimmer ColorAdd_R")
+            .unwrap();
+        assert_eq!(
+            engine.show.effects[0].targets[1].size, 0.3,
+            "edited target kept"
+        );
+
+        engine.execute("Effect 1 Rate 2hz").unwrap();
+        assert!(engine.show.effects[0].tempo.is_none());
+        assert_eq!(engine.show.effects[0].rate_hz, 2.0);
+        assert!(engine.execute("Effect 1 Tempo Off").is_err());
+
+        engine.execute("Effect 1 Rate 1/4").unwrap();
+        engine.execute("Effect 1 Tempo Off").unwrap();
+        assert!(engine.show.effects[0].tempo.is_none());
+        assert!((engine.show.effects[0].rate_hz - 2.0).abs() < 1e-9);
+
+        assert!(engine.execute("Effect 1 Attribute Nope Size 10").is_err());
+        let error = engine.execute("Store Effect 2 Rate 1/3").unwrap_err();
+        assert!(
+            error
+                .hint
+                .as_deref()
+                .is_some_and(|hint| hint.contains("1/1")),
+            "{error}"
+        );
+        let error = engine
+            .execute("Store Effect 2 Attributes Nope")
+            .unwrap_err();
+        assert!(error.message.contains("Nope"), "{error}");
+    }
+
+    #[test]
+    fn an_effect_skips_fixtures_that_lack_a_target() {
+        let mut show = demo_show();
+        let moving = crate::test_support::demo_moving_type();
+        let type_key = moving.key();
+        show.fixture_types.push(moving);
+        show.fixtures.push(Fixture {
+            number: 2,
+            name: "Moving".into(),
+            type_key,
+            mode: "3ch".into(),
+            universe: 1,
+            address: 10,
+            home: BTreeMap::new(),
+        });
+        let mut engine = Engine::new(show);
+        engine.execute("Fixture 1").unwrap();
+        engine
+            .execute("Store Effect 1 Attributes Dimmer ColorAdd_R")
+            .unwrap();
+        let outcome = engine.execute("Effect 1 On Fixture 1 Thru 2").unwrap();
+        assert!(outcome.lines[0].contains("1 of 2"), "{outcome:?}");
+        assert_eq!(engine.effects.runs().next().unwrap().1, [1]);
+    }
+
+    #[test]
     fn deleting_an_effect_stops_it_and_removes_it_from_the_show() {
         let mut engine = engine();
         engine.execute("Fixture 1 At Full").unwrap();
@@ -7076,12 +7696,12 @@ mod tests {
         let status = engine.execute("Status").unwrap().lines.join("\n");
         assert!(status.contains("Groups: 1 | Worlds: 1"), "{status}");
         assert!(
-            status.contains("Masters: grand 100% | rate 100%"),
+            status.contains("Masters: grand 100% | rate 100% | Tempo 120 BPM"),
             "{status}"
         );
         assert!(status.contains("World: World 1"), "{status}");
         assert!(status.contains("Filter: Filter 1"), "{status}");
-        assert!(status.contains("Effect 1: running on 1"), "{status}");
+        assert!(status.contains("Effect 1: 1.00 Hz (1 Hz) on 1"), "{status}");
         assert_eq!(
             engine.render().slot(1, 1),
             Some(0),

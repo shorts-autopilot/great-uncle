@@ -39,6 +39,14 @@ Effect 1 On Fixture 1 Thru 4
 Wait 0.25
 Effect 1 Off
 
+# Two targets at a quarter-cycle offset: dimmer and red cross-fade instead of
+# moving together. (This demo wash has no Pan/Tilt; the same command would make
+# a circle on a moving head: Attributes Pan Tilt Phase Pan 0 Tilt 90.)
+Store Effect 2 "Two-tone" Attributes Dimmer ColorAdd_R Rate 1/4 Phase ColorAdd_R 90
+Effect 2 On Fixture 1 Thru 4
+Wait 0.125
+Effect 2 Off
+
 Group
 World
 Filter

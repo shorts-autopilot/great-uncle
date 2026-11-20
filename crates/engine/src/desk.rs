@@ -10,13 +10,14 @@
 //! in the show (with a warning), and a missing or unreadable desk file is never
 //! an error — a show without its desk starts clean.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::effect::{DEFAULT_BPM, MAX_BPM, MIN_BPM};
 use crate::levels::Levels;
 use crate::playback::format_cue_number;
 use crate::show::{Show, MAX_RATE_MASTER};
@@ -189,7 +190,7 @@ impl Preview {
 }
 
 /// Everything the desk owns. Survives a save; never travels inside a show.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Desk {
     /// Fixtures the operator has selected, in the order they were addressed.
     pub selection: Vec<u16>,
@@ -219,6 +220,32 @@ pub struct Desk {
     pub lock: Option<String>,
     /// Playback positions, written on save and applied on load.
     pub runs: Vec<RunState>,
+    /// Desk tempo in beats per minute. Musical effects follow this live.
+    pub tempo: f64,
+    /// The last few `Tap Tempo` instants. Session state: never written to the
+    /// desk file.
+    pub taps: VecDeque<Instant>,
+}
+
+impl Default for Desk {
+    fn default() -> Self {
+        Self {
+            selection: Vec::new(),
+            programmer: Levels::default(),
+            blind: false,
+            highlight: false,
+            preview: None,
+            world: None,
+            filter: None,
+            masters: Masters::default(),
+            executors: BTreeMap::new(),
+            blackout: None,
+            lock: None,
+            runs: Vec::new(),
+            tempo: DEFAULT_BPM,
+            taps: VecDeque::new(),
+        }
+    }
 }
 
 impl Desk {
@@ -237,6 +264,36 @@ impl Desk {
     /// The blackout master: 1 when there is no blackout.
     pub fn blackout_master(&self, now: Instant) -> f64 {
         self.blackout.map(|state| state.master(now)).unwrap_or(1.0)
+    }
+
+    /// Average the last taps into a tempo. `None` means there are not enough
+    /// taps yet (or they landed on the same instant). A gap longer than two
+    /// seconds starts a new count-in instead of averaging a pause.
+    pub fn tap(&mut self, now: Instant) -> Option<f64> {
+        if let Some(last) = self.taps.back() {
+            if now.saturating_duration_since(*last) > Duration::from_secs(2) {
+                self.taps.clear();
+            }
+        }
+        self.taps.push_back(now);
+        while self.taps.len() > 5 {
+            self.taps.pop_front();
+        }
+        if self.taps.len() < 2 {
+            return None;
+        }
+        let mut intervals = Vec::with_capacity(self.taps.len() - 1);
+        let mut previous = *self.taps.front()?;
+        for tap in self.taps.iter().skip(1) {
+            intervals.push(tap.saturating_duration_since(previous).as_secs_f64());
+            previous = *tap;
+        }
+        let average = intervals.iter().sum::<f64>() / intervals.len() as f64;
+        if average <= 0.0 {
+            return None;
+        }
+        self.tempo = (60.0 / average).clamp(MIN_BPM, MAX_BPM);
+        Some(self.tempo)
     }
 
     pub fn executor_state(&self, number: u16) -> ExecutorDesk {
@@ -399,6 +456,13 @@ impl Desk {
         }
 
         self.masters.sanitise(show, &mut warnings);
+        if !self.tempo.is_finite() || !(MIN_BPM..=MAX_BPM).contains(&self.tempo) {
+            warnings.push(format!(
+                "desk: tempo {} BPM is outside {MIN_BPM}..={MAX_BPM}; reset to {DEFAULT_BPM}",
+                self.tempo
+            ));
+            self.tempo = DEFAULT_BPM;
+        }
 
         let executors: BTreeSet<u16> = show
             .executors
@@ -491,6 +555,8 @@ impl Desk {
             }),
             lock: file.lock,
             runs: file.runs,
+            tempo: file.tempo,
+            taps: VecDeque::new(),
         };
         let mut warnings = desk.sanitise(show);
         if !file.show.is_empty() && file.show != show.name {
@@ -522,6 +588,7 @@ impl Desk {
             }),
             lock: self.lock.clone(),
             runs: self.runs.clone(),
+            tempo: self.tempo,
         }
     }
 
@@ -612,6 +679,12 @@ pub struct DeskFile {
     lock: Option<String>,
     #[serde(default)]
     runs: Vec<RunState>,
+    #[serde(default = "default_tempo")]
+    tempo: f64,
+}
+
+fn default_tempo() -> f64 {
+    DEFAULT_BPM
 }
 
 /// The persistable part of a blackout: where it is, not when it started.
@@ -668,7 +741,39 @@ mod tests {
         desk.selection = vec![1];
         desk.programmer.set(1, "Dimmer", 0.5);
         desk.masters.grand = 0.75;
+        desk.tempo = 132.0;
         desk
+    }
+
+    #[test]
+    fn taps_average_to_a_tempo_and_a_long_gap_restarts() {
+        let mut desk = Desk::new();
+        let start = Instant::now();
+        assert_eq!(desk.tap(start), None, "one tap is a count-in");
+        assert_eq!(desk.tap(start + Duration::from_millis(500)), Some(120.0));
+        assert_eq!(desk.tap(start + Duration::from_secs(1)), Some(120.0));
+        assert_eq!(
+            desk.tap(start + Duration::from_secs(4)),
+            None,
+            "a 3 s gap starts a new count-in"
+        );
+        assert_eq!(desk.taps.len(), 1);
+    }
+
+    #[test]
+    fn a_desk_file_without_a_tempo_loads_at_the_default() {
+        let show = demo_show();
+        let desk = desk_with_values();
+        let path = temp_path("old-tempo");
+        desk.save(&path, &show).unwrap();
+        let mut value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        value.as_object_mut().unwrap().remove("tempo");
+        fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+        let (loaded, warnings) = Desk::load(&path, &show).unwrap().unwrap();
+        assert_eq!(loaded.tempo, DEFAULT_BPM);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let _ = fs::remove_file(&path);
     }
 
     #[test]

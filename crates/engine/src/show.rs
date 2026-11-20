@@ -14,8 +14,10 @@
 //! cue `blocked` and `shield`, the two ways an operator stops tracking from
 //! rippling through the rest of the list. Version 10 adds a fine DMX offset to
 //! each channel, turning a profile's second byte into real 16-bit precision.
-//! Older files still load: new sections
-//! default to empty, a missing fine offset means 8-bit, the v5 upgrade hands the
+//! Version 11 gives effects several targets with per-target phase and size, and
+//! an optional musical rate evaluated against the desk tempo. Older files still
+//! load: new sections default to empty, a missing fine offset means 8-bit, the
+//! v5 upgrade hands the
 //! values it finds in an old file to the desk through a [`LoadReport`], and the
 //! v8 upgrade reports any fixture whose profile default is not zero.
 
@@ -35,9 +37,9 @@ use crate::pools::{Filter, Group, World, MAX_GROUP_FIXTURES, MAX_POOL_OBJECTS};
 use crate::timecode::{self, TimecodeShow, MAX_FPS, MAX_TIMECODES, MAX_TIMECODE_EVENTS, MIN_FPS};
 
 pub const SHOW_FORMAT: &str = "openlight-show";
-pub const SHOW_VERSION: u32 = 10;
+pub const SHOW_VERSION: u32 = 11;
 /// Older documents that still load, oldest first.
-pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 /// Fastest rate master accepted, as a factor (400%).
 pub const MAX_RATE_MASTER: f64 = 4.0;
 pub const MAX_UNIVERSE_SIZE: u16 = 512;
@@ -855,20 +857,56 @@ impl Show {
             if !numbers.insert(effect.number) {
                 problems.push(format!("effect {}: number used twice", effect.number));
             }
-            if effect.attribute.trim().is_empty() {
-                problems.push(format!("effect {}: no attribute", effect.number));
+            if effect.targets.is_empty() {
+                problems.push(format!("effect {}: no targets", effect.number));
             }
-            if !effect.rate_hz.is_finite() || !(0.0..=MAX_RATE_HZ).contains(&effect.rate_hz) {
+            let mut attributes = BTreeSet::new();
+            for target in &effect.targets {
+                if target.attribute.trim().is_empty() {
+                    problems.push(format!(
+                        "effect {}: a target has no attribute",
+                        effect.number
+                    ));
+                }
+                if !attributes.insert(target.attribute.to_ascii_lowercase()) {
+                    problems.push(format!(
+                        "effect {}: target `{}` listed twice",
+                        effect.number, target.attribute
+                    ));
+                }
+                if !target.size.is_finite() || !(0.0..=1.0).contains(&target.size) {
+                    problems.push(format!(
+                        "effect {}: target `{}` size {} is outside 0..=1",
+                        effect.number, target.attribute, target.size
+                    ));
+                }
+                if !target.phase.is_finite() || !(0.0..=MAX_SPREAD_DEGREES).contains(&target.phase)
+                {
+                    problems.push(format!(
+                        "effect {}: target `{}` phase {} is outside 0..={MAX_SPREAD_DEGREES} degrees",
+                        effect.number, target.attribute, target.phase
+                    ));
+                }
+            }
+            if !effect.rate_hz.is_finite() || effect.rate_hz <= 0.0 || effect.rate_hz > MAX_RATE_HZ
+            {
                 problems.push(format!(
                     "effect {}: rate {} Hz is outside 0..={MAX_RATE_HZ}",
                     effect.number, effect.rate_hz
                 ));
             }
-            if !effect.size.is_finite() || !(0.0..=1.0).contains(&effect.size) {
-                problems.push(format!(
-                    "effect {}: size {} is outside 0..=1",
-                    effect.number, effect.size
-                ));
+            if let Some(tempo) = &effect.tempo {
+                if !tempo.bpm.is_finite()
+                    || !(crate::effect::MIN_BPM..=crate::effect::MAX_BPM).contains(&tempo.bpm)
+                {
+                    problems.push(format!(
+                        "effect {}: tempo {} BPM is outside {}..={} BPM",
+                        effect.number,
+                        tempo.bpm,
+                        crate::effect::MIN_BPM,
+                        crate::effect::MAX_BPM
+                    ));
+                }
             }
             if !effect.spread.is_finite() || !(0.0..=MAX_SPREAD_DEGREES).contains(&effect.spread) {
                 problems.push(format!(
@@ -1261,7 +1299,7 @@ mod tests {
             .read_to_string(&mut text)
             .unwrap();
         assert!(text.contains("\"format\": \"openlight-show\""));
-        assert!(text.contains("\"version\": 10"));
+        assert!(text.contains("\"version\": 11"));
         assert!(text.contains("OpenLight Demo Wash"), "types are embedded");
         let _ = fs::remove_file(&path);
     }
@@ -1271,14 +1309,71 @@ mod tests {
         let path = temp_path("future");
         fs::write(
             &path,
-            r#"{"format":"openlight-show","version":11,"name":"x","fixture_types":[],"universes":[],"fixtures":[]}"#,
+            r#"{"format":"openlight-show","version":12,"name":"x","fixture_types":[],"universes":[],"fixtures":[]}"#,
         )
         .unwrap();
         let error = Show::load(&path).unwrap_err();
         assert!(matches!(
             error,
-            ShowError::UnsupportedVersion { found: 11, .. }
+            ShowError::UnsupportedVersion { found: 12, .. }
         ));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_version_10_effect_becomes_one_target_with_phase_zero() {
+        let mut show = demo_show();
+        show.effects.push(crate::effect::Effect {
+            number: 1,
+            name: "Old".into(),
+            waveform: crate::effect::Waveform::Triangle,
+            targets: vec![crate::effect::EffectTarget {
+                attribute: "Dimmer".into(),
+                size: 0.4,
+                phase: 0.0,
+            }],
+            tempo: None,
+            rate_hz: 2.0,
+            spread: 90.0,
+        });
+        let path = temp_path("v10-effect");
+        show.save(&path).unwrap();
+        let mut value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        value["version"] = serde_json::json!(10);
+        let effect = value["effects"][0].as_object_mut().unwrap();
+        effect.remove("targets");
+        effect.insert("attribute".into(), serde_json::json!("Dimmer"));
+        effect.insert("size".into(), serde_json::json!(0.4));
+        fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+
+        let (loaded, report) = Show::load_with_report(&path).unwrap();
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        assert_eq!(loaded.version, SHOW_VERSION);
+        assert_eq!(loaded.effects[0].targets.len(), 1);
+        assert_eq!(loaded.effects[0].targets[0].attribute, "Dimmer");
+        assert_eq!(loaded.effects[0].targets[0].size, 0.4);
+        assert_eq!(loaded.effects[0].targets[0].phase, 0.0);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_unknown_beat_division_is_rejected_with_the_choices() {
+        let path = temp_path("bad-division");
+        fs::write(
+            &path,
+            r#"{"format":"openlight-show","version":11,"name":"x","fixture_types":[],"universes":[],"fixtures":[],"effects":[{"number":1,"name":"","waveform":"sine","targets":[{"attribute":"Dimmer","size":0.5,"phase":0}],"tempo":{"bpm":120,"division":"1/3"},"rate_hz":2.0,"spread":0}]}"#,
+        )
+        .unwrap();
+        let error = Show::load(&path).unwrap_err();
+        let ShowError::Parse { source, .. } = &error else {
+            panic!("expected a parse error, got {error:?}");
+        };
+        let message = source.to_string();
+        assert!(
+            message.contains("1/1") && message.contains("1/16T"),
+            "{message}"
+        );
         let _ = fs::remove_file(&path);
     }
 
@@ -1865,10 +1960,14 @@ mod tests {
         show.effects.push(crate::effect::Effect {
             number: 1,
             name: String::new(),
-            attribute: String::new(),
             waveform: crate::effect::Waveform::Sine,
+            targets: vec![crate::effect::EffectTarget {
+                attribute: String::new(),
+                size: 2.0,
+                phase: 400.0,
+            }],
+            tempo: None,
             rate_hz: 1000.0,
-            size: 2.0,
             spread: 400.0,
         });
 
@@ -1880,9 +1979,10 @@ mod tests {
             "world 0: no fixtures",
             "filter number 0",
             "filter 0: no features",
-            "effect 1: no attribute",
+            "effect 1: a target has no attribute",
             "rate 1000 Hz",
             "size 2 is outside",
+            "phase 400",
             "spread 400",
         ] {
             assert!(
