@@ -465,7 +465,7 @@ Scope reasons and chapter dispositions: [`docs/COMPLETENESS.md`](../docs/COMPLET
 | `CX-COMMAND_SYNTAX_KEYWORDS-0195` | Lowlight | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0196` | Lua | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0197` | LuaFile | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0198` | Macro | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0198` | Macro | 4 | 2 | implemented |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0199` | MArker | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0200` | Master | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0201` | MAtricks | 5 | 2 | not-started |
@@ -1088,13 +1088,13 @@ Scope reasons and chapter dispositions: [`docs/COMPLETENESS.md`](../docs/COMPLET
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-MACROS-0001` | Macros | 4 | 3 | not-started |
+| `CX-MACROS-0001` | Macros | 4 | 3 | in-progress |
 | `CX-MACROS-0002` | Command Editor | 4 | 3 | not-started |
-| `CX-MACROS-0003` | Create Macros | 3 | 3 | not-started |
+| `CX-MACROS-0003` | Create Macros | 3 | 3 | implemented |
 | `CX-MACROS-0004` | Import Macros | 2 | 3 | not-started |
-| `CX-MACROS-0005` | Edit Macros | 3 | 3 | not-started |
-| `CX-MACROS-0006` | Assign Macros to Keys and Buttons | 5 | 3 | not-started |
-| `CX-MACROS-0007` | Variables | 17 | 3 | not-started |
+| `CX-MACROS-0005` | Edit Macros | 3 | 3 | implemented |
+| `CX-MACROS-0006` | Assign Macros to Keys and Buttons | 5 | 3 | out-of-scope |
+| `CX-MACROS-0007` | Variables | 17 | 3 | out-of-scope |
 | `CX-MACROS-0008` | Properties | 1 | 3 | not-started |
 | `CX-MACROS-0009` | Example Macros | 4 | 3 | not-started |
 

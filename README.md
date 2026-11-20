@@ -19,7 +19,7 @@ profiles that you supply.
 | 2 | Palettes, cues, sequences, executor faders | done — see [`docs/PHASE2.md`](docs/PHASE2.md) |
 | 3 | Groups, worlds, filters, masters, effects | done — see [`docs/PHASE3.md`](docs/PHASE3.md) |
 | 4 | Timecode, move-in-black, undo, first UI shell | done — see [`docs/PHASE4.md`](docs/PHASE4.md) |
-| 5+ | desk state, output, journal, blackout/lock, cues, timing, home, cue editing, viewing, 16-bit, patch tools, effects, external timecode, remote, MVR, fixture builder | in progress — 03, 04, 05, 06, 01, 02, 07, 10, 09, 08, 11, 12, 13, 14 and 15 built; see [`docs/PHASE5.md`](docs/PHASE5.md) |
+| 5+ | desk state, output, journal, blackout/lock, cues, timing, home, cue editing, viewing, 16-bit, patch tools, effects, external timecode, remote, MVR, fixture builder, macros/CLI | in progress — 03, 04, 05, 06, 01, 02, 07, 10, 09, 08, 11, 12, 13, 14, 15 and 16 built; see [`docs/PHASE5.md`](docs/PHASE5.md) |
 | 5+ | the remaining roadmap designs | designed — see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 
 It is a console with a command line, a full-screen terminal shell, a script
@@ -74,7 +74,7 @@ check for CI. There is no desktop GUI yet.
 ## Quick start
 
 ```bash
-cargo test --workspace            # 432 tests, no hardware needed
+cargo test --workspace            # 448 tests, no hardware needed
 cargo run -p openlight-console    # interactive console
 cargo run -p openlight-console -- --ui   # full-screen terminal shell
 ```
@@ -160,6 +160,24 @@ Use `--osc-port`, `--remote-port`, `--remote-bind` and `--remote-token-file` to
 move them, or `--no-remote` for a scripted or headless run. Plain HTTP is for a
 trusted show network; the default bind is loopback and the token is never
 printed in logs.
+
+## Command line as a product
+
+The console now has the flags a script or a CI job needs: repeatable `--command`,
+`--script -` for stdin, `--check [file]` for a stable `path: problem` result,
+`--status --json` for machine-readable state, `--version`, `--quiet`, `--log`
+and shell completions. Commands run before the script, in the order given.
+
+```bash
+openlight --version
+openlight --check look.olshow
+openlight --command "Fixture 1 At 50" --command "Store Cue 1" --frames 10
+openlight --script - < examples/phase1-demo.txt
+openlight --status --json
+openlight --completions bash
+```
+
+`Begin [label]` and `End` group edits into one undo step. `Macro 1 "cue" Blackout; Wait 2; Blackout Off` stores statement text; `Macro 1 Run` expands it through the same command path, with cycle and depth guards. `Wait` is accepted while editing a macro but refused when it runs, because the engine must not block its output tick. Bulk imports open a group internally.
 
 ## MVR and the fixture builder
 

@@ -290,7 +290,27 @@ PHASE13 = {
     "CX-PATCH-0005": "in-progress",
 }
 
-STATUS = {**PHASE1, **PHASE2, **PHASE3, **PHASE4, **PHASE12, **PHASE13, **EXTRA}
+# Phase 5 item 16 — macros, undo groups and the CLI product surface. Variables,
+# key/button assignment and a command editor are outside the design.
+PHASE16 = {
+    "CX-COMMAND_SYNTAX_KEYWORDS-0198": "implemented",
+    "CX-MACROS-0001": "in-progress",
+    "CX-MACROS-0003": "implemented",
+    "CX-MACROS-0005": "implemented",
+    "CX-MACROS-0006": "out-of-scope",
+    "CX-MACROS-0007": "out-of-scope",
+}
+
+STATUS = {
+    **PHASE1,
+    **PHASE2,
+    **PHASE3,
+    **PHASE4,
+    **PHASE12,
+    **PHASE13,
+    **PHASE16,
+    **EXTRA,
+}
 
 # Keywords the parser in crates/engine/src/command.rs recognises. A keyword here
 # is not a claim that the manual's full behaviour is implemented; it moves the
@@ -411,6 +431,7 @@ CHAPTER_REASONS = {
     "bitmap": "Bitmap/pixel mapping is outside the design set.",
     "sound": "Sound playback is outside a serial-DMX desk.",
     "update": "Vendor console/node update; the project has no auto-update.",
+    "macros": "Item 16 covers statement macros; variables, key assignment, properties and the command editor are out of scope.",
     "control_other_ma_devices": "Controlling vendor devices and RemoteHID is outside the independent software scope.",
     "troubleshooting": "Vendor troubleshooting and panic macro; the project has `Status` and docs.",
     "glossary": "Vendor glossary; the project keeps its own documentation.",
@@ -460,7 +481,7 @@ CHAPTER_NOTES = {
     "generator": "Needs a design.",
     "xyz": "Needs a design (XYZ attribute space and marker fixtures).",
     "tags": "Needs a small design.",
-    "macros": "Item 16 adds macros.",
+    "macros": "Item 16 adds statement macros, undo groups and the CLI surface; variables, key assignment and the command editor are out of scope.",
     "agenda": "Needs a design.",
     "timers": "Needs a design.",
     "timecode": "Item 15 adds tracks, markers and MTC; OSC ingestion and track groups still need designs.",
@@ -489,7 +510,7 @@ CROSS_CUTTING = [
     ("Recipes and Generator", "Look generation beyond a single waveform; `recipes`, `generator` and recipe presets are unbuilt."),
     ("Executor pages and special executors", "The executor list is flat; pages, assignments and special executors are missing."),
     ("Timecode depth", "Tracks, markers, MTC and an OSC feed hook landed with item 15; OSC ingestion and track groups remain."),
-    ("Macros and CLI ergonomics", "Macros, variables, transaction undo and machine-readable status are item 16."),
+    ("Macros and CLI ergonomics", "Item 16 adds statement macros, transaction undo and machine-readable status; variables and a command editor remain out of scope."),
     ("Layouts, Quickeys and windows", "Layouts/Quickeys have no design; the five-pane GUI is item 18."),
     ("Agenda and timers", "Scheduled events, stopwatch and countdown are unbuilt."),
     ("Plugins/Lua", "164 rows, the largest undecided chapter. Decide between an embedded Lua host and a native plugin API before claiming completeness."),

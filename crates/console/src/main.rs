@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::error::Error;
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -20,7 +20,11 @@ use dmx::virtual_port::{VirtualState, VirtualTransport};
 use dmx::DmxTransport;
 use engine::{Engine, Runtime, RuntimeConfig, TransportBinding};
 
+mod completions;
+mod session;
 mod ui;
+
+use session::SessionLog;
 
 const USAGE: &str = "\
 openlight — DMX lighting console (Phase 5)
@@ -29,13 +33,19 @@ Usage: openlight [options]
 
 Options:
   --show <file>        load a show file at start
+  --desk <file>        load this desk file instead of <show>.oldesk
   --mvr <file>         import an MVR rig before any --script command
   --gdtf <file>        import a GDTF fixture type (repeatable)
   --output <spec>      bind a universe to an output, e.g. 1=virtual,
                        1=generic:/dev/ttyUSB0, 1=enttec:/dev/ttyUSB0, 1=udmx
                        (repeatable, defaults to 1=virtual)
-  --script <file>      run commands from a file, one per line (# comments);
-                       `Wait <seconds>` pauses the script during a fade
+  --command <line>    run one command before the script (repeatable)
+  --script <file>      run commands from a file, or `-` for stdin, one per line
+                       (# comments); `Wait <seconds>` pauses during a fade
+  --status [--json]    print status once and exit
+  --check [file]       load, validate and print `path: problem` lines; no output
+  --quiet              suppress startup lines, keep command output
+  --log <file>         append every executed line and result to a session log
   --frames <n>         run for n output frames, then exit
   --fps <n>            frame rate (default 30)
   --engine-hz <n>      engine tick rate (default 60)
@@ -48,10 +58,14 @@ Options:
   --remote-token-file <file>  bearer token file (default ~/.openlight/remote.token)
   --no-remote          do not start OSC or the browser remote
   --ui                 open the full-screen terminal shell
-  --check              print `Patch Check` and exit; exit 1 on overlap, overflow,
-                       a missing type/mode or an invalid address
   --trace              print the last virtual frame as bytes
+  --version            print the package and show format versions
+  --completions <sh>   print a completion script for bash, zsh or fish
   --help               show this text
+
+`--command`, a file `--script` and `--frames` compose in that order. `--check`
+and `--status` exit without starting output threads; `--check` exits 1 when it
+finds a problem.
 
 Examples:
   openlight --ui
@@ -65,6 +79,11 @@ Examples:
             --frames 120 --trace
   openlight --output 1=generic:/dev/ttyUSB0 --script examples/phase2-demo.txt --frames 90
   openlight --show look.olshow --autosave 30 --ui
+  openlight --version
+  openlight --check look.olshow
+  openlight --command \"Fixture 1 At 50\" --command \"Store Cue 1\" --frames 10
+  openlight --script - < examples/phase1-demo.txt
+  openlight --status --json
 ";
 
 fn main() -> ExitCode {
@@ -80,6 +99,30 @@ fn main() -> ExitCode {
         }
     };
 
+    if options.version {
+        println!(
+            "openlight {} (show format v{})",
+            env!("CARGO_PKG_VERSION"),
+            engine::SHOW_VERSION
+        );
+        return ExitCode::SUCCESS;
+    }
+    if let Some(shell) = &options.completions {
+        return match completions::script(shell) {
+            Ok(script) => {
+                print!("{script}");
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("error: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if options.check {
+        return check_exit(&options);
+    }
+
     match run(options) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -87,6 +130,42 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `--check`: load the show, validate it and print `path: problem` lines only.
+fn check_exit(options: &Options) -> ExitCode {
+    let path = options.check_path.as_deref().or(options.show.as_deref());
+    let problems = check_show(path);
+    for problem in &problems {
+        println!("{problem}");
+    }
+    if problems.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+fn check_show(path: Option<&Path>) -> Vec<String> {
+    let (show, label) = match path {
+        Some(path) => match engine::Show::load_with_report(path) {
+            Ok((show, _)) => (show, path.display().to_string()),
+            Err(error) => {
+                let label = path.display().to_string();
+                let error = error.to_string();
+                return vec![if error.starts_with(&label) {
+                    error
+                } else {
+                    format!("{label}: {error}")
+                }];
+            }
+        },
+        None => (engine::Show::new(), "<empty show>".to_string()),
+    };
+    show.validate()
+        .into_iter()
+        .map(|problem| format!("{label}: {problem}"))
+        .collect()
 }
 
 /// Where the journal goes.
@@ -99,9 +178,11 @@ enum JournalChoice {
 
 struct Options {
     show: Option<PathBuf>,
+    desk: Option<PathBuf>,
     mvr: Option<PathBuf>,
     gdtf: Vec<PathBuf>,
     outputs: Vec<(u16, String)>,
+    commands: Vec<String>,
     frames: Option<u64>,
     fps: f64,
     engine_hz: f64,
@@ -112,6 +193,13 @@ struct Options {
     trace: bool,
     ui: bool,
     check: bool,
+    check_path: Option<PathBuf>,
+    status: bool,
+    json: bool,
+    quiet: bool,
+    log: Option<PathBuf>,
+    version: bool,
+    completions: Option<String>,
     remote: bool,
     osc_port: u16,
     remote_port: u16,
@@ -123,9 +211,11 @@ impl Options {
     fn parse(arguments: Vec<String>) -> Result<Option<Options>, String> {
         let mut options = Options {
             show: None,
+            desk: None,
             mvr: None,
             gdtf: Vec::new(),
             outputs: Vec::new(),
+            commands: Vec::new(),
             frames: None,
             fps: 30.0,
             engine_hz: 60.0,
@@ -136,6 +226,13 @@ impl Options {
             trace: false,
             ui: false,
             check: false,
+            check_path: None,
+            status: false,
+            json: false,
+            quiet: false,
+            log: None,
+            version: false,
+            completions: None,
             remote: true,
             osc_port: 9000,
             remote_port: 8080,
@@ -155,6 +252,24 @@ impl Options {
                     &mut options.show,
                     take_value(&arguments, &mut index, inline, flag)?,
                 ),
+                "--desk" => path_option(
+                    &mut options.desk,
+                    take_value(&arguments, &mut index, inline, flag)?,
+                ),
+                "--command" => options
+                    .commands
+                    .push(take_value(&arguments, &mut index, inline, flag)?),
+                "--status" => options.status = true,
+                "--json" => options.json = true,
+                "--quiet" => options.quiet = true,
+                "--log" => path_option(
+                    &mut options.log,
+                    take_value(&arguments, &mut index, inline, flag)?,
+                ),
+                "--version" => options.version = true,
+                "--completions" => {
+                    options.completions = Some(take_value(&arguments, &mut index, inline, flag)?)
+                }
                 "--mvr" => path_option(
                     &mut options.mvr,
                     take_value(&arguments, &mut index, inline, flag)?,
@@ -225,13 +340,39 @@ impl Options {
                 }
                 "--trace" => options.trace = true,
                 "--ui" => options.ui = true,
-                "--check" => options.check = true,
+                "--check" => {
+                    options.check = true;
+                    if let Some(value) = inline {
+                        if value.trim().is_empty() {
+                            return Err("--check needs a show file".to_string());
+                        }
+                        options.check_path = Some(PathBuf::from(value));
+                    } else if let Some(next) = arguments.get(index + 1) {
+                        if !next.starts_with('-') {
+                            index += 1;
+                            options.check_path = Some(PathBuf::from(next));
+                        }
+                    }
+                }
                 "--help" | "-h" => return Ok(None),
                 other => return Err(format!("unknown option `{other}`")),
             }
             index += 1;
         }
 
+        if options.json && !options.status {
+            return Err("--json needs --status".to_string());
+        }
+        if options.check && options.status {
+            return Err("--check and --status cannot be combined".to_string());
+        }
+        if options.desk.is_some()
+            && options.show.is_none()
+            && options.check_path.is_none()
+            && !options.check
+        {
+            return Err("--desk needs a show file".to_string());
+        }
         if options.outputs.is_empty() {
             options.outputs.push((1, "virtual".to_string()));
         }
@@ -284,27 +425,46 @@ fn parse_output(spec: &str) -> Result<(u16, String), String> {
 fn run(options: Options) -> Result<(), Box<dyn Error>> {
     let mut engine = match &options.show {
         Some(path) => {
-            let (engine, warnings) = Engine::open(path)?;
-            println!("Loaded `{}` from {}", engine.show.name, path.display());
-            for warning in warnings {
-                println!("Warning: {warning}");
+            let (engine, warnings) = Engine::open_with_desk(path, options.desk.as_deref())?;
+            if !options.quiet && !options.status {
+                println!("Loaded `{}` from {}", engine.show.name, path.display());
+                for warning in warnings {
+                    println!("Warning: {warning}");
+                }
             }
             engine
         }
         None => Engine::empty(),
     };
 
-    if let Some(show_path) = options.show.clone() {
-        // A check reads the saved document and writes nothing: no journal, no
-        // recovery prompt and no autosave.
-        let journal_path = if options.check {
-            None
-        } else {
-            match &options.journal {
+    if options.status {
+        if let Some(show_path) = &options.show {
+            let journal = match &options.journal {
                 JournalChoice::Off => None,
                 JournalChoice::Path(path) => Some(path.clone()),
-                JournalChoice::Default => Some(engine::journal::path_for(&show_path, ".journal")),
-            }
+                JournalChoice::Default => Some(engine::journal::path_for(show_path, ".journal")),
+            };
+            engine.set_journal_path_hint(journal);
+        }
+        if options.json {
+            println!("{}", engine.status_json());
+        } else {
+            let outcome = engine.execute("Status")?;
+            print_outcome(&outcome);
+        }
+        return Ok(());
+    }
+
+    let mut log = match options.log.as_deref() {
+        Some(path) => Some(SessionLog::open(path)?),
+        None => None,
+    };
+
+    if let Some(show_path) = options.show.clone() {
+        let journal_path = match &options.journal {
+            JournalChoice::Off => None,
+            JournalChoice::Path(path) => Some(path.clone()),
+            JournalChoice::Default => Some(engine::journal::path_for(&show_path, ".journal")),
         };
         let autosave_path = engine::journal::path_for(&show_path, ".autosave");
         // Even with the journal switched off, its head decides where a snapshot
@@ -318,33 +478,38 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
         engine.set_journal_head(tail.entries.last().map(|entry| entry.rev).unwrap_or(0));
 
         // Recovery runs before the journal opens, so replay is never journaled.
-        if options.recover && !options.check {
+        if options.recover {
             let snapshot = engine::journal::Snapshot::load(&autosave_path)?;
             let from = match &snapshot {
                 Some(snapshot) => {
                     let (show, desk, warnings) = snapshot.restore();
                     engine.adopt(show, desk);
-                    for warning in warnings {
-                        println!("Warning: {warning}");
-                    }
-                    match snapshot.rev {
-                        Some(rev) => {
-                            println!("Recovering from autosave {} (revision {rev})", snapshot.at)
+                    if !options.quiet {
+                        for warning in warnings {
+                            println!("Warning: {warning}");
                         }
-                        None => println!(
-                            "Recovering from autosave {} (taken with the journal off)",
-                            snapshot.at
-                        ),
+                        match snapshot.rev {
+                            Some(rev) => println!(
+                                "Recovering from autosave {} (revision {rev})",
+                                snapshot.at
+                            ),
+                            None => println!(
+                                "Recovering from autosave {} (taken with the journal off)",
+                                snapshot.at
+                            ),
+                        }
                     }
                     snapshot.replay_from()
                 }
                 None => engine::journal::ReplayFrom::File,
             };
             let report = engine.recover(&tail, &show_path, from);
-            for line in report.summary() {
-                println!("{line}");
+            if !options.quiet {
+                for line in report.summary() {
+                    println!("{line}");
+                }
             }
-            if report.recovered_anything() && io::stdin().is_terminal() {
+            if report.recovered_anything() && !options.quiet && io::stdin().is_terminal() {
                 print!(
                     "The recovered session is not saved. Save it to {}? [Y/n] ",
                     show_path.display()
@@ -360,15 +525,19 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
             }
         }
 
-        if let Some(seconds) = options.autosave.filter(|_| !options.check) {
+        if let Some(seconds) = options.autosave {
             let interval = Duration::from_secs_f64(seconds);
             if interval.is_zero() {
-                println!("Autosave off");
+                if !options.quiet {
+                    println!("Autosave off");
+                }
             } else {
-                println!(
-                    "Auto-saving to {} every {seconds} s",
-                    autosave_path.display()
-                );
+                if !options.quiet {
+                    println!(
+                        "Auto-saving to {} every {seconds} s",
+                        autosave_path.display()
+                    );
+                }
                 engine.enable_autosave(autosave_path, interval);
             }
         }
@@ -376,39 +545,36 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
         if let Some(path) = journal_path {
             match engine::journal::Journal::open(path) {
                 Ok(journal) => {
-                    println!("Journal at {}", journal.path().display());
+                    if !options.quiet {
+                        println!("Journal at {}", journal.path().display());
+                    }
                     engine.set_journal(Some(journal));
                 }
-                Err(error) => println!("Warning: journal disabled: {error}"),
+                Err(error) => {
+                    if !options.quiet {
+                        println!("Warning: journal disabled: {error}");
+                    } else {
+                        eprintln!("warning: journal disabled: {error}");
+                    }
+                }
             }
         }
     }
 
     for path in &options.gdtf {
-        let outcome = engine.execute(&format!("Import Gdtf {}", quote(&path.to_string_lossy())))?;
+        let line = format!("Import Gdtf {}", quote(&path.to_string_lossy()));
+        let outcome = engine.execute(&line)?;
         print_outcome(&outcome);
+        record_log(&mut log, &line, &outcome.lines.join(" | "));
     }
 
     if let Some(path) = &options.mvr {
-        let outcome = engine.execute(&format!("Import Mvr {}", quote(&path.to_string_lossy())))?;
-        for line in outcome.lines {
+        let line = format!("Import Mvr {}", quote(&path.to_string_lossy()));
+        let outcome = engine.execute(&line)?;
+        for line in &outcome.lines {
             println!("{line}");
         }
-    }
-
-    if options.check {
-        let outcome = engine
-            .execute("Patch Check")
-            .map_err(|error| error.to_string())?;
-        print_outcome(&outcome);
-        let failed = outcome
-            .lines
-            .iter()
-            .any(|line| line.starts_with("Warning:") || line.starts_with("overlap:"));
-        if failed {
-            return Err("patch check found problems".into());
-        }
-        return Ok(());
+        record_log(&mut log, &line, &outcome.lines.join(" | "));
     }
 
     let mut virtual_states: BTreeMap<u16, Arc<Mutex<VirtualState>>> = BTreeMap::new();
@@ -421,7 +587,9 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
         } else {
             dmx::open(spec)?
         };
-        println!("Universe {universe} -> {}", transport.describe());
+        if !options.quiet {
+            println!("Universe {universe} -> {}", transport.describe());
+        }
         bindings.push(TransportBinding {
             universe: *universe,
             transport,
@@ -449,34 +617,40 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
                 .unwrap_or_else(remote::token::default_path),
         };
         let handle = remote::Remote::start(runtime.engine(), config)?;
-        println!(
-            "OSC listening on {}; remote at http://{} (token in {})",
-            handle.osc_addr(),
-            handle.http_addr(),
-            handle.token_path().display()
-        );
-        if options.remote_bind.is_unspecified() {
+        if !options.quiet {
             println!(
-                "Warning: the remote is bound to {}; anyone who can reach this port and has the token can drive the desk",
-                options.remote_bind
+                "OSC listening on {}; remote at http://{} (token in {})",
+                handle.osc_addr(),
+                handle.http_addr(),
+                handle.token_path().display()
             );
+            if options.remote_bind.is_unspecified() {
+                println!(
+                    "Warning: the remote is bound to {}; anyone who can reach this port and has the token can drive the desk",
+                    options.remote_bind
+                );
+            }
         }
         Some(handle)
     } else {
         None
     };
 
+    let has_commands = !options.commands.is_empty();
+    for command in &options.commands {
+        execute_command_line(&runtime, command, &mut log)?;
+    }
     if let Some(script) = &options.script {
-        execute_script(&runtime, script)?;
+        execute_script(&runtime, script, options.quiet, &mut log)?;
     }
 
     if let Some(frames) = options.frames {
         wait_for_frames(&runtime, frames)?;
-    } else if options.script.is_none() {
+    } else if !has_commands && options.script.is_none() {
         if options.ui {
-            ui::run(&runtime)?;
+            ui::run(&runtime, log.take())?;
         } else {
-            repl(&runtime)?;
+            repl(&runtime, &mut log, options.quiet)?;
         }
     }
 
@@ -524,9 +698,11 @@ fn wait_for_frames(runtime: &Runtime, frames: u64) -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
-fn repl(runtime: &Runtime) -> io::Result<()> {
+fn repl(runtime: &Runtime, log: &mut Option<SessionLog>, quiet: bool) -> io::Result<()> {
     let handle = runtime.engine();
-    println!("Type `Help` for commands, `exit` to quit.");
+    if !quiet {
+        println!("Type `Help` for commands, `exit` to quit.");
+    }
     let stdin = io::stdin();
     let mut lines = stdin.lock().lines();
     loop {
@@ -545,36 +721,92 @@ fn repl(runtime: &Runtime) -> io::Result<()> {
         }
         if is_wait(trimmed) {
             match parse_wait(trimmed) {
-                Some(seconds) => std::thread::sleep(Duration::from_secs_f64(seconds)),
+                Some(seconds) => {
+                    std::thread::sleep(Duration::from_secs_f64(seconds));
+                    record_log(log, trimmed, &format!("waited {seconds}s"));
+                }
                 None => println!("error: `Wait` needs a number of seconds, e.g. `Wait 1.5`"),
             }
             continue;
         }
         match lock(&handle).execute(trimmed) {
-            Ok(outcome) => print_outcome(&outcome),
-            Err(error) => println!("error: {error}"),
+            Ok(outcome) => {
+                print_outcome(&outcome);
+                record_log(log, trimmed, &outcome.lines.join(" | "));
+            }
+            Err(error) => {
+                println!("error: {error}");
+                record_log(log, trimmed, &format!("error: {error}"));
+            }
         }
     }
     Ok(())
 }
 
-fn execute_script(runtime: &Runtime, path: &Path) -> Result<(), Box<dyn Error>> {
-    let text =
-        std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
+fn execute_command_line(
+    runtime: &Runtime,
+    line: &str,
+    log: &mut Option<SessionLog>,
+) -> Result<(), Box<dyn Error>> {
+    if is_wait(line) {
+        let Some(seconds) = parse_wait(line) else {
+            return Err("`Wait` needs a number of seconds, e.g. `Wait 1.5`".into());
+        };
+        std::thread::sleep(Duration::from_secs_f64(seconds));
+        record_log(log, line, &format!("waited {seconds}s"));
+        return Ok(());
+    }
+    let handle = runtime.engine();
+    let result = match lock(&handle).execute(line) {
+        Ok(outcome) => {
+            print_outcome(&outcome);
+            record_log(log, line, &outcome.lines.join(" | "));
+            Ok(())
+        }
+        Err(error) => {
+            record_log(log, line, &format!("error: {error}"));
+            Err(error.into())
+        }
+    };
+    result
+}
+
+fn execute_script(
+    runtime: &Runtime,
+    path: &Path,
+    quiet: bool,
+    log: &mut Option<SessionLog>,
+) -> Result<(), Box<dyn Error>> {
+    let label = if path == Path::new("-") {
+        "<stdin>".to_string()
+    } else {
+        path.display().to_string()
+    };
+    let text = if path == Path::new("-") {
+        let mut text = String::new();
+        io::stdin().read_to_string(&mut text)?;
+        text
+    } else {
+        std::fs::read_to_string(path).map_err(|error| format!("{label}: {error}"))?
+    };
     let handle = runtime.engine();
     for (line_number, raw) in text.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        println!("> {line}");
+        if !quiet {
+            println!("> {line}");
+        }
         if is_wait(line) {
             match parse_wait(line) {
-                Some(seconds) => std::thread::sleep(Duration::from_secs_f64(seconds)),
+                Some(seconds) => {
+                    std::thread::sleep(Duration::from_secs_f64(seconds));
+                    record_log(log, line, &format!("waited {seconds}s"));
+                }
                 None => {
                     return Err(format!(
-                        "{}:{}: `Wait` needs a number of seconds, e.g. `Wait 1.5`",
-                        path.display(),
+                        "{label}:{}: `Wait` needs a number of seconds, e.g. `Wait 1.5`",
                         line_number + 1
                     )
                     .into())
@@ -583,13 +815,23 @@ fn execute_script(runtime: &Runtime, path: &Path) -> Result<(), Box<dyn Error>> 
             continue;
         }
         match lock(&handle).execute(line) {
-            Ok(outcome) => print_outcome(&outcome),
+            Ok(outcome) => {
+                print_outcome(&outcome);
+                record_log(log, line, &outcome.lines.join(" | "));
+            }
             Err(error) => {
-                return Err(format!("{}:{}: {error}", path.display(), line_number + 1).into())
+                record_log(log, line, &format!("error: {error}"));
+                return Err(format!("{label}:{}: {error}", line_number + 1).into());
             }
         }
     }
     Ok(())
+}
+
+fn record_log(log: &mut Option<SessionLog>, line: &str, result: &str) {
+    if let Some(log) = log {
+        log.record(line, result);
+    }
 }
 
 fn is_wait(line: &str) -> bool {
@@ -691,6 +933,83 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(options.mvr.as_deref(), Some(Path::new("rig.mvr")));
+    }
+
+    #[test]
+    fn product_flags_parse_in_order() {
+        let options = Options::parse(vec![
+            "--show".into(),
+            "look.olshow".into(),
+            "--desk".into(),
+            "custom.oldesk".into(),
+            "--quiet".into(),
+            "--command".into(),
+            "Fixture 1 At 50".into(),
+            "--command".into(),
+            "Store Cue 1".into(),
+            "--script".into(),
+            "-".into(),
+            "--frames".into(),
+            "10".into(),
+            "--log".into(),
+            "session.log".into(),
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(options.commands, ["Fixture 1 At 50", "Store Cue 1"]);
+        assert_eq!(options.script.as_deref(), Some(Path::new("-")));
+        assert_eq!(options.desk.as_deref(), Some(Path::new("custom.oldesk")));
+        assert_eq!(options.log.as_deref(), Some(Path::new("session.log")));
+        assert_eq!(options.frames, Some(10));
+        assert!(options.quiet);
+    }
+
+    #[test]
+    fn version_status_check_and_completions_parse() {
+        let options = Options::parse(vec!["--version".into()]).unwrap().unwrap();
+        assert!(options.version);
+        let options = Options::parse(vec!["--status".into(), "--json".into()])
+            .unwrap()
+            .unwrap();
+        assert!(options.status && options.json);
+        let options = Options::parse(vec!["--check".into(), "look.olshow".into()])
+            .unwrap()
+            .unwrap();
+        assert!(options.check);
+        assert_eq!(
+            options.check_path.as_deref(),
+            Some(Path::new("look.olshow"))
+        );
+        let options = Options::parse(vec!["--check".into(), "--show".into(), "x".into()])
+            .unwrap()
+            .unwrap();
+        assert!(options.check && options.check_path.is_none());
+
+        assert!(Options::parse(vec!["--json".into()]).is_err());
+        assert!(Options::parse(vec!["--desk".into(), "x".into()]).is_err());
+        assert!(Options::parse(vec!["--check".into(), "--status".into()]).is_err());
+        assert!(Options::parse(vec!["--completions".into(), "powershell".into()]).is_ok());
+    }
+
+    #[test]
+    fn check_reports_problems_with_the_path_and_nothing_else() {
+        let valid = std::env::temp_dir().join(format!(
+            "openlight-console-{}-valid.olshow",
+            std::process::id()
+        ));
+        engine::Show::new().save(&valid).unwrap();
+        assert!(check_show(Some(&valid)).is_empty());
+        let _ = std::fs::remove_file(&valid);
+
+        let broken = std::env::temp_dir().join(format!(
+            "openlight-console-{}-broken.olshow",
+            std::process::id()
+        ));
+        std::fs::write(&broken, "{not json").unwrap();
+        let problems = check_show(Some(&broken));
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].starts_with(&format!("{}: ", broken.display())));
+        let _ = std::fs::remove_file(&broken);
     }
 
     #[test]

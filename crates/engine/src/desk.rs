@@ -170,6 +170,19 @@ impl RunState {
     }
 }
 
+/// A stored macro: a named list of statement text.
+///
+/// The text is kept exactly as entered so a macro can be listed, edited and
+/// replayed through the same command path as typed input. Macros are desk
+/// configuration, not show programming.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Macro {
+    pub name: String,
+    #[serde(default)]
+    pub statements: Vec<String>,
+}
+
 /// A cue the operator is inspecting. Not a saved intent: the engine resolves
 /// the cue number on every render, so a preview follows edits to the show until
 /// the cue it names is gone.
@@ -220,6 +233,8 @@ pub struct Desk {
     pub lock: Option<String>,
     /// Playback positions, written on save and applied on load.
     pub runs: Vec<RunState>,
+    /// Stored macros by number. Statement text, not compiled commands.
+    pub macros: BTreeMap<u16, Macro>,
     /// Desk tempo in beats per minute. Musical effects follow this live.
     pub tempo: f64,
     /// The last few `Tap Tempo` instants. Session state: never written to the
@@ -242,6 +257,7 @@ impl Default for Desk {
             blackout: None,
             lock: None,
             runs: Vec::new(),
+            macros: BTreeMap::new(),
             tempo: DEFAULT_BPM,
             taps: VecDeque::new(),
         }
@@ -487,6 +503,17 @@ impl Desk {
             warnings.push("desk: a playback position no longer exists; dropped".into());
         }
 
+        let macros = self.macros.len();
+        self.macros.retain(|number, stored| {
+            *number > 0
+                && !stored.name.trim().is_empty()
+                && !stored.statements.is_empty()
+                && stored.statements.iter().all(|line| !line.trim().is_empty())
+        });
+        for _ in self.macros.len()..macros {
+            warnings.push("desk: an invalid macro was dropped".into());
+        }
+
         warnings
     }
 
@@ -555,6 +582,7 @@ impl Desk {
             }),
             lock: file.lock,
             runs: file.runs,
+            macros: file.macros,
             tempo: file.tempo,
             taps: VecDeque::new(),
         };
@@ -588,6 +616,7 @@ impl Desk {
             }),
             lock: self.lock.clone(),
             runs: self.runs.clone(),
+            macros: self.macros.clone(),
             tempo: self.tempo,
         }
     }
@@ -679,6 +708,8 @@ pub struct DeskFile {
     lock: Option<String>,
     #[serde(default)]
     runs: Vec<RunState>,
+    #[serde(default)]
+    macros: BTreeMap<u16, Macro>,
     #[serde(default = "default_tempo")]
     tempo: f64,
 }
@@ -785,6 +816,39 @@ mod tests {
         let (loaded, warnings) = Desk::load(&path, &show).unwrap().unwrap();
         assert_eq!(loaded, desk);
         assert!(warnings.is_empty(), "{warnings:?}");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn macros_round_trip_and_invalid_ones_are_dropped() {
+        let show = demo_show();
+        let mut desk = Desk::new();
+        desk.macros.insert(
+            1,
+            Macro {
+                name: "Blackout cue".into(),
+                statements: vec!["Blackout".into(), "Wait 2".into(), "Blackout Off".into()],
+            },
+        );
+        let path = temp_path("macros");
+        desk.save(&path, &show).unwrap();
+        let (mut loaded, warnings) = Desk::load(&path, &show).unwrap().unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(loaded.macros, desk.macros);
+
+        loaded.macros.insert(
+            2,
+            Macro {
+                name: String::new(),
+                statements: Vec::new(),
+            },
+        );
+        let warnings = loaded.sanitise(&show);
+        assert_eq!(loaded.macros.len(), 1);
+        assert!(
+            warnings.iter().any(|warning| warning.contains("macro")),
+            "{warnings:?}"
+        );
         let _ = fs::remove_file(&path);
     }
 

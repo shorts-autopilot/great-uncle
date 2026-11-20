@@ -27,6 +27,9 @@
 //! Type New "Generic 4ch"
 //! Type "Generic 4ch" Mode "4ch"
 //! Type "Generic 4ch" Channel 1 Dimmer "Dimmer"
+//! Begin [label] / End                    group edits into one undo step
+//! Macro 1 "cue" Blackout; Wait 2; Blackout Off
+//! Macro 1 Add "Store Cue 1" / Macro 1 Delete / Macro [1] / Macro 1 Run
 //! New [Show] ["name"]
 //! Store Palette <Feature> <n> ["name"]    capture the programmer
 //! Delete Palette <Feature> <n> | Palette
@@ -273,6 +276,35 @@ pub enum Command {
         offset: u16,
         attribute: String,
         name: Option<String>,
+    },
+    /// `Begin [label]`: open one undo group.
+    Begin {
+        label: Option<String>,
+    },
+    /// `End`: close the open undo group.
+    End,
+    /// `Macro <n> "name" <statements…>`: store or replace a macro.
+    MacroStore {
+        number: u16,
+        name: String,
+        statements: Vec<String>,
+    },
+    /// `Macro <n> Add <statement>`.
+    MacroAdd {
+        number: u16,
+        statement: String,
+    },
+    /// `Macro <n> Delete`.
+    MacroDelete {
+        number: u16,
+    },
+    /// `Macro [n]`: list every macro, or one macro's statements.
+    MacroList {
+        number: Option<u16>,
+    },
+    /// `Macro <n> Run`.
+    MacroRun {
+        number: u16,
     },
     New {
         name: Option<String>,
@@ -632,6 +664,9 @@ impl Command {
             | Command::Unlock { .. }
             | Command::PatchCheck
             | Command::ExportType { .. }
+            | Command::MacroList { .. }
+            | Command::Begin { .. }
+            | Command::End
             | Command::Report { .. } => false,
             // Listing a channel's sets changes nothing.
             Command::SetChannelSet { target: None, .. } => false,
@@ -718,6 +753,126 @@ pub fn split_statements(line: &str) -> Vec<&str> {
         .into_iter()
         .filter(|part| !part.is_empty())
         .collect()
+}
+
+/// Parse a macro line before the generic `;` splitter sees it.
+///
+/// A macro definition deliberately contains semicolons, so it needs the raw
+/// line. `None` means this is not a macro command and normal parsing applies.
+pub fn parse_macro_line(line: &str) -> Result<Option<Command>, CommandError> {
+    let line = line.trim();
+    let mut first = line.splitn(2, char::is_whitespace);
+    let Some(head) = first.next() else {
+        return Ok(None);
+    };
+    if !head.eq_ignore_ascii_case("macro") {
+        return Ok(None);
+    }
+    let rest = first.next().unwrap_or("").trim();
+    if rest.is_empty() {
+        return Ok(Some(Command::MacroList { number: None }));
+    }
+
+    let digits = rest
+        .find(|character: char| !character.is_ascii_digit())
+        .unwrap_or(rest.len());
+    if digits == 0 {
+        return Err(CommandError::with_hint(
+            "macro needs a number",
+            "`Macro 1 Run` or `Macro 1 \"name\" <statements…>`",
+        ));
+    }
+    let number: u32 = rest[..digits]
+        .parse()
+        .map_err(|_| CommandError::new(format!("`{}` is not a macro number", &rest[..digits])))?;
+    if number == 0 || number > u32::from(u16::MAX) {
+        return Err(CommandError::new(format!(
+            "macro number {number} is out of range"
+        )));
+    }
+    let number = number as u16;
+    let rest = rest[digits..].trim_start();
+    if rest.is_empty() {
+        return Ok(Some(Command::MacroList {
+            number: Some(number),
+        }));
+    }
+    if rest.eq_ignore_ascii_case("run") {
+        return Ok(Some(Command::MacroRun { number }));
+    }
+    if rest.eq_ignore_ascii_case("delete") {
+        return Ok(Some(Command::MacroDelete { number }));
+    }
+    if let Some(statement) = strip_word(rest, "add") {
+        if statement.trim().is_empty() {
+            return Err(CommandError::new("`Macro Add` needs a statement"));
+        }
+        if split_statements(statement).len() != 1 {
+            return Err(CommandError::with_hint(
+                "`Macro Add` takes one statement",
+                "use `Macro <n> \"name\" …` to replace the whole macro",
+            ));
+        }
+        return Ok(Some(Command::MacroAdd {
+            number,
+            statement: statement.trim().to_string(),
+        }));
+    }
+
+    let Some((name, remainder)) = take_quoted(rest) else {
+        return Err(CommandError::with_hint(
+            "macro name must be quoted",
+            "`Macro 1 \"Blackout cue\" Blackout; Wait 2; Blackout Off`",
+        ));
+    };
+    let statements: Vec<String> = split_statements(remainder)
+        .into_iter()
+        .map(|statement| statement.trim().to_string())
+        .filter(|statement| !statement.is_empty())
+        .collect();
+    if statements.is_empty() {
+        return Err(CommandError::new("a macro needs at least one statement"));
+    }
+    Ok(Some(Command::MacroStore {
+        number,
+        name,
+        statements,
+    }))
+}
+
+fn strip_word<'a>(text: &'a str, word: &str) -> Option<&'a str> {
+    let end = text
+        .find(|character: char| character.is_whitespace())
+        .unwrap_or(text.len());
+    if !text[..end].eq_ignore_ascii_case(word) {
+        return None;
+    }
+    Some(text[end..].trim_start())
+}
+
+fn take_quoted(text: &str) -> Option<(String, &str)> {
+    let quote = text.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let mut value = String::new();
+    let mut escaped = false;
+    for (index, character) in text.char_indices().skip(1) {
+        if escaped {
+            value.push(character);
+            escaped = false;
+            continue;
+        }
+        if character == '\\' {
+            escaped = true;
+            continue;
+        }
+        if character == quote {
+            return Some((value, &text[index + character.len_utf8()..]));
+        }
+        value.push(character);
+    }
+    None
 }
 
 pub fn lex(line: &str) -> Result<Vec<Token>, CommandError> {
@@ -954,6 +1109,15 @@ impl Parser<'_> {
         if word.eq_ignore_ascii_case("fixture") {
             let fixtures = self.fixture_list()?;
             return self.selection_or_action(fixtures);
+        }
+        if word.eq_ignore_ascii_case("begin") {
+            let label = self.optional_name()?;
+            self.expect_end()?;
+            return Ok(Command::Begin { label });
+        }
+        if word.eq_ignore_ascii_case("end") {
+            self.expect_end()?;
+            return Ok(Command::End);
         }
         if word.eq_ignore_ascii_case("at") {
             let (attribute, source) = self.level_source()?;
@@ -3466,6 +3630,60 @@ mod tests {
                 source: LevelSource::Level(Level::Percent(25.0))
             }
         );
+    }
+
+    #[test]
+    fn parses_undo_groups_and_raw_macro_lines() {
+        assert_eq!(command("Begin"), Command::Begin { label: None });
+        assert_eq!(
+            command(r#"Begin setup"#),
+            Command::Begin {
+                label: Some("setup".into())
+            }
+        );
+        assert_eq!(command("End"), Command::End);
+        assert_eq!(
+            parse_macro_line(r#"Macro 1 "Blackout cue" Blackout; Wait 2; Blackout Off"#).unwrap(),
+            Some(Command::MacroStore {
+                number: 1,
+                name: "Blackout cue".into(),
+                statements: vec!["Blackout".into(), "Wait 2".into(), "Blackout Off".into()]
+            })
+        );
+        assert_eq!(
+            parse_macro_line(r#"Macro 2 Add Store Cue 1"#).unwrap(),
+            Some(Command::MacroAdd {
+                number: 2,
+                statement: "Store Cue 1".into()
+            })
+        );
+        assert_eq!(
+            parse_macro_line("Macro 2 Run").unwrap(),
+            Some(Command::MacroRun { number: 2 })
+        );
+        assert_eq!(
+            parse_macro_line("Macro 2 Delete").unwrap(),
+            Some(Command::MacroDelete { number: 2 })
+        );
+        assert_eq!(
+            parse_macro_line("Macro").unwrap(),
+            Some(Command::MacroList { number: None })
+        );
+        assert_eq!(
+            parse_macro_line("Macro 2").unwrap(),
+            Some(Command::MacroList { number: Some(2) })
+        );
+        assert!(parse_macro_line("Fixture 1").unwrap().is_none());
+        assert!(parse_macro_line("Macro 1 Run").unwrap().is_some());
+        assert!(!command("Begin").mutates());
+        assert!(matches!(
+            parse_macro_line(r#"Macro 1 "x" Wait 2"#).unwrap(),
+            Some(Command::MacroStore { .. })
+        ));
+        assert!(parse_macro_line(r#"Macro 1 "x""#)
+            .unwrap_err()
+            .message
+            .contains("statement"));
     }
 
     #[test]

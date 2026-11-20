@@ -10,10 +10,10 @@ This ledger records scope and implementation evidence; it does not claim that a 
 
 | Status | Rows | Meaning |
 |---|---|---|
-| implemented | 53 | Works and is covered by tests. |
-| in-progress | 85 | Part of the feature exists; the rest is deferred. |
-| not-started | 695 | Not built, or not designed yet. |
-| out-of-scope | 390 | Not a feature of this product; reason recorded below. |
+| implemented | 56 | Works and is covered by tests. |
+| in-progress | 86 | Part of the feature exists; the rest is deferred. |
+| not-started | 689 | Not built, or not designed yet. |
+| out-of-scope | 392 | Not a feature of this product; reason recorded below. |
 | verified | 0 | Implemented and proven on hardware. |
 
 Total: **1223 rows** from the Phase 0 crawl of the manual.
@@ -31,7 +31,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 1 | grandMA3 onPC | platform | 8 | 1 in-progress, 7 out-of-scope | The headless `openlight` binary is the onPC equivalent; vendor installer/OS rows are out of scope. |
 | 1 | Show File Handling | showfile | 6 | 2 not-started, 4 implemented | Backup/template shows and file organisation need a small design. |
 | 1 | Workspace | ui/shell | 30 | 19 not-started, 5 in-progress, 2 implemented, 4 out-of-scope | Terminal shell exists; windows, panels and themes are item 18. |
-| 2 | Command Syntax and Keywords | cmd | 427 | 376 not-started, 49 in-progress, 2 implemented | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
+| 2 | Command Syntax and Keywords | cmd | 427 | 375 not-started, 49 in-progress, 3 implemented | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
 | 1 | Windows, Views, and Menus | ui/windows | 16 | 14 not-started, 2 in-progress | Windows/views/menus are item 18. |
 | 5 | Networking | session | 16 | 16 out-of-scope | Networked sessions and multi-user collaboration are outside the single-operator design. |
 | 1 | DMX In and Out | output | 6 | 1 in-progress, 1 implemented, 4 out-of-scope | Output exists; DMX In and merge need a bidirectional transport design. |
@@ -62,7 +62,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 7 | Bitmap | media | 1 | 1 out-of-scope | Bitmap/pixel mapping is outside the design set. |
 | 4 | XYZ | programmer | 3 | 3 not-started | Needs a design (XYZ attribute space and marker fixtures). |
 | 4 | Tags | ui/assets | 1 | 1 not-started | Needs a small design. |
-| 3 | Macros | cmd/macro | 9 | 9 not-started | Item 16 adds macros. |
+| 3 | Macros | cmd/macro | 9 | 4 not-started, 1 in-progress, 2 implemented, 2 out-of-scope | Item 16 adds statement macros, undo groups and the CLI surface; variables, key assignment and the command editor are out of scope. |
 | 3 | Agenda | timecode | 5 | 5 not-started | Needs a design. |
 | 3 | Timers | timecode | 3 | 3 not-started | Needs a design. |
 | 3 | Timecode Show | timecode | 11 | 2 not-started, 7 in-progress, 2 implemented | Item 15 adds tracks, markers and MTC; OSC ingestion and track groups still need designs. |
@@ -121,6 +121,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | Gobos | `CX-GOBOS-0001` | Gobo image assets are outside a serial-DMX desk. |
 | Symbols | `CX-SYMBOLS-0001`, `CX-SYMBOLS-0002`, `CX-SYMBOLS-0003` | Symbol assets are outside a serial-DMX desk. |
 | Bitmap | `CX-BITMAP-0001` | Bitmap/pixel mapping is outside the design set. |
+| Macros | `CX-MACROS-0006`, `CX-MACROS-0007` | Item 16 covers statement macros; variables, key assignment, properties and the command editor are out of scope. |
 | System | `CX-SYSTEM_INFORMATION-0004` | Desk lights are hardware. |
 | Remote In and Out | `CX-REMOTE_INPUTS-0013`, `CX-REMOTE_INPUTS-0014` | PosiStageNet tracking and MVR-xchange are networked integrations outside the design set. |
 | Sound | `CX-SOUND-0001`, `CX-SOUND-0002`, `CX-SOUND-0003` | Sound playback is outside a serial-DMX desk. |
@@ -151,7 +152,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 1 | grandMA3 onPC | 0 | 1 | The headless `openlight` binary is the onPC equivalent; vendor installer/OS rows are out of scope. |
 | 1 | Show File Handling | 2 | 0 | Backup/template shows and file organisation need a small design. |
 | 1 | Workspace | 19 | 5 | Terminal shell exists; windows, panels and themes are item 18. |
-| 2 | Command Syntax and Keywords | 376 | 49 | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
+| 2 | Command Syntax and Keywords | 375 | 49 | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
 | 1 | Windows, Views, and Menus | 14 | 2 | Windows/views/menus are item 18. |
 | 1 | DMX In and Out | 0 | 1 | Output exists; DMX In and merge need a bidirectional transport design. |
 | 1 | Patch and Fixture Setup | 5 | 4 | Item 11 adds patch tools; item 13 adds MVR; 3D rows are out of scope. |
@@ -171,7 +172,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 3 | Generator - Random | 1 | 0 | Needs a design. |
 | 4 | XYZ | 3 | 0 | Needs a design (XYZ attribute space and marker fixtures). |
 | 4 | Tags | 1 | 0 | Needs a small design. |
-| 3 | Macros | 9 | 0 | Item 16 adds macros. |
+| 3 | Macros | 4 | 1 | Item 16 adds statement macros, undo groups and the CLI surface; variables, key assignment and the command editor are out of scope. |
 | 3 | Agenda | 5 | 0 | Needs a design. |
 | 3 | Timers | 3 | 0 | Needs a design. |
 | 3 | Timecode Show | 2 | 7 | Item 15 adds tracks, markers and MTC; OSC ingestion and track groups still need designs. |
@@ -198,7 +199,7 @@ These are the gaps that a chapter-by-chapter audit would otherwise hide. Ranked 
 5. **Recipes and Generator** — Look generation beyond a single waveform; `recipes`, `generator` and recipe presets are unbuilt.
 6. **Executor pages and special executors** — The executor list is flat; pages, assignments and special executors are missing.
 7. **Timecode depth** — Tracks, markers, MTC and an OSC feed hook landed with item 15; OSC ingestion and track groups remain.
-8. **Macros and CLI ergonomics** — Macros, variables, transaction undo and machine-readable status are item 16.
+8. **Macros and CLI ergonomics** — Item 16 adds statement macros, transaction undo and machine-readable status; variables and a command editor remain out of scope.
 9. **Layouts, Quickeys and windows** — Layouts/Quickeys have no design; the five-pane GUI is item 18.
 10. **Agenda and timers** — Scheduled events, stopwatch and countdown are unbuilt.
 11. **Plugins/Lua** — 164 rows, the largest undecided chapter. Decide between an embedded Lua host and a native plugin API before claiming completeness.

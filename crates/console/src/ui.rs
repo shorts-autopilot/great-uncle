@@ -18,6 +18,8 @@ use std::sync::{Mutex, MutexGuard};
 
 use engine::{Engine, Runtime};
 
+use crate::session::SessionLog;
+
 /// How many entered lines the shell remembers for Up/Down.
 const HISTORY: usize = 100;
 /// Lines a PageUp or PageDown moves the window.
@@ -107,6 +109,7 @@ pub struct UiState {
     history: Vec<String>,
     history_index: Option<usize>,
     scroll: usize,
+    log: Option<SessionLog>,
 }
 
 impl Default for UiState {
@@ -119,6 +122,7 @@ impl Default for UiState {
             history: Vec::new(),
             history_index: None,
             scroll: 0,
+            log: None,
         }
     }
 }
@@ -126,6 +130,11 @@ impl Default for UiState {
 impl UiState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Attach a session log for entered command lines.
+    pub fn set_log(&mut self, log: Option<SessionLog>) {
+        self.log = log;
     }
 
     /// Handle one key. Everything that reaches the engine goes through
@@ -194,10 +203,16 @@ impl UiState {
             Ok(outcome) => {
                 self.error = false;
                 self.message = outcome.lines.join("  ·  ");
+                if let Some(log) = &mut self.log {
+                    log.record(&line, &self.message);
+                }
             }
             Err(error) => {
                 self.error = true;
                 self.message = format!("error: {error}");
+                if let Some(log) = &mut self.log {
+                    log.record(&line, &self.message);
+                }
             }
         }
         Action::Redraw
@@ -274,7 +289,7 @@ impl UiState {
             &format!(" {}{}", if self.error { "! " } else { "  " }, self.message),
             width,
         ));
-        lines.push(clip(&format!("openlight> {}", self.input), width));
+        lines.push(clip(&format!("{}{}", prompt(engine), self.input), width));
         lines.push(clip(
             " Tab window  Enter run  Up/Down history  PgUp/PgDn scroll  Esc clear  Ctrl-D quit",
             width,
@@ -282,8 +297,8 @@ impl UiState {
         lines
     }
 
-    pub fn prompt_column(&self, width: usize) -> usize {
-        ("openlight> ".chars().count() + self.input.chars().count()).min(width.saturating_sub(1))
+    pub fn prompt_column(&self, engine: &Engine, width: usize) -> usize {
+        (prompt(engine).chars().count() + self.input.chars().count()).min(width.saturating_sub(1))
     }
 
     fn body(&self, engine: &mut Engine) -> Vec<String> {
@@ -301,6 +316,13 @@ impl UiState {
             lines.push("Nothing to show.".into());
         }
         lines
+    }
+}
+
+fn prompt(engine: &Engine) -> String {
+    match engine.undo_group() {
+        Some((_, edits)) => format!("openlight[+{edits}]> "),
+        None => "openlight> ".to_string(),
     }
 }
 
@@ -336,10 +358,11 @@ fn join(left: &str, right: &str, width: usize) -> String {
 /// Draw the shell until the user quits. The terminal is restored on the way
 /// out, including when a command panics.
 #[cfg(unix)]
-pub fn run(runtime: &Runtime) -> io::Result<()> {
+pub fn run(runtime: &Runtime, log: Option<SessionLog>) -> io::Result<()> {
     let mut terminal = Terminal::enter()?;
     let handle = runtime.engine();
     let mut state = UiState::new();
+    state.set_log(log);
 
     loop {
         let (width, height) = terminal.size();
@@ -348,7 +371,10 @@ pub fn run(runtime: &Runtime) -> io::Result<()> {
             state.render(&mut engine, width, height)
         };
         let prompt_row = lines.len().saturating_sub(2);
-        let column = state.prompt_column(width);
+        let column = {
+            let engine = lock(&handle);
+            state.prompt_column(&engine, width)
+        };
         terminal.draw(&lines, (prompt_row, column))?;
 
         let key = terminal.read_key()?;
@@ -364,7 +390,7 @@ pub fn run(runtime: &Runtime) -> io::Result<()> {
 }
 
 #[cfg(not(unix))]
-pub fn run(_runtime: &Runtime) -> io::Result<()> {
+pub fn run(_runtime: &Runtime, _log: Option<SessionLog>) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "--ui needs a Unix terminal",
@@ -568,6 +594,18 @@ mod tests {
         assert!(lines[22].starts_with("openlight> "), "{:?}", lines[22]);
         assert!(lines[23].contains("Ctrl-D"), "{:?}", lines[23]);
         assert_eq!(lines[3].chars().count(), 80, "body is padded to width");
+    }
+
+    #[test]
+    fn the_prompt_marks_an_open_undo_group() {
+        let (mut state, mut engine) = state_and_engine();
+        type_line(&mut state, &mut engine, "Begin");
+        type_line(&mut state, &mut engine, "Type New \"X\"");
+        let lines = state.render(&mut engine, 80, 24);
+        assert!(lines[22].starts_with("openlight[+1]> "), "{:?}", lines[22]);
+        type_line(&mut state, &mut engine, "End");
+        let lines = state.render(&mut engine, 80, 24);
+        assert!(lines[22].starts_with("openlight> "), "{:?}", lines[22]);
     }
 
     #[test]

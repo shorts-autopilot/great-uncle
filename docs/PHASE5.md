@@ -298,6 +298,28 @@ home map is the fallback after a fixture's stored home and before the channel
 default. The show format stays at v12; the new profile home field is optional,
 so older documents load unchanged.
 
+## CLI ergonomics, macros and undo groups (16)
+
+The console is usable from scripts and CI. `--version` prints the package and
+show format; `--command` runs repeatable statements before a file or stdin
+script; `--check [file]` prints only `path: problem` lines and exits 0/1 without
+starting output; `--status --json` emits a stable status object and exits;
+`--quiet`, `--log <file>`, `--desk <file>` and `--completions bash|zsh|fish`
+round out the product surface. `--log` is append-only and separate from the
+journal.
+
+`Begin [label]` / `End` group edits into one undo step. A group is visible in
+`Status` (`undo group open: N edits`) and in the shell prompt, cannot nest, and
+refuses `Undo`/`Redo` until it closes; `Load`, `New` and recovery clear it.
+`Patch Import`, `Import Mvr`, `Import Type` and `Macro Run` open a group
+internally, so the common bulk operations are atomic without typing `Begin`.
+
+Macros are named statement text stored in the desk file. `Macro <n> "name" …`
+stores or replaces, `Add`, `Delete`, `Macro [n]` and `Run` edit or execute it.
+Expansion goes through `Engine::execute`, so aliases cannot bypass validation;
+the stack refuses a self-call and caps nesting at eight. `Wait` is accepted in
+the text but refused at run time, because the engine owns the output tick.
+
 ## Known limitations
 
 - **No DMX hardware in the test environment.** Timing is exercised against a
@@ -309,11 +331,14 @@ so older documents load unchanged.
 - **Home is per fixture and attribute.** There is no per-mode home table, no
   park/default distinction and no automatic re-seed when a profile is
   re-imported.
-- **Only fifteen of the eighteen roadmap designs are built.** The remaining
-  three are listed in [`ROADMAP.md`](ROADMAP.md).
+- **Only sixteen of the eighteen roadmap designs are built.** The remaining
+  two are listed in [`ROADMAP.md`](ROADMAP.md).
 - **MTC was tested with synthetic bytes, not hardware.** Quarter-frame and
   full-frame decoding, drop-frame maths and the reader thread are covered by
   unit tests; a real MIDI interface remains unverified.
+- **Macros are linear statement lists.** No variables, conditionals, loops or
+  key/button triggers; a macro runs through the ordinary command path and stops
+  at the first error.
 - **MVR is a patch/profile carrier.** Geometry, models, trusses and layers as
 groups are ignored, and there is no MVR export. Real archives vary in
 dialect; the parser accepts namespaces and a missing `<Scene>` wrapper, but it

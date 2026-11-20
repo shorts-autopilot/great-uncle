@@ -65,7 +65,7 @@ pub use output::{OutputStatus, RemoteStatus, Runtime, RuntimeConfig, TransportBi
 pub use palette::Palette;
 pub use playback::{Cue, Executor, Playback, Sequence, Target};
 pub use pools::{Filter, Group, World};
-pub use show::{DeskSeed, Fixture, LoadReport, Show, Universe};
+pub use show::{DeskSeed, Fixture, LoadReport, Show, Universe, SHOW_VERSION};
 pub use timecode::{
     Action as TimecodeAction, Event as TimecodeEvent, Marker as TimecodeMarker, TimecodePlayer,
     TimecodeShow, TimecodeSource, Track as TimecodeTrack,

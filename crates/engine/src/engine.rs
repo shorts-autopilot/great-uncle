@@ -17,7 +17,7 @@ use crate::command::{
     SetTarget, StoreMode, TimecodeAction, TriggerArg,
 };
 use crate::csv;
-use crate::desk::{Desk, Masters, Preview, RunState};
+use crate::desk::{Desk, Macro, Masters, Preview, RunState};
 use crate::effect::{
     BeatDivision, Effect, EffectTarget, Effects, Tempo, Waveform, MAX_BPM, MAX_RATE_HZ,
     MAX_SPREAD_DEGREES, MIN_BPM,
@@ -61,6 +61,14 @@ struct TimingSpec {
     delay: Option<f64>,
     curve: Option<Curve>,
     off: bool,
+}
+
+/// An open undo group: one snapshot, and the label of its first edit unless
+/// `Begin` supplied one.
+struct GroupState {
+    snapshot: Snapshot,
+    label: Option<String>,
+    edits: usize,
 }
 
 /// Everything `Store Effect` carries before defaults are applied.
@@ -155,8 +163,16 @@ pub struct Engine {
     mtc: Option<MtcReader>,
     /// Show snapshots for `Undo` and `Redo`.
     history: History,
+    /// Edits between `Begin` and `End`, recorded as one undo step at `End`.
+    group: Option<GroupState>,
+    /// Active macro expansions, outermost first. Session state only.
+    macro_stack: Vec<u16>,
     /// The statement being dispatched, recorded as its undo label.
     label: String,
+    /// Explicit desk file from `--desk`, or the companion of the show.
+    desk_path: Option<PathBuf>,
+    /// Where the journal would go when no journal is open, for `--status`.
+    journal_path_hint: Option<PathBuf>,
     /// The crash journal, when one is open.
     journal: Option<crate::journal::Journal>,
     /// The head of the journal file when this session does not append to it.
@@ -192,7 +208,11 @@ impl Engine {
             timecode: TimecodePlayer::default(),
             mtc: None,
             history: History::default(),
+            group: None,
+            macro_stack: Vec::new(),
             label: String::new(),
+            desk_path: None,
+            journal_path_hint: None,
             journal: None,
             journal_head: 0,
             autosave: None,
@@ -282,6 +302,11 @@ impl Engine {
         self.journal.as_ref()
     }
 
+    /// Report the journal path in `--status` without opening the journal.
+    pub fn set_journal_path_hint(&mut self, path: Option<PathBuf>) {
+        self.journal_path_hint = path;
+    }
+
     /// Write a snapshot of the document and the desk right now.
     pub fn autosave_now(&mut self) -> io::Result<()> {
         let Some((path, _, _)) = &self.autosave else {
@@ -314,6 +339,7 @@ impl Engine {
         self.effects.stop_all();
         self.stop_timecode_source();
         self.history = History::default();
+        self.group = None;
         self.restore_desk_runs();
         self.revision += 1;
     }
@@ -370,6 +396,18 @@ impl Engine {
 
     /// Run one line, possibly several `;` separated statements.
     pub fn execute(&mut self, line: &str) -> Result<CommandOutcome, CommandError> {
+        // Macro definitions contain semicolons as data, so they are parsed
+        // from the raw line before the ordinary statement splitter runs.
+        if let Some(parsed) = command::parse_macro_line(line)? {
+            self.label = line.trim().to_string();
+            if self.desk.lock.is_some() && parsed.mutates() {
+                return Err(CommandError::with_hint(
+                    "the desk is locked",
+                    "`Unlock <code>` releases it",
+                ));
+            }
+            return self.dispatch(parsed);
+        }
         let statements = command::split_statements(line);
         if statements.is_empty() {
             return Err(CommandError::new("empty command"));
@@ -699,6 +737,17 @@ impl Engine {
             Command::StopTimecode { timecode } => self.stop_timecode(timecode),
             Command::LocateTimecode { timecode, at } => self.locate_timecode(timecode, &at),
             Command::ListTimecodes { only } => Ok(self.timecode_list(only)),
+            Command::Begin { label } => self.begin_group(label),
+            Command::End => self.end_group(),
+            Command::MacroStore {
+                number,
+                name,
+                statements,
+            } => self.macro_store(number, &name, statements),
+            Command::MacroAdd { number, statement } => self.macro_add(number, &statement),
+            Command::MacroDelete { number } => self.macro_delete(number),
+            Command::MacroList { number } => Ok(self.macro_list(number)),
+            Command::MacroRun { number } => self.macro_run(number),
             Command::Undo => self.history_step(true),
             Command::Redo => self.history_step(false),
             Command::Go { target } => self.playback_go(target),
@@ -1089,6 +1138,7 @@ impl Engine {
         self.playback.clear();
         self.effects.stop_all();
         self.stop_timecode_source();
+        self.group = None;
         self.revision += 1;
         // `New` replaces the document, so replay has to replace it too.
         self.note(crate::journal::EntryKind::Show);
@@ -1618,9 +1668,11 @@ impl Engine {
         }
         fixtures.sort_by_key(|fixture| fixture.number);
         let count = fixtures.len();
-        let message = self.mutate(|show| {
-            show.fixtures = fixtures;
-            Ok(format!("Imported {count} fixtures from {path}"))
+        let message = self.with_group(&format!("Patch Import {path}"), |engine| {
+            engine.mutate(|show| {
+                show.fixtures = fixtures;
+                Ok(format!("Imported {count} fixtures from {path}"))
+            })
         })?;
         let live: BTreeSet<u16> = self
             .show
@@ -1642,21 +1694,23 @@ impl Engine {
 
     fn import_mvr(&mut self, path: &str) -> Result<CommandOutcome, CommandError> {
         let mut report = None;
-        let message = self.mutate(|show| {
-            let imported = show
-                .import_mvr(Path::new(path))
-                .map_err(|error| CommandError::new(error.to_string()))?;
-            let summary = format!(
-                "Imported {} fixture{}, {} type{}, {} GDTF archive{} from {path}",
-                imported.fixtures,
-                if imported.fixtures == 1 { "" } else { "s" },
-                imported.types,
-                if imported.types == 1 { "" } else { "s" },
-                imported.archives,
-                if imported.archives == 1 { "" } else { "s" }
-            );
-            report = Some(imported);
-            Ok(summary)
+        let message = self.with_group(&format!("Import Mvr {path}"), |engine| {
+            engine.mutate(|show| {
+                let imported = show
+                    .import_mvr(Path::new(path))
+                    .map_err(|error| CommandError::new(error.to_string()))?;
+                let summary = format!(
+                    "Imported {} fixture{}, {} type{}, {} GDTF archive{} from {path}",
+                    imported.fixtures,
+                    if imported.fixtures == 1 { "" } else { "s" },
+                    imported.types,
+                    if imported.types == 1 { "" } else { "s" },
+                    imported.archives,
+                    if imported.archives == 1 { "" } else { "s" }
+                );
+                report = Some(imported);
+                Ok(summary)
+            })
         })?;
         let report = report.expect("MVR import report");
         let mut lines = vec![message];
@@ -1674,21 +1728,23 @@ impl Engine {
         let key = file.key();
         let fixture_type = file.into_type();
         let mut used = 0usize;
-        let message = self.mutate(|show| {
-            used = show
-                .fixtures
-                .iter()
-                .filter(|fixture| fixture.type_key.eq_ignore_ascii_case(&key))
-                .count();
-            match show
-                .fixture_types
-                .iter()
-                .position(|existing| existing.key().eq_ignore_ascii_case(&key))
-            {
-                Some(index) => show.fixture_types[index] = fixture_type.clone(),
-                None => show.fixture_types.push(fixture_type.clone()),
-            }
-            Ok(format!("Imported fixture type `{key}`"))
+        let message = self.with_group(&format!("Import Type {path}"), |engine| {
+            engine.mutate(|show| {
+                used = show
+                    .fixtures
+                    .iter()
+                    .filter(|fixture| fixture.type_key.eq_ignore_ascii_case(&key))
+                    .count();
+                match show
+                    .fixture_types
+                    .iter()
+                    .position(|existing| existing.key().eq_ignore_ascii_case(&key))
+                {
+                    Some(index) => show.fixture_types[index] = fixture_type.clone(),
+                    None => show.fixture_types.push(fixture_type.clone()),
+                }
+                Ok(format!("Imported fixture type `{key}`"))
+            })
         })?;
         let mut lines = vec![message];
         if used > 0 {
@@ -1914,7 +1970,10 @@ impl Engine {
         let mut lines = Vec::new();
         if desk {
             self.sync_desk_runs();
-            let desk_path = Desk::path_for(show_path);
+            let desk_path = self
+                .desk_path
+                .clone()
+                .unwrap_or_else(|| Desk::path_for(show_path));
             self.desk
                 .save(&desk_path, &self.show)
                 .map_err(|error| CommandError::new(error.to_string()))?;
@@ -1954,9 +2013,13 @@ impl Engine {
         self.effects.stop_all();
         self.timecode.stop();
         self.history.clear();
+        self.group = None;
         self.desk.clear();
 
-        let desk_path = Desk::path_for(show_path);
+        let desk_path = self
+            .desk_path
+            .clone()
+            .unwrap_or_else(|| Desk::path_for(show_path));
         let loaded = if show_only {
             lines.extend(self.desk.sanitise(&self.show));
             None
@@ -1991,10 +2054,21 @@ impl Engine {
     /// A show without a desk file opens clean, and a show that was upgraded
     /// from v4 seeds the desk with the programmer it used to carry.
     pub fn open(path: &Path) -> Result<(Engine, Vec<String>), String> {
+        Self::open_with_desk(path, None)
+    }
+
+    /// Load a show with an explicit desk path instead of `<show>.oldesk`.
+    pub fn open_with_desk(
+        path: &Path,
+        desk_path: Option<&Path>,
+    ) -> Result<(Engine, Vec<String>), String> {
         let (show, report) = Show::load_with_report(path).map_err(|error| error.to_string())?;
         let mut warnings = report.warnings.clone();
         let mut engine = Engine::new(show);
-        let desk_path = Desk::path_for(path);
+        engine.desk_path = desk_path.map(Path::to_path_buf);
+        let desk_path = desk_path
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| Desk::path_for(path));
         match Desk::load(&desk_path, &engine.show).map_err(|error| error.to_string())? {
             Some((desk, desk_warnings)) => {
                 engine.desk = desk;
@@ -2359,6 +2433,12 @@ impl Engine {
             count(self.history.undo_depth(), "step"),
             count(self.history.redo_depth(), "step")
         ));
+        if let Some((label, edits)) = self.undo_group() {
+            lines.push(format!(
+                "undo group open: {} (`{label}`)",
+                count(edits, "edit")
+            ));
+        }
         lines.push(format!("Timecode: {}", self.timecode_status()));
         if self.playback.is_running() {
             for (target, run) in self.playback.runs() {
@@ -2379,6 +2459,90 @@ impl Engine {
             lines.push("Playback: idle".to_string());
         }
         CommandOutcome::with_lines(lines)
+    }
+
+    /// The stable machine-readable status used by `--status --json`.
+    pub fn status_json(&self) -> String {
+        let status = lock(&self.status);
+        let universes: Vec<serde_json::Value> = status
+            .universes
+            .iter()
+            .map(|(universe, entry)| {
+                serde_json::json!({
+                    "universe": universe,
+                    "transport": entry.transport,
+                    "state": entry.state.label(),
+                    "achieved_hz": entry.achieved_hz,
+                    "frames": entry.frames,
+                    "errors": entry.errors,
+                    "reconnects": entry.reconnects,
+                    "last_send_us": entry.last_send_us,
+                    "stale_ms": entry.stale_ms,
+                    "last_error": entry.last_error,
+                })
+            })
+            .collect();
+        let remote = status.remote.as_ref().map(|remote| {
+            serde_json::json!({
+                "osc_port": remote.osc_port,
+                "http_port": remote.http_port,
+                "bind": remote.bind,
+                "osc_accepted": remote.osc_accepted,
+                "osc_unmatched": remote.osc_unmatched,
+                "http_clients": remote.http_clients,
+                "http_rejected": remote.http_rejected,
+                "http_rate_limited": remote.http_rate_limited,
+                "dropped": remote.dropped,
+            })
+        });
+        let group = self
+            .undo_group()
+            .map(|(label, edits)| serde_json::json!({"label": label, "edits": edits}));
+        serde_json::json!({
+            "format": "openlight-status",
+            "version": env!("CARGO_PKG_VERSION"),
+            "show_version": crate::show::SHOW_VERSION,
+            "running": status.running,
+            "engine_hz": status.engine_hz,
+            "frame_hz": status.frame_hz,
+            "frames": status.frames,
+            "universes": universes,
+            "warnings": status.warnings,
+            "show": {
+                "name": self.show.name,
+                "universes": self.show.universes.len(),
+                "fixture_types": self.show.fixture_types.len(),
+                "fixtures": self.show.fixtures.len(),
+            },
+            "desk": {
+                "selection": self.desk.selection,
+                "grand": self.desk.masters.grand,
+                "rate": self.desk.masters.rate,
+                "tempo": self.desk.tempo,
+                "blind": self.desk.blind,
+                "highlight": self.desk.highlight,
+                "blackout": self.desk.blackout.is_some(),
+                "lock": self.desk.lock.is_some(),
+                "world": self.desk.world,
+                "filter": self.desk.filter,
+            },
+            "journal": self
+                .journal
+                .as_ref()
+                .map(|journal| journal.path().display().to_string())
+                .or_else(|| {
+                    self.journal_path_hint
+                        .as_ref()
+                        .map(|path| path.display().to_string())
+                }),
+            "undo": {
+                "depth": self.history.undo_depth(),
+                "redo": self.history.redo_depth(),
+                "group": group,
+            },
+            "remote": remote,
+        })
+        .to_string()
     }
 
     /// Fixtures a store captures: the selection, or every fixture when nothing
@@ -6678,7 +6842,247 @@ impl Engine {
         let _ = self.playback.go(&self.show, target, sequence, index, now);
     }
 
+    /// The open undo group, for `Status` and the shell prompt.
+    pub fn undo_group(&self) -> Option<(String, usize)> {
+        self.group.as_ref().map(|group| {
+            (
+                group
+                    .label
+                    .clone()
+                    .unwrap_or_else(|| "unlabeled".to_string()),
+                group.edits,
+            )
+        })
+    }
+
+    fn begin_group(&mut self, label: Option<String>) -> Result<CommandOutcome, CommandError> {
+        if let Some(group) = &self.group {
+            return Err(CommandError::with_hint(
+                format!(
+                    "undo group already open: {} edits{}",
+                    group.edits,
+                    group
+                        .label
+                        .as_deref()
+                        .map(|label| format!(" (`{label}`)"))
+                        .unwrap_or_default()
+                ),
+                "close it with `End` before opening another",
+            ));
+        }
+        let label = label.filter(|label| !label.trim().is_empty());
+        self.group = Some(GroupState {
+            snapshot: Snapshot {
+                show: self.show.clone(),
+                programmer: self.desk.programmer.clone(),
+            },
+            label: label.clone(),
+            edits: 0,
+        });
+        Ok(CommandOutcome::message(match label {
+            Some(label) => format!("Undo group `{label}` open"),
+            None => "Undo group open".to_string(),
+        }))
+    }
+
+    fn end_group(&mut self) -> Result<CommandOutcome, CommandError> {
+        let Some(group) = self.group.take() else {
+            return Err(CommandError::with_hint(
+                "no undo group is open",
+                "open one with `Begin [label]`",
+            ));
+        };
+        let label = group.label.unwrap_or_else(|| "group".to_string());
+        if group.edits > 0 {
+            self.history.record(group.snapshot, label.clone());
+        }
+        Ok(CommandOutcome::message(format!(
+            "Closed undo group `{label}` ({})",
+            count(group.edits, "edit")
+        )))
+    }
+
+    /// Run work inside one undo group. An already-open user group is reused;
+    /// bulk imports therefore never nest or refuse because the operator typed
+    /// `Begin` first.
+    fn with_group<T, F>(&mut self, label: &str, change: F) -> Result<T, CommandError>
+    where
+        F: FnOnce(&mut Self) -> Result<T, CommandError>,
+    {
+        let opened = self.group.is_none();
+        if opened {
+            self.begin_group(Some(label.to_string()))?;
+        }
+        let result = change(self);
+        if opened {
+            let closed = self.end_group();
+            if result.is_ok() {
+                closed?;
+            }
+        }
+        result
+    }
+
+    /// Macro edits are desk state: journal them so a crash before `Save`
+    /// restores the macro through the same command path.
+    fn desk_changed(&mut self) {
+        if self.recovering {
+            return;
+        }
+        self.revision += 1;
+        self.note(crate::journal::EntryKind::Desk);
+    }
+
+    fn record_change(&mut self, snapshot: Snapshot) {
+        if self.recovering {
+            return;
+        }
+        if let Some(group) = &mut self.group {
+            if group.label.is_none() {
+                group.label = Some(self.label.clone());
+            }
+            group.edits += 1;
+        } else {
+            self.history.record(snapshot, self.label.clone());
+        }
+    }
+
+    fn macro_store(
+        &mut self,
+        number: u16,
+        name: &str,
+        statements: Vec<String>,
+    ) -> Result<CommandOutcome, CommandError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(CommandError::new("macro name is empty"));
+        }
+        if statements.is_empty() {
+            return Err(CommandError::new("a macro needs at least one statement"));
+        }
+        let count = statements.len();
+        self.desk.macros.insert(
+            number,
+            Macro {
+                name: name.to_string(),
+                statements,
+            },
+        );
+        self.desk_changed();
+        Ok(CommandOutcome::message(format!(
+            "Stored macro {number} `{name}` ({})",
+            count_statement(count)
+        )))
+    }
+
+    fn macro_add(&mut self, number: u16, statement: &str) -> Result<CommandOutcome, CommandError> {
+        let statement = statement.trim();
+        if statement.is_empty() {
+            return Err(CommandError::new("`Macro Add` needs a statement"));
+        }
+        let (name, statements) = {
+            let stored = self.desk.macros.get_mut(&number).ok_or_else(|| {
+                CommandError::with_hint(
+                    format!("macro {number} does not exist"),
+                    format!("create it with `Macro {number} \"name\" <statements…>`"),
+                )
+            })?;
+            stored.statements.push(statement.to_string());
+            (stored.name.clone(), stored.statements.len())
+        };
+        self.desk_changed();
+        Ok(CommandOutcome::message(format!(
+            "Macro {number} `{name}` now has {}",
+            count_statement(statements)
+        )))
+    }
+
+    fn macro_delete(&mut self, number: u16) -> Result<CommandOutcome, CommandError> {
+        let stored = self
+            .desk
+            .macros
+            .remove(&number)
+            .ok_or_else(|| CommandError::new(format!("macro {number} does not exist")))?;
+        self.desk_changed();
+        Ok(CommandOutcome::message(format!(
+            "Deleted macro {number} `{}`",
+            stored.name
+        )))
+    }
+
+    fn macro_list(&self, number: Option<u16>) -> CommandOutcome {
+        if let Some(number) = number {
+            let Some(stored) = self.desk.macros.get(&number) else {
+                return CommandOutcome::message(format!("macro {number} does not exist"));
+            };
+            let mut lines = vec![format!(
+                "Macro {number} \"{}\" ({})",
+                stored.name,
+                count_statement(stored.statements.len())
+            )];
+            for (index, statement) in stored.statements.iter().enumerate() {
+                lines.push(format!("  {}. {statement}", index + 1));
+            }
+            return CommandOutcome::with_lines(lines);
+        }
+        if self.desk.macros.is_empty() {
+            return CommandOutcome::message("No macros stored.");
+        }
+        let mut lines = Vec::new();
+        for (number, stored) in &self.desk.macros {
+            lines.push(format!(
+                "Macro {number} \"{}\" ({})",
+                stored.name,
+                count_statement(stored.statements.len())
+            ));
+        }
+        CommandOutcome::with_lines(lines)
+    }
+
+    fn macro_run(&mut self, number: u16) -> Result<CommandOutcome, CommandError> {
+        let stored = self.desk.macros.get(&number).cloned().ok_or_else(|| {
+            CommandError::with_hint(
+                format!("macro {number} does not exist"),
+                "list them with `Macro`",
+            )
+        })?;
+        if self.macro_stack.contains(&number) {
+            return Err(CommandError::new(format!("macro {number} calls itself")));
+        }
+        if self.macro_stack.len() >= 8 {
+            return Err(CommandError::new("macro expansion is too deep (limit 8)"));
+        }
+        for statement in &stored.statements {
+            if starts_wait(statement) {
+                return Err(CommandError::with_hint(
+                    "Wait is a script command; run the macro from a script",
+                    "the engine has no sleep and must not block the output tick",
+                ));
+            }
+        }
+
+        self.macro_stack.push(number);
+        let result = self.with_group(&format!("Macro {number} Run"), |engine| {
+            let mut lines = Vec::new();
+            for statement in &stored.statements {
+                lines.extend(engine.execute(statement)?.lines);
+            }
+            if lines.is_empty() {
+                lines.push(format!("Ran macro {number} (no output)"));
+            }
+            Ok(CommandOutcome::with_lines(lines))
+        });
+        self.macro_stack.pop();
+        result
+    }
+
     fn history_step(&mut self, undo: bool) -> Result<CommandOutcome, CommandError> {
+        if self.group.is_some() {
+            return Err(CommandError::with_hint(
+                "cannot undo or redo while an undo group is open",
+                "close it with `End` first",
+            ));
+        }
         let mut current = Snapshot {
             show: std::mem::take(&mut self.show),
             programmer: std::mem::take(&mut self.desk.programmer),
@@ -6774,9 +7178,7 @@ impl Engine {
             programmer: self.desk.programmer.clone(),
         };
         let message = change(&mut self.desk.programmer);
-        if !self.recovering {
-            self.history.record(snapshot, self.label.clone());
-        }
+        self.record_change(snapshot);
         self.revision += 1;
         self.note(crate::journal::EntryKind::Programmer);
         message
@@ -6804,15 +7206,12 @@ impl Engine {
             )));
         }
         let changed = backup != self.show;
-        if changed && !self.recovering {
+        if changed {
             let programmer = self.desk.programmer.clone();
-            self.history.record(
-                Snapshot {
-                    show: backup,
-                    programmer,
-                },
-                self.label.clone(),
-            );
+            self.record_change(Snapshot {
+                show: backup,
+                programmer,
+            });
         }
         self.revision += 1;
         if changed {
@@ -6841,6 +7240,9 @@ pub const HELP: &[&str] = &[
     "Type New \"Generic 4ch\" / Import Type \"profile.olft\"",
     "Type \"Generic 4ch\" Mode \"4ch\" / Channel 1 Dimmer \"Dimmer\"",
     "Export Type \"Generic 4ch\" \"profile.olft\" / Copy Type \"A\" As \"B\"",
+    "Begin [label] / End                    one undo step for the statements between",
+    "Macro 1 \"cue\" Blackout; Wait 2; Blackout Off  store a named sequence",
+    "Macro 1 Add \"Store Cue 1\" / Macro 1 Delete / Macro [1] / Macro 1 Run",
     "New [Show] [\"name\"]                    start an empty show",
     "Store Palette Color 1 \"Warm\"           capture the programmer in a pool",
     "Delete Palette Color 1 / Palette        delete or list palettes",
@@ -6977,6 +7379,17 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 /// `1 step`, `2 steps`: keeps reports grammatical without a crate.
 fn count(number: usize, singular: &str) -> String {
     format!("{number} {singular}{}", if number == 1 { "" } else { "s" })
+}
+
+fn count_statement(number: usize) -> String {
+    count(number, "statement")
+}
+
+fn starts_wait(statement: &str) -> bool {
+    statement
+        .split_whitespace()
+        .next()
+        .is_some_and(|word| word.eq_ignore_ascii_case("wait"))
 }
 
 /// Compact fixture list: `1 Thru 3 + 7`.
@@ -8610,6 +9023,157 @@ mod tests {
     }
 
     #[test]
+    fn undo_groups_record_one_step_and_status_reports_them() {
+        let mut engine = engine();
+        engine
+            .execute("Begin; Fixture 1 At 50; Store Cue 1; End")
+            .unwrap();
+        assert_eq!(engine.history.undo_depth(), 1);
+        assert!(engine.undo_group().is_none());
+        assert!(engine
+            .execute("Status")
+            .unwrap()
+            .lines
+            .join("\n")
+            .contains("Undo: 1 step"));
+
+        let undone = engine.execute("Undo").unwrap();
+        assert!(undone.lines[0].contains("Fixture 1 At 50"), "{undone:?}");
+        assert!(engine.show.sequences.is_empty());
+        assert_eq!(
+            engine.desk.programmer.get(1, "Dimmer"),
+            None,
+            "the group restores the programmer"
+        );
+    }
+
+    #[test]
+    fn an_open_group_is_visible_and_refuses_undo_and_nesting() {
+        let mut engine = engine();
+        engine.execute("Begin setup").unwrap();
+        engine.execute("Fixture 1 At 40").unwrap();
+        let status = engine.execute("Status").unwrap().lines.join("\n");
+        assert!(status.contains("undo group open: 1 edit"), "{status}");
+
+        let error = engine.execute("Undo").unwrap_err();
+        assert!(
+            error.hint.as_deref().unwrap_or_default().contains("End"),
+            "{error}"
+        );
+        let error = engine.execute("Begin another").unwrap_err();
+        assert!(error.message.contains("already open"), "{error}");
+        engine.execute("End").unwrap();
+        assert!(engine
+            .execute("End")
+            .unwrap_err()
+            .message
+            .contains("no undo group"));
+    }
+
+    #[test]
+    fn macros_store_list_run_and_are_one_undo_step() {
+        let mut engine = engine();
+        engine
+            .execute(r#"Macro 1 "First" Fixture 1 At 50; Store Cue 1"#)
+            .unwrap();
+        let listing = engine.execute("Macro 1").unwrap().lines.join("\n");
+        assert!(
+            listing.contains("First") && listing.contains("Store Cue 1"),
+            "{listing}"
+        );
+
+        let outcome = engine.execute("Macro 1 Run").unwrap();
+        assert!(!outcome.lines.is_empty(), "{outcome:?}");
+        assert_eq!(engine.show.sequences.len(), 1);
+        assert_eq!(engine.history.undo_depth(), 1, "the run is one undo step");
+        engine.execute("Undo").unwrap();
+        assert!(engine.show.sequences.is_empty());
+
+        engine.execute(r#"Macro 1 Add Fixture 1 At 60"#).unwrap();
+        engine.execute("Macro 1 Add Wait 1").unwrap();
+        let listing = engine.execute("Macro 1").unwrap().lines.join("\n");
+        assert!(listing.contains("Fixture 1 At 60"), "{listing}");
+        assert!(
+            listing.contains("Wait 1"),
+            "a Wait can be stored: {listing}"
+        );
+        engine.execute("Macro 1 Delete").unwrap();
+        assert!(engine.execute("Macro 1").unwrap().lines[0].contains("does not exist"));
+    }
+
+    #[test]
+    fn macros_refuse_recursion_wait_and_missing_numbers() {
+        let mut engine = engine();
+        engine.execute(r#"Macro 2 "Loop" Macro 2 Run"#).unwrap();
+        let error = engine.execute("Macro 2 Run").unwrap_err();
+        assert!(error.message.contains("macro 2 calls itself"), "{error}");
+
+        engine.execute(r#"Macro 3 "Wait" Wait 1"#).unwrap();
+        let error = engine.execute("Macro 3 Run").unwrap_err();
+        assert!(
+            error.message.contains("Wait is a script command"),
+            "{error}"
+        );
+        engine
+            .execute(r#"Macro 4 "deleted sequence" Go Sequence 2"#)
+            .unwrap();
+        assert!(engine
+            .execute("Macro 4")
+            .unwrap()
+            .lines
+            .join("\n")
+            .contains("deleted sequence"));
+        assert!(engine
+            .execute("Macro 4 Run")
+            .unwrap_err()
+            .message
+            .contains("sequence"));
+        assert!(engine
+            .execute("Macro 9 Run")
+            .unwrap_err()
+            .message
+            .contains("does not exist"));
+    }
+
+    #[test]
+    fn status_json_has_stable_machine_readable_keys() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 50").unwrap();
+        let value: serde_json::Value = serde_json::from_str(&engine.status_json()).unwrap();
+        assert_eq!(value["format"], "openlight-status");
+        assert_eq!(value["show"]["name"], engine.show.name);
+        assert!(value["universes"].is_array());
+        assert_eq!(value["desk"]["grand"], 1.0);
+        assert!(value["undo"]["depth"].is_number());
+        assert!(value["journal"].is_null());
+        engine.set_journal_path_hint(Some(PathBuf::from("look.journal")));
+        let value: serde_json::Value = serde_json::from_str(&engine.status_json()).unwrap();
+        assert_eq!(value["journal"], "look.journal");
+    }
+
+    #[test]
+    fn an_explicit_desk_file_is_loaded_instead_of_the_companion() {
+        let engine = engine();
+        let show_path = temp_path("explicit-desk.olshow");
+        let companion = temp_path("explicit-desk.oldesk");
+        let explicit = temp_path("explicit.oldesk");
+        engine.show.save(&show_path).unwrap();
+        let mut companion_desk = Desk::new();
+        companion_desk.masters.grand = 0.9;
+        companion_desk.save(&companion, &engine.show).unwrap();
+        let mut explicit_desk = Desk::new();
+        explicit_desk.masters.grand = 0.4;
+        explicit_desk.save(&explicit, &engine.show).unwrap();
+
+        let (loaded, warnings) = Engine::open_with_desk(&show_path, Some(&explicit)).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(loaded.desk.masters.grand, 0.4);
+        let _ = std::fs::remove_file(&show_path);
+        let _ = std::fs::remove_file(&companion);
+        let _ = std::fs::remove_file(&explicit);
+    }
+
+    #[test]
     fn undo_and_redo_step_through_show_edits() {
         let mut engine = engine();
         engine.execute("Fixture 1 At 40").unwrap();
@@ -9653,6 +10217,30 @@ mod tests {
     }
 
     #[test]
+    fn a_group_journals_each_statement_and_replays_the_result() {
+        let journal = journal_path("group-replay");
+        let _ = std::fs::remove_file(&journal);
+        let mut session = engine();
+        session.set_journal(Some(
+            crate::journal::Journal::open(journal.clone()).unwrap(),
+        ));
+        session
+            .execute("Begin; Fixture 1 At 40; Store Cue 1; End")
+            .unwrap();
+        drop(session);
+
+        let tail = crate::journal::read(&journal).unwrap();
+        assert_eq!(tail.entries.len(), 2, "one entry per edit: {tail:#?}");
+
+        let mut recovered = engine();
+        let report = recovered.recover(&tail, Path::new(NO_SHOW), ReplayFrom::File);
+        assert!(report.skipped.is_empty(), "{report:?}");
+        assert_eq!(recovered.desk.programmer.get(1, "Dimmer"), Some(0.4));
+        assert_eq!(recovered.show.sequences.len(), 1);
+        let _ = std::fs::remove_file(&journal);
+    }
+
+    #[test]
     fn a_snapshot_records_the_journal_head_when_no_journal_is_open() {
         let mut path = std::env::temp_dir();
         path.push(format!(
@@ -9855,6 +10443,9 @@ mod tests {
         assert_eq!(engine.show.fixtures.len(), 2);
         assert_eq!(engine.show.fixtures[1].name, "Second, warm");
         assert_eq!(engine.show.fixtures[1].address, 5);
+        assert_eq!(engine.history.undo_depth(), 1, "one bulk import, one step");
+        engine.execute("Undo").unwrap();
+        assert_eq!(engine.show.fixtures.len(), 1, "the whole import is undone");
         let _ = std::fs::remove_file(&path);
     }
 

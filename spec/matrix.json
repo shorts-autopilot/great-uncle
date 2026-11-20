@@ -27117,7 +27117,7 @@
    "module": "cmd",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "keyword_macro",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/keyword_macro.html",
@@ -59139,7 +59139,7 @@
    "module": "cmd/macro",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "macros",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/macros.html",
@@ -59279,7 +59279,7 @@
    "module": "cmd/macro",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "macro_create",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/macro_create.html",
@@ -59427,7 +59427,7 @@
    "module": "cmd/macro",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "macro_edit",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/macro_edit.html",
@@ -59503,7 +59503,7 @@
    "module": "cmd/macro",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "out-of-scope",
    "source": {
     "ext_id": "macro_assign",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/macro_assign.html",
@@ -59596,7 +59596,7 @@
    "module": "cmd/macro",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "out-of-scope",
    "source": {
     "ext_id": "macro_variables",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/macro_variables.html",
