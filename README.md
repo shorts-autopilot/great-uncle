@@ -94,6 +94,39 @@ cargo run -p openlight-desktop --features gui   # native window
 cargo run -p openlight-desktop -- --headless-smoke  # load, snapshot, exit (no display)
 ```
 
+## Try a portable build from GitHub
+
+You do not need Rust installed to try the desktop window. The
+[Portable builds workflow](.github/workflows/portable.yml) runs on every push to
+`main` and can also be started from **Actions → Portable builds → Run workflow**.
+When it finishes, open the latest run and download one of these artifacts:
+
+- **`openlight-linux-x86_64`** — `openlight-<version>-x86_64-unknown-linux-gnu.tar.gz`
+- **`openlight-windows-x86_64`** — `openlight-<version>-x86_64-pc-windows-msvc.zip`
+
+Each archive contains both `openlight` (console) and `openlight-desktop`
+(window), plus the docs, examples and the platform's packaging files. The
+workflow also uploads a SHA-256 checksum file.
+
+```bash
+# Linux
+tar -xzf openlight-*.tar.gz
+cd openlight-*
+./openlight-desktop
+```
+
+```powershell
+# Windows
+Expand-Archive openlight-*.zip -DestinationPath openlight-portable
+cd openlight-portable
+.\openlight-desktop.exe
+```
+
+The binaries are unsigned, so Windows may show a SmartScreen warning. The Linux
+window needs an X11 or Wayland session with a working OpenGL driver; the archive
+includes the console binary for a headless machine. These are CI-built portable
+archives, not installers and not a signed release.
+
 ## Installing a release
 
 `packaging/make-tarball.sh` writes `dist/openlight-<version>-<target>.tar.gz`

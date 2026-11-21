@@ -1,0 +1,93 @@
+name: Portable builds
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "packaging/**"
+      - ".github/workflows/portable.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portable-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux portable
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # eframe links against the windowing and GL libraries on Linux. The CI
+      # lint job only type-checks the GUI, so install the dev packages needed
+      # for an actual release link here.
+      - name: Install GUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxi-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libgl1-mesa-dev \
+            libegl1-mesa-dev
+
+      - name: Build portable tarball
+        run: GUI=1 packaging/make-tarball.sh
+
+      - name: Write checksum
+        run: |
+          cd dist
+          sha256sum *.tar.gz | sed 's#  .*/#  #' > SHA256SUMS-linux.txt
+          cat SHA256SUMS-linux.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openlight-linux-x86_64
+          path: |
+            dist/*.tar.gz
+            dist/SHA256SUMS-linux.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    name: Windows portable
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build portable zip
+        run: .\packaging\windows\make-zip.ps1
+
+      - name: Write checksum
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -Filter *.zip |
+            Get-FileHash -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
+            Set-Content -Encoding ascii dist\SHA256SUMS-windows.txt
+          Get-Content dist\SHA256SUMS-windows.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openlight-windows-x86_64
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS-windows.txt
+          if-no-files-found: error
+          retention-days: 14
