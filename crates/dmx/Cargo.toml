@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "openlight-dmx"
 description = "DMX512 output transports: virtual, generic USB-serial, ENTTEC DMX USB Pro and uDMX"
 version.workspace = true

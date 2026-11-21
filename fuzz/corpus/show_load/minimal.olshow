@@ -1,0 +1,8 @@
+{
+  "format": "openlight-show",
+  "version": 12,
+  "name": "Fuzz Seed",
+  "universes": [{ "number": 1, "label": "Universe 1", "size": 512 }],
+  "fixture_types": [],
+  "fixtures": []
+}

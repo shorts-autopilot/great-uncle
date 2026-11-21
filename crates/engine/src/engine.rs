@@ -188,6 +188,10 @@ pub struct Engine {
     /// The instant the latest [`Engine::tick`] saw. Commands that start a fade
     /// use it, so a test can drive time explicitly.
     clock: Instant,
+    /// Ports `Probe` should try. `None` means enumerate the platform's ports.
+    probe_specs: Option<Vec<String>>,
+    /// Transport specs the runtime owns, which the probe must not touch.
+    bound_outputs: Vec<String>,
 }
 
 impl Default for Engine {
@@ -219,7 +223,21 @@ impl Engine {
             autosave_error: None,
             recovering: false,
             clock: Instant::now(),
+            probe_specs: None,
+            bound_outputs: Vec::new(),
         }
+    }
+
+    /// Replace the probe's candidate list. Tests use this so a report is about
+    /// the ports they named; the shell otherwise enumerates the platform.
+    pub fn set_probe_specs(&mut self, specs: Vec<String>) {
+        self.probe_specs = Some(specs);
+    }
+
+    /// Tell `Probe` which transports the runtime already owns. Probing a bound
+    /// port would fight the output thread for the device, so those are skipped.
+    pub fn set_bound_outputs(&mut self, specs: Vec<String>) {
+        self.bound_outputs = specs;
     }
 
     /// The time an upcoming command will use to start a fade.
@@ -524,6 +542,7 @@ impl Engine {
                 step,
             } => self.clone_fixtures(fixture, universe, address, count, step),
             Command::PatchCheck => Ok(self.patch_check()),
+            Command::Probe => Ok(self.probe_report()),
             Command::ImportPatch { path } => self.import_patch(&path),
             Command::ImportGdtf { path } => self.import_gdtf(&path),
             Command::ImportMvr { path } => self.import_mvr(&path),
@@ -2250,6 +2269,30 @@ impl Engine {
             "grand": self.desk.masters.grand,
         })
         .to_string()
+    }
+
+    /// `Probe`: one two-line report per candidate port. Reports through the
+    /// command outcome rather than printing, so the REPL, the UI and a script
+    /// all see the same text.
+    fn probe_report(&self) -> CommandOutcome {
+        let candidates = self
+            .probe_specs
+            .clone()
+            .unwrap_or_else(dmx::probe::candidates);
+        let specs: Vec<String> = candidates
+            .into_iter()
+            .filter(|spec| !self.bound_outputs.iter().any(|bound| bound == spec))
+            .collect();
+        if specs.is_empty() {
+            return CommandOutcome::message(
+                "No serial ports found; configure `--output` or name a port with `--probe`.",
+            );
+        }
+        let mut lines = Vec::new();
+        for report in dmx::probe::run(&specs, dmx::probe::ProbeOptions::default()) {
+            lines.extend(report.lines());
+        }
+        CommandOutcome::with_lines(lines)
     }
 
     fn status_report(&self) -> CommandOutcome {
@@ -7290,6 +7333,7 @@ pub const HELP: &[&str] = &[
     "Lock [code] / Unlock [code]           refuse mutating commands while locked",
     "Sheet                                  print the fixture sheet",
     "Status                                 output, show and playback state",
+    "Probe                                  measure DMX framing on serial ports",
     "Save \"show.json\"                     write the show and its desk beside it",
     "Save Show \"show.json\" / Save Desk \"desk.oldesk\"   write one of the two",
     "Load \"show.json\"                     read the show and its desk",
@@ -7671,6 +7715,19 @@ mod tests {
         let mut engine = Engine::new(show);
         let error = engine.execute("Fixture 1 At 50").unwrap_err();
         assert!(error.message.contains("no Dimmer channel"), "{error}");
+    }
+
+    #[test]
+    fn probe_reports_each_candidate_and_skips_bound_ports() {
+        let mut engine = Engine::empty();
+        engine.set_probe_specs(vec!["virtual".into()]);
+        let outcome = engine.execute("Probe").unwrap();
+        assert!(outcome.lines[0].contains("virtual"), "{outcome:?}");
+        assert!(outcome.lines[1].contains("3 frames in"), "{outcome:?}");
+
+        engine.set_bound_outputs(vec!["virtual".into()]);
+        let outcome = engine.execute("Probe").unwrap();
+        assert!(outcome.lines[0].contains("No serial ports"), "{outcome:?}");
     }
 
     #[test]

@@ -78,4 +78,8 @@ Sequence 1
 Sequence 2
 Sequence 3
 Status
+# The listings above are the half-second snapshot. Let the dimmer finish before
+# the recorded trace so the checked frame is a settled look, not a point on a
+# fade; this demo is the one that changes over real time.
+Wait 4
 Save "target/phase4-demo.olshow.json"

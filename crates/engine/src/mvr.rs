@@ -7,13 +7,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
-use std::io::Read;
+use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 
 use roxmltree::{Document, Node};
 
 use crate::fixture_type::FixtureType;
 use crate::gdtf;
+use crate::limits::{self, LimitError};
 use crate::patch::PatchRange;
 use crate::show::{Fixture, Show, Universe, MAX_UNIVERSE_NUMBER, MAX_UNIVERSE_SIZE};
 
@@ -36,6 +37,8 @@ pub enum MvrErrorKind {
     MissingScene,
     #[error("{MVR_SCENE} is not valid XML: {0}")]
     Xml(String),
+    #[error("{0}")]
+    Limit(#[from] LimitError),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -71,44 +74,52 @@ pub fn read(path: &Path) -> Result<Import, MvrError> {
         path: path.to_path_buf(),
         kind: MvrErrorKind::Io(source),
     })?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|error| MvrError {
+    read_archive(file).map_err(|kind| MvrError {
         path: path.to_path_buf(),
-        kind: MvrErrorKind::Archive(error.to_string()),
-    })?;
+        kind,
+    })
+}
+
+/// Read an MVR archive already held in memory. The fuzz target uses this so a
+/// mutation never needs a temporary file.
+pub fn import_bytes(bytes: &[u8]) -> Result<Import, MvrErrorKind> {
+    read_archive(Cursor::new(bytes))
+}
+
+fn read_archive<R: Read + Seek>(reader: R) -> Result<Import, MvrErrorKind> {
+    let mut archive =
+        zip::ZipArchive::new(reader).map_err(|error| MvrErrorKind::Archive(error.to_string()))?;
+    limits::check_archive(&mut archive)?;
 
     let mut scene = None;
     let mut profiles = BTreeMap::new();
+    let mut total = 0u64;
     for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(|error| MvrError {
-            path: path.to_path_buf(),
-            kind: MvrErrorKind::Archive(error.to_string()),
-        })?;
-        let name = normalize(entry.name());
-        if name == normalize(MVR_SCENE) {
-            let mut text = String::new();
-            entry.read_to_string(&mut text).map_err(|source| MvrError {
-                path: path.to_path_buf(),
-                kind: MvrErrorKind::Io(source),
-            })?;
-            scene = Some(text);
-        } else if name.ends_with(".gdtf") {
-            let mut bytes = Vec::new();
-            entry.read_to_end(&mut bytes).map_err(|source| MvrError {
-                path: path.to_path_buf(),
-                kind: MvrErrorKind::Io(source),
-            })?;
-            profiles.insert(name, bytes);
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| MvrErrorKind::Archive(error.to_string()))?;
+        let entry_name = entry
+            .name()
+            .map_err(|error| MvrErrorKind::Archive(error.to_string()))?;
+        let name = normalize(&entry_name);
+        if name == normalize(MVR_SCENE) || name.ends_with(".gdtf") {
+            let bytes = limits::read_entry(&mut entry, &name)?;
+            total = total.saturating_add(bytes.len() as u64);
+            if total > limits::MAX_ARCHIVE_BYTES {
+                return Err(LimitError::ArchiveTooLarge { size: total }.into());
+            }
+            if name == normalize(MVR_SCENE) {
+                let text = String::from_utf8(bytes)
+                    .map_err(|error| MvrErrorKind::Xml(format!("scene is not UTF-8: {error}")))?;
+                scene = Some(text);
+            } else {
+                profiles.insert(name, bytes);
+            }
         }
     }
 
-    let scene = scene.ok_or_else(|| MvrError {
-        path: path.to_path_buf(),
-        kind: MvrErrorKind::MissingScene,
-    })?;
-    let document = Document::parse(&scene).map_err(|error| MvrError {
-        path: path.to_path_buf(),
-        kind: MvrErrorKind::Xml(error.to_string()),
-    })?;
+    let scene = scene.ok_or(MvrErrorKind::MissingScene)?;
+    let document = Document::parse(&scene).map_err(|error| MvrErrorKind::Xml(error.to_string()))?;
 
     let archives = profiles.len();
     let (types, entries, warnings) = parse_scene(&document, &profiles);
@@ -629,6 +640,42 @@ mod tests {
         let report = show.import_mvr(&path).unwrap();
         assert_eq!(report.fixtures, 1);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn an_archive_over_the_entry_limit_is_refused_before_reading() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        for index in 0..=crate::limits::MAX_ARCHIVE_ENTRIES {
+            writer
+                .start_file(format!("entry-{index}"), options)
+                .unwrap();
+            writer.write_all(b"x").unwrap();
+        }
+        let bytes = writer.finish().unwrap().into_inner();
+        let path = write_mvr("too-many", &bytes);
+        let error = read(&path).unwrap_err();
+        assert!(
+            matches!(
+                error.kind,
+                MvrErrorKind::Limit(crate::limits::LimitError::ArchiveEntries { .. })
+            ),
+            "{error}"
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn an_in_memory_archive_reads_the_same_way_as_a_file() {
+        let fixtures = fixture_xml("Wash", "1.001", "MVR Wash.gdtf");
+        let bytes = mvr_zip(&scene(&fixtures), true);
+        let import = import_bytes(&bytes).unwrap();
+        assert_eq!(import.entries.len(), 1);
+        assert_eq!(import.archives, 1);
+        assert!(matches!(
+            import_bytes(b"not a zip"),
+            Err(MvrErrorKind::Archive(_))
+        ));
     }
 
     #[test]

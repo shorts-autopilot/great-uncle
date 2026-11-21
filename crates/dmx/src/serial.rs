@@ -337,12 +337,14 @@ mod pty_tests {
             }
             let flags = libc::fcntl(master, libc::F_GETFL);
             libc::fcntl(master, libc::F_SETFL, flags | libc::O_NONBLOCK);
-            let name = libc::ptsname(master);
-            if name.is_null() {
+            // `ptsname` writes to a process-global buffer, and the test harness
+            // runs these tests on parallel threads. `ptsname_r` is the safe one.
+            let mut name = [0 as libc::c_char; 128];
+            if libc::ptsname_r(master, name.as_mut_ptr(), name.len()) != 0 {
                 libc::close(master);
                 return None;
             }
-            let path = CStr::from_ptr(name).to_string_lossy().into_owned();
+            let path = CStr::from_ptr(name.as_ptr()).to_string_lossy().into_owned();
             Some((master, path))
         }
     }
@@ -422,7 +424,192 @@ mod pty_tests {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+/// macOS: the same raw line discipline as Linux, through BSD `termios`.
+///
+/// Darwin has no `BOTHER`, so an arbitrary baud rate — 250000 for DMX and 31250
+/// for MTC — needs `IOSSIOSPEED` after the ordinary settings. Break control is
+/// `TIOCSBRK`/`TIOCCBRK`, which a USB-serial adapter driver honours exactly as
+/// the Linux backend does.
+#[cfg(target_os = "macos")]
+mod platform {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::time::Duration;
+
+    use super::{Parity, SerialLink, SerialSettings};
+    use crate::{DmxError, DmxResult};
+
+    /// `_IOW('I', 2, speed_t)`: the Darwin ioctl that accepts any baud rate.
+    /// The size field is computed from `speed_t` rather than hard-coded, because
+    /// it differs between the 32- and 64-bit headers.
+    const IOSSIOSPEED: libc::c_ulong = iow(b'I', 2);
+
+    const fn iow(group: u8, number: u8) -> libc::c_ulong {
+        let size = std::mem::size_of::<libc::speed_t>() as u64;
+        (0x8000_0000u64 | (size << 16) | ((group as u64) << 8) | number as u64) as libc::c_ulong
+    }
+
+    pub struct PosixSerial {
+        fd: OwnedFd,
+        path: String,
+        warning: Option<String>,
+    }
+
+    pub fn open(path: &str) -> DmxResult<Box<dyn SerialLink>> {
+        let c_path = CString::new(path)
+            .map_err(|_| DmxError::Unsupported(format!("invalid serial path: {path}")))?;
+        let fd = unsafe {
+            libc::open(
+                c_path.as_ptr(),
+                libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(DmxError::io(path, std::io::Error::last_os_error()));
+        }
+        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        unsafe { libc::ioctl(fd.as_raw_fd(), libc::TIOCEXCL as libc::c_ulong) };
+        Ok(Box::new(PosixSerial {
+            fd,
+            path: path.to_owned(),
+            warning: None,
+        }))
+    }
+
+    impl PosixSerial {
+        fn err(&self) -> DmxError {
+            DmxError::io(&self.path, std::io::Error::last_os_error())
+        }
+    }
+
+    impl SerialLink for PosixSerial {
+        fn configure(&mut self, settings: &SerialSettings) -> DmxResult<()> {
+            let fd = self.fd.as_raw_fd();
+            let mut t: libc::termios = unsafe { std::mem::zeroed() };
+            if unsafe { libc::tcgetattr(fd, &mut t) } < 0 {
+                return Err(self.err());
+            }
+            unsafe { libc::cfmakeraw(&mut t) };
+            t.c_cflag &=
+                !(libc::CSIZE | libc::CSTOPB | libc::PARENB | libc::PARODD | libc::CRTSCTS);
+            t.c_cflag |= libc::CS8 | libc::CREAD | libc::CLOCAL;
+            if settings.stop_bits == 2 {
+                t.c_cflag |= libc::CSTOPB;
+            }
+            match settings.parity {
+                Parity::None => {}
+                Parity::Even => t.c_cflag |= libc::PARENB,
+                Parity::Odd => t.c_cflag |= libc::PARENB | libc::PARODD,
+            }
+            t.c_cc[libc::VMIN] = 0;
+            t.c_cc[libc::VTIME] = 0;
+            if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &t) } < 0 {
+                return Err(self.err());
+            }
+            // The standard termios speeds cannot express 250000, so the
+            // adapter driver is asked for the exact rate after the line is raw.
+            let speed: libc::speed_t = settings.baud as libc::speed_t;
+            if unsafe { libc::ioctl(fd, IOSSIOSPEED, &speed) } < 0 {
+                return Err(self.err());
+            }
+            unsafe { libc::tcflush(fd, libc::TCIOFLUSH) };
+            Ok(())
+        }
+
+        fn send_break(&mut self, hold: Duration) -> DmxResult<()> {
+            let fd = self.fd.as_raw_fd();
+            if unsafe { libc::ioctl(fd, libc::TIOCSBRK as libc::c_ulong) } < 0 {
+                let error = std::io::Error::last_os_error();
+                let soft = matches!(
+                    error.raw_os_error(),
+                    Some(libc::ENOTTY) | Some(libc::EINVAL) | Some(libc::ENOSYS)
+                );
+                if soft {
+                    self.warning.get_or_insert_with(|| {
+                        format!(
+                            "{}: link cannot drive a break; frames are sent without DMX break",
+                            self.path
+                        )
+                    });
+                    return Ok(());
+                }
+                return Err(self.err());
+            }
+            std::thread::sleep(hold);
+            loop {
+                if unsafe { libc::ioctl(fd, libc::TIOCCBRK as libc::c_ulong) } == 0 {
+                    return Ok(());
+                }
+                let error = std::io::Error::last_os_error();
+                if error.kind() != std::io::ErrorKind::Interrupted {
+                    return Err(DmxError::io(&self.path, error));
+                }
+            }
+        }
+
+        fn write_all(&mut self, bytes: &[u8]) -> DmxResult<()> {
+            let fd = self.fd.as_raw_fd();
+            let mut written = 0;
+            while written < bytes.len() {
+                let rc = unsafe {
+                    libc::write(
+                        fd,
+                        bytes[written..].as_ptr() as *const libc::c_void,
+                        bytes.len() - written,
+                    )
+                };
+                if rc < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.kind() == std::io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(DmxError::io(&self.path, error));
+                }
+                written += rc as usize;
+            }
+            Ok(())
+        }
+
+        fn drain(&mut self) -> DmxResult<()> {
+            loop {
+                if unsafe { libc::tcdrain(self.fd.as_raw_fd()) } == 0 {
+                    return Ok(());
+                }
+                let error = std::io::Error::last_os_error();
+                if error.kind() != std::io::ErrorKind::Interrupted {
+                    return Err(DmxError::io(&self.path, error));
+                }
+            }
+        }
+
+        fn read(&mut self, buffer: &mut [u8]) -> DmxResult<usize> {
+            loop {
+                let count = unsafe {
+                    libc::read(
+                        self.fd.as_raw_fd(),
+                        buffer.as_mut_ptr() as *mut libc::c_void,
+                        buffer.len(),
+                    )
+                };
+                if count >= 0 {
+                    return Ok(count as usize);
+                }
+                let error = std::io::Error::last_os_error();
+                match error.kind() {
+                    std::io::ErrorKind::Interrupted => continue,
+                    std::io::ErrorKind::WouldBlock => return Ok(0),
+                    _ => return Err(DmxError::io(&self.path, error)),
+                }
+            }
+        }
+
+        fn take_warning(&mut self) -> Option<String> {
+            self.warning.take()
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod platform {
     use super::{SerialLink, SerialSettings};
     use crate::{DmxError, DmxResult};
@@ -430,9 +617,25 @@ mod platform {
 
     pub fn open(path: &str) -> DmxResult<Box<dyn SerialLink>> {
         Err(DmxError::Unsupported(format!(
-            "serial output is only implemented for Linux in this build (requested {path}); \
-             use `virtual` or build on Linux"
+            "raw DMX framing is not implemented on this platform (requested {path}); \
+             use `virtual` or an ENTTEC widget"
         )))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn the_fallback_refuses_a_serial_port_by_name() {
+            match open("/dev/ttyUSB0") {
+                Err(DmxError::Unsupported(message)) => {
+                    assert!(message.contains("not implemented"), "{message}");
+                    assert!(message.contains("/dev/ttyUSB0"), "{message}");
+                }
+                _ => panic!("the fallback must report Unsupported"),
+            }
+        }
     }
 
     struct Unsupported;

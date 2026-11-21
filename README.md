@@ -19,7 +19,7 @@ profiles that you supply.
 | 2 | Palettes, cues, sequences, executor faders | done — see [`docs/PHASE2.md`](docs/PHASE2.md) |
 | 3 | Groups, worlds, filters, masters, effects | done — see [`docs/PHASE3.md`](docs/PHASE3.md) |
 | 4 | Timecode, move-in-black, undo, first UI shell | done — see [`docs/PHASE4.md`](docs/PHASE4.md) |
-| 5+ | desk state, output, journal, blackout/lock, cues, timing, home, cue editing, viewing, 16-bit, patch tools, effects, external timecode, remote, MVR, fixture builder, macros/CLI | in progress — 03, 04, 05, 06, 01, 02, 07, 10, 09, 08, 11, 12, 13, 14, 15 and 16 built; see [`docs/PHASE5.md`](docs/PHASE5.md) |
+| 5+ | desk state, output, journal, blackout/lock, cues, timing, home, cue editing, viewing, 16-bit, patch tools, effects, external timecode, remote, MVR, fixture builder, macros/CLI, release readiness | in progress — 03, 04, 05, 06, 01, 02, 07, 10, 09, 08, 11, 12, 13, 14, 15, 16 and 17 built; see [`docs/PHASE5.md`](docs/PHASE5.md) |
 | 5+ | the remaining roadmap designs | designed — see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 
 It is a console with a command line, a full-screen terminal shell, a script
@@ -74,10 +74,50 @@ check for CI. There is no desktop GUI yet.
 ## Quick start
 
 ```bash
-cargo test --workspace            # 448 tests, no hardware needed
+cargo test --workspace            # 475 tests, no hardware needed
 cargo run -p openlight-console    # interactive console
 cargo run -p openlight-console -- --ui   # full-screen terminal shell
 ```
+
+## Installing a release
+
+`packaging/make-tarball.sh` writes `dist/openlight-<version>-<target>.tar.gz`
+with the binary, this README, the docs, the examples and the udev rules. From an
+extracted tarball:
+
+```bash
+sudo install -m 0755 openlight /usr/local/bin/openlight
+sudo install -m 0644 packaging/udev/60-openlight.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger
+sudo usermod -aG dialout "$USER"   # log out and back in for the group change
+openlight --probe                   # what each attached port actually does
+```
+
+The udev file covers FTDI, CH340, Prolific, Arduino ACM and Anyma uDMX devices.
+Adjust the group if your distribution does not use `dialout`.
+
+## Platforms and output
+
+| Platform | Output | Status |
+|---|---|---|
+| Linux | `generic:` serial, `enttec:`, `udmx`, `virtual` | supported, primary |
+| macOS | `generic:` serial, `enttec:`, `virtual` | supported; the serial backend is compile-checked, not yet run on hardware |
+| Windows | `virtual` | experimental; there is no serial backend yet, so `generic:` and `enttec:` both report `unsupported` |
+| any | `virtual` | supported everywhere and used by every test |
+
+The serial layer is `termios2` on Linux and `termios` + `IOSSIOSPEED` on macOS.
+On a platform without a serial backend the workspace still builds and every
+serial transport reports `unsupported`; only *device* support varies. ENTTEC is
+the path to add first on a new platform because the widget owns the frame
+timing, but today it uses the same serial layer as `generic:`.
+
+`openlight --probe` sends three frames to every detected serial port (and every
+`--output`) and reports the achieved rate, break/MAB and jitter without starting
+the output threads. `Probe` inside the shell does the same and skips ports the
+runtime already owns. The command form sends synchronously and holds the engine
+while it runs, so it is an engineering action rather than something to type
+during a show. It is the measurement a bug report should carry; treat the
+support matrix above as exactly what has been measured, not more.
 
 Light two fixtures on a virtual universe:
 
@@ -135,11 +175,12 @@ cargo run -p openlight-console -- \
 ```
 
 ```
-Universe 1: 120 frames, last frame 513 bytes, start code 0x00, 4 non-zero slots
-  00 FF FF 00 00 FF FF 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 …
+Universe 1: last frame 513 bytes, start code 0x00, 2 non-zero slots
+  00 00 FF 00 00 00 FF 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 …
 ```
 
-Both fixtures are at full with red at full: cue 2 of the timecode show has run.
+Both fixtures have red at full while the dimmer is still dark: the
+per-attribute cue has done its colour but its delayed dimmer has not started.
 
 ## OSC and browser remote
 
@@ -169,13 +210,20 @@ The console now has the flags a script or a CI job needs: repeatable `--command`
 and shell completions. Commands run before the script, in the order given.
 
 ```bash
-openlight --version
+openlight --version                 # package, git hash and show format
+openlight --probe
 openlight --check look.olshow
 openlight --command "Fixture 1 At 50" --command "Store Cue 1" --frames 10
 openlight --script - < examples/phase1-demo.txt
 openlight --status --json
 openlight --completions bash
 ```
+
+`--probe` (and `Probe`) reports the DMX framing each port actually achieves, so
+a hardware problem can be described with numbers. `--version` includes the
+short git hash when the binary was built in a checkout. Unsafe archive paths,
+oversized archives or documents and too many channels are refused before
+parsing, naming the limit that was exceeded.
 
 `Begin [label]` and `End` group edits into one undo step. `Macro 1 "cue" Blackout; Wait 2; Blackout Off` stores statement text; `Macro 1 Run` expands it through the same command path, with cycle and depth guards. `Wait` is accepted while editing a macro but refused when it runs, because the engine must not block its output tick. Bulk imports open a group internally.
 
@@ -253,6 +301,11 @@ docs/             per-phase design notes
   terminal UI shell, show format v4, limitations.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — the ranked work after Phase 4, with a
   design in [`docs/design/`](docs/design/) for every item.
+- [`CHANGELOG.md`](CHANGELOG.md) — released and unreleased changes.
+- [`SECURITY.md`](SECURITY.md) — how to report a problem and what the desk lock
+  does not protect.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — the one-writer rule and the test
+  standard.
 - [`docs/COMPLETENESS.md`](docs/COMPLETENESS.md) — every Phase 0 manual row
   classified, every out-of-scope row with a reason, and the chapters that still
   need designs.

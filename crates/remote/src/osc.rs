@@ -154,7 +154,7 @@ pub fn encode(message: &OscMessage) -> Vec<u8> {
             OscValue::Blob(value) => {
                 bytes.extend_from_slice(&(value.len() as u32).to_be_bytes());
                 bytes.extend_from_slice(value);
-                while bytes.len() % 4 != 0 {
+                while !bytes.len().is_multiple_of(4) {
                     bytes.push(0);
                 }
             }
@@ -197,7 +197,7 @@ fn align4(value: usize) -> Result<usize, OscError> {
 fn write_string(bytes: &mut Vec<u8>, value: &str) {
     bytes.extend_from_slice(value.as_bytes());
     bytes.push(0);
-    while bytes.len() % 4 != 0 {
+    while !bytes.len().is_multiple_of(4) {
         bytes.push(0);
     }
 }

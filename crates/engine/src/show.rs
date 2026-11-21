@@ -25,6 +25,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use crate::effect::{Effect, MAX_EFFECTS, MAX_RATE_HZ, MAX_SPREAD_DEGREES};
 use crate::fixture_type::{FixtureType, Mode};
 use crate::levels::Levels;
+use crate::limits::{MAX_SHOW_BYTES, MAX_SHOW_TYPES};
 use crate::palette::Palette;
 use crate::patch::{self, PatchRange};
 use crate::playback::{format_cue_number, Executor, Sequence, MAX_CUE_NUMBER, MAX_TIME};
@@ -286,6 +288,12 @@ impl Show {
         }
         if self.name.trim().is_empty() {
             problems.push("show name is empty".into());
+        }
+        if self.fixture_types.len() > MAX_SHOW_TYPES {
+            problems.push(format!(
+                "{} fixture types, the limit is {MAX_SHOW_TYPES}",
+                self.fixture_types.len()
+            ));
         }
 
         let mut universe_numbers = BTreeSet::new();
@@ -1123,12 +1131,48 @@ impl Show {
     /// v4 programmer and its master positions move to the desk, and the loader
     /// hands them over rather than keeping dead fields in the document.
     pub fn load_with_report(path: &Path) -> Result<(Show, LoadReport), ShowError> {
-        let text = fs::read_to_string(path).map_err(|source| ShowError::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
+        // Refuse a runaway document before serde allocates for it. `metadata`
+        // is a stat, so a 10 GiB file costs one syscall, not 10 GiB of memory.
+        let size = fs::metadata(path)
+            .map_err(|source| ShowError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?
+            .len();
+        if size > MAX_SHOW_BYTES {
+            return Err(ShowError::TooLarge {
+                path: path.to_path_buf(),
+                size,
+                limit: MAX_SHOW_BYTES,
+            });
+        }
+        // Read through `take` as well as checking the metadata: a file that
+        // grows between the stat and the read must not allocate past the limit.
+        let mut text = String::new();
+        fs::File::open(path)
+            .and_then(|file| {
+                file.take(MAX_SHOW_BYTES + 1)
+                    .read_to_string(&mut text)
+                    .map(|_| ())
+            })
+            .map_err(|source| ShowError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        if text.len() as u64 > MAX_SHOW_BYTES {
+            return Err(ShowError::TooLarge {
+                path: path.to_path_buf(),
+                size: text.len() as u64,
+                limit: MAX_SHOW_BYTES,
+            });
+        }
+        Self::parse_text(&text, path)
+    }
+
+    /// Parse a show document already in memory, validating it like a file.
+    fn parse_text(text: &str, path: &Path) -> Result<(Show, LoadReport), ShowError> {
         let mut value: serde_json::Value =
-            serde_json::from_str(&text).map_err(|source| ShowError::Parse {
+            serde_json::from_str(text).map_err(|source| ShowError::Parse {
                 path: path.to_path_buf(),
                 source,
             })?;
@@ -1178,6 +1222,17 @@ impl Show {
             }
         }
         Ok((show, report))
+    }
+}
+
+/// A show document can come from a file, a journal line or a test. Parsing it
+/// through the same validator as [`Show::load`] is what makes a property test
+/// meaningful: anything that parses is a document the desk could open.
+impl std::str::FromStr for Show {
+    type Err = ShowError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        Self::parse_text(text, Path::new("<memory>")).map(|(show, _)| show)
     }
 }
 
@@ -1359,6 +1414,12 @@ pub enum ShowError {
         path: PathBuf,
         problems: Vec<String>,
     },
+    #[error("{}: show file is {size} bytes; the limit is {limit} bytes", path.display())]
+    TooLarge {
+        path: PathBuf,
+        size: u64,
+        limit: u64,
+    },
 }
 
 #[cfg(test)]
@@ -1403,6 +1464,47 @@ mod tests {
         assert!(text.contains("\"version\": 12"));
         assert!(text.contains("OpenLight Demo Wash"), "types are embedded");
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn from_str_parses_a_document_through_the_same_validator() {
+        let show = demo_show();
+        let text = serde_json::to_string(&show).unwrap();
+        let parsed: Show = text.parse().unwrap();
+        assert_eq!(parsed, show);
+        assert!("not json".parse::<Show>().is_err());
+    }
+
+    #[test]
+    fn a_show_over_the_read_limit_is_refused_before_parsing() {
+        let path = temp_path("huge");
+        let file = fs::File::create(&path).unwrap();
+        file.set_len(MAX_SHOW_BYTES + 1).unwrap();
+        drop(file);
+        let error = Show::load(&path).unwrap_err();
+        assert!(
+            matches!(error, ShowError::TooLarge { size, limit, .. } if size == MAX_SHOW_BYTES + 1 && limit == MAX_SHOW_BYTES),
+            "{error}"
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn too_many_fixture_types_are_reported_by_validate() {
+        let mut show = Show::new();
+        for index in 0..=MAX_SHOW_TYPES {
+            let mut fixture_type = demo_fixture_type();
+            fixture_type.manufacturer = format!("Maker {index}");
+            show.fixture_types.push(fixture_type);
+        }
+        let problems = show.validate();
+        assert!(
+            problems.iter().any(|problem| problem.contains(&format!(
+                "{} fixture types, the limit is {MAX_SHOW_TYPES}",
+                MAX_SHOW_TYPES + 1
+            ))),
+            "{problems:?}"
+        );
     }
 
     #[test]

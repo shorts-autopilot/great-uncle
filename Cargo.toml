@@ -6,7 +6,10 @@ members = ["crates/dmx", "crates/engine", "crates/remote", "crates/console"]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-rust-version = "1.82"
+# Raised from 1.82 in item 17: the locked dependency set needs 1.89 (zip 9.8
+# and its aes dependency; time and proptest already needed 1.88). The CI matrix
+# tests this exact version rather than trusting the declaration.
+rust-version = "1.89"
 
 [profile.release]
 lto = "thin"

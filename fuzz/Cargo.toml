@@ -1,0 +1,40 @@
+[package]
+name = "openlight-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+engine = { package = "openlight-engine", path = "../crates/engine" }
+
+[[bin]]
+name = "show_load"
+path = "fuzz_targets/show_load.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "gdtf_import"
+path = "fuzz_targets/gdtf_import.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "mvr_import"
+path = "fuzz_targets/mvr_import.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "command_parse"
+path = "fuzz_targets/command_parse.rs"
+test = false
+doc = false
+
+# Keep the fuzz crate out of the workspace: `cargo test --workspace` must not
+# need nightly or libFuzzer.
+[workspace]

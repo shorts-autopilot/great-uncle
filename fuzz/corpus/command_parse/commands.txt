@@ -1,0 +1,9 @@
+Fixture 1 Thru 2 At Full
+Fixture 1 At ColorAdd_R 50
+Store Palette Color 1 "Deep Blue"
+Store Cue 2 "High" Fade 1.5 Follow 0.5
+Cue 2 Timing Dimmer Delay 2.5 Curve Snap
+Clone Fixture 1 At 1.101 Count 8
+Import Mvr "rig.mvr"
+Macro 1 "cue" Blackout; Wait 2; Blackout Off
+Begin "bulk"; Patch Import "rig.csv"; End

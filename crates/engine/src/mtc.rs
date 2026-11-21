@@ -83,7 +83,7 @@ pub fn frames_to_drop_frame(frames: u64) -> (u64, u64, u64, u64) {
     loop {
         let dropped = 2 * (minutes - minutes / 10);
         let start = minutes * 1800
-            + if minutes == 0 || minutes % 10 == 0 {
+            + if minutes == 0 || minutes.is_multiple_of(10) {
                 0
             } else {
                 2
@@ -91,7 +91,13 @@ pub fn frames_to_drop_frame(frames: u64) -> (u64, u64, u64, u64) {
             - dropped;
         let next_minutes = minutes + 1;
         let next_dropped = 2 * (next_minutes - next_minutes / 10);
-        let next = next_minutes * 1800 + if next_minutes % 10 == 0 { 0 } else { 2 } - next_dropped;
+        let next = next_minutes * 1800
+            + if next_minutes.is_multiple_of(10) {
+                0
+            } else {
+                2
+            }
+            - next_dropped;
         if frames < start {
             minutes = minutes.saturating_sub(1);
             continue;
@@ -118,7 +124,7 @@ fn position(rate: MtcRate, hours: u64, minutes: u64, seconds: u64, frames: u64) 
     if frames >= fps {
         return None;
     }
-    if rate == MtcRate::Fps30Drop && minutes % 10 != 0 && frames < 2 && seconds == 0 {
+    if rate == MtcRate::Fps30Drop && !minutes.is_multiple_of(10) && frames < 2 && seconds == 0 {
         return None;
     }
     Some(match rate {

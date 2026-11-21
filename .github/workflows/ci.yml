@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  schedule:
+    # Nightly fuzzing is a release job, not a per-pull-request gate.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Format, lint, test, spec and demos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: python3 tools/spec_status.py --check
+      - run: tools/demo_trace.sh check
+
+  platform:
+    name: ${{ matrix.os }} / ${{ matrix.rust }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: ["1.89.0", stable]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - uses: Swatinem/rust-cache@v2
+      # The virtual transport and the fallback serial module are the portable
+      # build. USB (libusb) is exercised by the dedicated job below; raw serial
+      # is Linux and macOS only, and is declared in README.md.
+      - run: cargo test --workspace --locked --no-default-features
+      # The phase demos do not need a device; run their trace diff on every
+      # Unix platform. Windows has no bash by default in this job.
+      - name: Demo traces
+        if: runner.os != 'Windows'
+        shell: bash
+        run: tools/demo_trace.sh check
+
+  usb:
+    name: USB transports
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev
+      - run: cargo test -p openlight-dmx --locked --features usb
+
+  deny:
+    name: Licences and advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [show_load, gdtf_import, mvr_import, command_parse]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install cargo-fuzz --locked
+      - run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=600

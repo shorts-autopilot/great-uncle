@@ -77,7 +77,7 @@
 //! Preview [Cue 14] [Sequence 2] | Preview Off
 //! Highlight | Highlight Off              selected fixtures at full intensity
 //! Lock [code] | Unlock [code]
-//! Sheet | Status | Help
+//! Sheet | Status | Probe | Help
 //! Save [Show|Desk] "file" | Load [Show] "file"
 //! ```
 //!
@@ -623,6 +623,8 @@ pub enum Command {
         sequence: Option<u16>,
         path: String,
     },
+    /// `Probe`: report what every candidate serial port does with DMX frames.
+    Probe,
     Save {
         path: String,
     },
@@ -663,6 +665,7 @@ impl Command {
             | Command::ListTimecodes { .. }
             | Command::Unlock { .. }
             | Command::PatchCheck
+            | Command::Probe
             | Command::ExportType { .. }
             | Command::MacroList { .. }
             | Command::Begin { .. }
@@ -1369,6 +1372,10 @@ impl Parser<'_> {
         if word.eq_ignore_ascii_case("status") {
             self.expect_end()?;
             return Ok(Command::Status);
+        }
+        if word.eq_ignore_ascii_case("probe") {
+            self.expect_end()?;
+            return Ok(Command::Probe);
         }
         if word.eq_ignore_ascii_case("report") {
             return self.report();

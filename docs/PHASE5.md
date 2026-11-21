@@ -320,6 +320,76 @@ Expansion goes through `Engine::execute`, so aliases cannot bypass validation;
 the stack refuses a self-call and caps nesting at eight. `Wait` is accepted in
 the text but refused at run time, because the engine owns the output tick.
 
+## Release readiness (17)
+
+This item adds no feature. It is the work that makes the previous sixteen safe
+to ship.
+
+**Untrusted input.** Every `.gdtf`, `.mvr`, show file and desk file is checked
+before parsing, and every limit is named in the error:
+
+| Limit | Value |
+|---|---|
+| archive entries | 64 |
+| one entry, uncompressed | 4 MiB |
+| one archive, uncompressed | 16 MiB |
+| path shape | relative only: no absolute, drive-qualified or `..` entry |
+| channels in one mode | 512 |
+| functions on one channel | 4096 |
+| fixture types in one show | 1024 |
+| show file on disk | 64 MiB, refused from metadata before a read |
+
+The checks live in `crates/engine/src/limits.rs`. Property tests run on every
+`cargo test` for the command line, show JSON, desk JSON and timecode parser;
+`fuzz/` carries coverage-guided targets for show files, GDTF profiles, MVR
+rigs and command input, with the example files as seeds. Fuzzing runs nightly in CI and is not a pull-request
+gate.
+
+**Hardware probe.** `openlight --probe` and bare `Probe` send three whole
+frames to every detected port (and every configured `--output`), measure the
+sustained rate and jitter, and report the break/MAB the transport asks for. A
+port that opens but does not finish inside two seconds is reported as
+`unknown (no DMX framing observed)` instead of hanging the console. A pty test
+covers the real open/configure/write path, a blocking fake covers the timeout,
+and ports the runtime already owns are skipped. No real adapter was available,
+so the report has not yet been validated on hardware.
+
+**Platforms and MSRV.** Serial framing is `termios2` on Linux and `termios` +
+`IOSSIOSPEED` on macOS; any other target builds with a fallback that refuses
+`generic:` at open time. CI runs the tests on Linux, macOS and Windows against
+stable and the declared MSRV. The MSRV was raised from 1.82 to **1.89** in this
+item because the locked dependency set (`time 0.3.55`, `zip 9.8` and
+`proptest` for the tests) already required it; the old declaration was not true
+and the matrix now tests the real number. `cargo deny` then found two
+advisories in `zip 2.6`, so the reader moved to the fixed `zip 9.8` line — the
+archive limits themselves are unchanged.
+
+**CI and supply chain.** `.github/workflows/ci.yml` runs fmt, clippy with
+`-D warnings`, the workspace tests, the specification check, the demo trace
+diff, the platform/MSRV matrix, a USB job and `cargo deny` (`deny.toml`). The
+demo traces in `examples/expected/` are the actual last frame of each phase
+demo, so a one-byte rendering regression fails a build.
+
+**Packaging.** `packaging/make-tarball.sh` builds the binary and a tarball with
+`README.md`, the changelog, security and contributing notes, `docs/`,
+`examples/` and `packaging/udev/60-openlight.rules` (group `dialout`, mode
+0660). `--version` includes the short git hash when built in a checkout; a
+release tarball without a `.git` directory prints the package and format only.
+
+**Benchmarks.** `crates/engine/benches/render.rs` measures one render call on a
+release build. These numbers were taken on the development host (Rust 1.100.0,
+Linux x86_64) as a hand-check point, not as a CI threshold:
+
+| Bench | Time |
+|---|---|
+| programmer, 2048 fixtures over 4 universes | 754 µs |
+| playback, one cue with 1000 lanes | 840 µs |
+| effects, 512 fixtures × 3 targets | 951 µs |
+
+The design asked for 4096 fixtures over four universes. A 512-slot universe
+holds at most 512 one-channel fixtures, so four universes physically hold 2048;
+the bench uses that maximum rather than a rig the patch validator would reject.
+
 ## Known limitations
 
 - **No DMX hardware in the test environment.** Timing is exercised against a
@@ -331,8 +401,22 @@ the text but refused at run time, because the engine owns the output tick.
 - **Home is per fixture and attribute.** There is no per-mode home table, no
   park/default distinction and no automatic re-seed when a profile is
   re-imported.
-- **Only sixteen of the eighteen roadmap designs are built.** The remaining
-  two are listed in [`ROADMAP.md`](ROADMAP.md).
+- **Only seventeen of the eighteen roadmap designs are built.** The GUI is
+  listed in [`ROADMAP.md`](ROADMAP.md).
+- **The hardware probe has not met a real adapter.** Its timing, timeout and
+  report logic are tested against a pty and a blocking fake, and the macOS
+  backend is compile-checked, but electrical timing on actual USB-serial
+  hardware remains unmeasured. `--probe` is the tool for the first person who
+  can run it; report the numbers rather than assuming them.
+- **Windows has no serial backend in this build.** `virtual` works, while
+  `generic:` and `enttec:` both report `unsupported`: ENTTEC shares the serial
+  layer rather than owning a separate COM path. The workspace still builds and
+  runs its tests on Windows.
+- **Fuzzing is a nightly job, not a pull-request gate.** The property tests run
+  on every test invocation; the fuzz corpus only grows when the nightly job
+  finds a regression.
+- **Benchmark numbers are host-specific.** They are a regression check for a
+  developer, not an assertion in CI.
 - **MTC was tested with synthetic bytes, not hardware.** Quarter-frame and
   full-frame decoding, drop-frame maths and the reader thread are covered by
   unit tests; a real MIDI interface remains unverified.

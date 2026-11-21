@@ -60,6 +60,7 @@ Options:
   --ui                 open the full-screen terminal shell
   --trace              print the last virtual frame as bytes
   --version            print the package and show format versions
+  --probe              probe serial ports and report DMX framing, then exit
   --completions <sh>   print a completion script for bash, zsh or fish
   --help               show this text
 
@@ -100,11 +101,7 @@ fn main() -> ExitCode {
     };
 
     if options.version {
-        println!(
-            "openlight {} (show format v{})",
-            env!("CARGO_PKG_VERSION"),
-            engine::SHOW_VERSION
-        );
+        println!("{}", version_line());
         return ExitCode::SUCCESS;
     }
     if let Some(shell) = &options.completions {
@@ -122,6 +119,9 @@ fn main() -> ExitCode {
     if options.check {
         return check_exit(&options);
     }
+    if options.probe {
+        return probe_exit(&options);
+    }
 
     match run(options) {
         Ok(()) => ExitCode::SUCCESS,
@@ -129,6 +129,25 @@ fn main() -> ExitCode {
             eprintln!("error: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// The `--version` line. A release tarball has no git hash, so it prints the
+/// package and format only; a checkout adds the commit the binary came from.
+fn version_line() -> String {
+    let hash = env!("OPENLIGHT_GIT_HASH");
+    if hash.is_empty() {
+        format!(
+            "openlight {} (show format v{})",
+            env!("CARGO_PKG_VERSION"),
+            engine::SHOW_VERSION
+        )
+    } else {
+        format!(
+            "openlight {} ({hash}, show format v{})",
+            env!("CARGO_PKG_VERSION"),
+            engine::SHOW_VERSION
+        )
     }
 }
 
@@ -168,6 +187,27 @@ fn check_show(path: Option<&Path>) -> Vec<String> {
         .collect()
 }
 
+/// `--probe`: measure every configured output and every serial port this
+/// platform knows about, without starting output threads.
+fn probe_exit(options: &Options) -> ExitCode {
+    let mut specs: Vec<String> = options
+        .outputs
+        .iter()
+        .map(|(_, spec)| spec.clone())
+        .collect();
+    specs.extend(dmx::probe::candidates());
+    let reports = dmx::probe::run(&specs, dmx::probe::ProbeOptions::default());
+    if reports.is_empty() {
+        println!("No serial ports found; name one with `--output 1=generic:/dev/ttyUSB0`.");
+    }
+    for report in &reports {
+        for line in report.lines() {
+            println!("{line}");
+        }
+    }
+    ExitCode::SUCCESS
+}
+
 /// Where the journal goes.
 enum JournalChoice {
     /// `<show>.journal` when a show is open, off otherwise.
@@ -199,6 +239,7 @@ struct Options {
     quiet: bool,
     log: Option<PathBuf>,
     version: bool,
+    probe: bool,
     completions: Option<String>,
     remote: bool,
     osc_port: u16,
@@ -232,6 +273,7 @@ impl Options {
             quiet: false,
             log: None,
             version: false,
+            probe: false,
             completions: None,
             remote: true,
             osc_port: 9000,
@@ -267,6 +309,7 @@ impl Options {
                     take_value(&arguments, &mut index, inline, flag)?,
                 ),
                 "--version" => options.version = true,
+                "--probe" => options.probe = true,
                 "--completions" => {
                     options.completions = Some(take_value(&arguments, &mut index, inline, flag)?)
                 }
@@ -436,6 +479,13 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
         }
         None => Engine::empty(),
     };
+    engine.set_bound_outputs(
+        options
+            .outputs
+            .iter()
+            .map(|(_, spec)| spec.clone())
+            .collect(),
+    );
 
     if options.status {
         if let Some(show_path) = &options.show {
@@ -968,6 +1018,8 @@ mod tests {
     fn version_status_check_and_completions_parse() {
         let options = Options::parse(vec!["--version".into()]).unwrap().unwrap();
         assert!(options.version);
+        let options = Options::parse(vec!["--probe".into()]).unwrap().unwrap();
+        assert!(options.probe);
         let options = Options::parse(vec!["--status".into(), "--json".into()])
             .unwrap()
             .unwrap();
@@ -989,6 +1041,17 @@ mod tests {
         assert!(Options::parse(vec!["--desk".into(), "x".into()]).is_err());
         assert!(Options::parse(vec!["--check".into(), "--status".into()]).is_err());
         assert!(Options::parse(vec!["--completions".into(), "powershell".into()]).is_ok());
+    }
+
+    #[test]
+    fn the_version_line_names_the_package_the_format_and_the_build() {
+        let line = version_line();
+        assert!(line.starts_with("openlight "), "{line}");
+        assert!(line.contains(env!("CARGO_PKG_VERSION")), "{line}");
+        assert!(line.contains("show format v12"), "{line}");
+        if !env!("OPENLIGHT_GIT_HASH").is_empty() {
+            assert!(line.contains(env!("OPENLIGHT_GIT_HASH")), "{line}");
+        }
     }
 
     #[test]

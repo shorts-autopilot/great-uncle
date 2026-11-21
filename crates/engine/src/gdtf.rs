@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use roxmltree::{Document, Node};
 
 use crate::fixture_type::{AttributeDef, Channel, ChannelFunction, FixtureType, Mode};
+use crate::limits::{self, LimitError, MAX_CHANNEL_FUNCTIONS, MAX_MODE_CHANNELS, MAX_SHOW_TYPES};
 
 #[derive(Debug, Default)]
 pub struct ImportReport {
@@ -42,6 +43,8 @@ pub enum GdtfErrorKind {
     Xml(String),
     #[error("description.xml contains no <FixtureType>")]
     NoFixtureType,
+    #[error("{0}")]
+    Limit(#[from] LimitError),
 }
 
 /// Read a `.gdtf` archive.
@@ -76,15 +79,20 @@ pub fn import_bytes(bytes: &[u8]) -> Result<ImportReport, GdtfErrorKind> {
 fn description_from_archive<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
 ) -> Result<String, GdtfErrorKind> {
+    limits::check_archive(archive)?;
     for index in 0..archive.len() {
         let mut entry = archive
             .by_index(index)
             .map_err(|error| GdtfErrorKind::Archive(error.to_string()))?;
-        let name = entry.name().replace('\\', "/").to_ascii_lowercase();
+        let name = entry
+            .name()
+            .map_err(|error| GdtfErrorKind::Archive(error.to_string()))?
+            .replace('\\', "/")
+            .to_ascii_lowercase();
         if name == "description.xml" || name.ends_with("/description.xml") {
-            let mut text = String::new();
-            entry.read_to_string(&mut text)?;
-            return Ok(text);
+            let bytes = limits::read_entry(&mut entry, &name)?;
+            return String::from_utf8(bytes)
+                .map_err(|error| GdtfErrorKind::Xml(format!("description is not UTF-8: {error}")));
         }
     }
     Err(GdtfErrorKind::MissingDescription)
@@ -106,7 +114,13 @@ pub fn parse_description(xml: &str) -> Result<ImportReport, GdtfErrorKind> {
     let mut types = Vec::new();
     let mut warnings = Vec::new();
     for node in nodes {
-        types.push(parse_fixture_type(node, &mut warnings));
+        if types.len() >= MAX_SHOW_TYPES {
+            return Err(LimitError::FixtureTypes {
+                found: types.len() + 1,
+            }
+            .into());
+        }
+        types.push(parse_fixture_type(node, &mut warnings)?);
     }
     if types.is_empty() {
         return Err(GdtfErrorKind::NoFixtureType);
@@ -126,7 +140,10 @@ pub fn parse_description_bytes(xml: &[u8]) -> Result<ImportReport, GdtfErrorKind
     parse_description(xml)
 }
 
-fn parse_fixture_type(node: Node, warnings: &mut Vec<String>) -> FixtureType {
+fn parse_fixture_type(
+    node: Node,
+    warnings: &mut Vec<String>,
+) -> Result<FixtureType, GdtfErrorKind> {
     let manufacturer = attribute(node, "Manufacturer").unwrap_or_default();
     let name = attribute(node, "Name")
         .or_else(|| attribute(node, "LongName"))
@@ -154,21 +171,26 @@ fn parse_fixture_type(node: Node, warnings: &mut Vec<String>) -> FixtureType {
     let mut modes = Vec::new();
     if let Some(collect) = child(node, "DMXModes") {
         for mode_node in collect.children().filter(|n| n.has_tag_name("DMXMode")) {
-            modes.push(parse_mode(mode_node, &manufacturer, &name, warnings));
+            modes.push(parse_mode(mode_node, &manufacturer, &name, warnings)?);
         }
     }
 
-    FixtureType {
+    Ok(FixtureType {
         manufacturer,
         name,
         description,
         attributes,
         modes,
         home: Default::default(),
-    }
+    })
 }
 
-fn parse_mode(node: Node, manufacturer: &str, fixture: &str, warnings: &mut Vec<String>) -> Mode {
+fn parse_mode(
+    node: Node,
+    manufacturer: &str,
+    fixture: &str,
+    warnings: &mut Vec<String>,
+) -> Result<Mode, GdtfErrorKind> {
     let name = attribute(node, "Name").unwrap_or_else(|| "Mode".to_string());
     let context = format!("{manufacturer} {fixture} / {name}");
     let mut channels = Vec::new();
@@ -226,7 +248,8 @@ fn parse_mode(node: Node, manufacturer: &str, fixture: &str, warnings: &mut Vec<
             let (functions, fine_delta) = logical
                 .first()
                 .map(|node| parse_functions(*node, &attribute_name, &context, warnings))
-                .unwrap_or_else(|| (Vec::new(), None));
+                .transpose()?
+                .unwrap_or((Vec::new(), None));
             let fine_offset = match fine_delta {
                 Some(delta) => match offset.checked_add(delta) {
                     Some(slot) => Some(slot),
@@ -250,8 +273,15 @@ fn parse_mode(node: Node, manufacturer: &str, fixture: &str, warnings: &mut Vec<
         }
     }
 
+    if channels.len() > MAX_MODE_CHANNELS {
+        return Err(LimitError::ModeChannels {
+            mode: name,
+            found: channels.len(),
+        }
+        .into());
+    }
     channels.sort_by_key(|channel| channel.offset);
-    Mode { name, channels }
+    Ok(Mode { name, channels })
 }
 
 /// Parse a logical channel's functions.
@@ -266,7 +296,7 @@ fn parse_functions(
     attribute_name: &str,
     context: &str,
     warnings: &mut Vec<String>,
-) -> (Vec<ChannelFunction>, Option<u16>) {
+) -> Result<(Vec<ChannelFunction>, Option<u16>), GdtfErrorKind> {
     struct Raw {
         name: String,
         from: (u8, u8),
@@ -300,6 +330,13 @@ fn parse_functions(
         });
     }
 
+    if raw_functions.len() > MAX_CHANNEL_FUNCTIONS {
+        return Err(LimitError::ChannelFunctions {
+            attribute: attribute_name.to_string(),
+            found: raw_functions.len(),
+        }
+        .into());
+    }
     raw_functions.sort_by_key(|function| (function.from.0, function.from.1));
 
     let mut fine_delta = raw_functions.first().map_or(0, |raw| raw.from.0);
@@ -346,10 +383,10 @@ fn parse_functions(
             ..ChannelFunction::default()
         });
     }
-    (
+    Ok((
         functions,
         (fine_delta != 0).then_some(u16::from(fine_delta)),
-    )
+    ))
 }
 
 fn attribute(node: Node, name: &str) -> Option<String> {
@@ -595,6 +632,87 @@ pub(crate) mod tests {
         let report = import(&path).unwrap();
         assert_eq!(report.types[0].key(), "OpenLight Demo Wash");
         let _ = std::fs::remove_file(&path);
+    }
+
+    fn archive_with(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        for (name, bytes) in entries {
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn archives_over_the_entry_limit_are_refused() {
+        let names: Vec<String> = (0..=limits::MAX_ARCHIVE_ENTRIES)
+            .map(|index| format!("entry-{index}"))
+            .collect();
+        let entries: Vec<(&str, &[u8])> = names
+            .iter()
+            .map(|name| (name.as_str(), b"x".as_slice()))
+            .collect();
+        let error = import_bytes(&archive_with(&entries)).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                GdtfErrorKind::Limit(LimitError::ArchiveEntries { .. })
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn archive_paths_cannot_escape() {
+        let error = import_bytes(&archive_with(&[("../description.xml", b"<GDTF/>")])).unwrap_err();
+        assert!(
+            matches!(error, GdtfErrorKind::Limit(LimitError::UnsafePath { .. })),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_mode_over_512_channels_is_refused() {
+        let channels: String = (1..=limits::MAX_MODE_CHANNELS + 1)
+            .map(|offset| {
+                format!(
+                    "<DMXChannel Offset=\"{offset}\"><LogicalChannel Attribute=\"A{offset}\"/></DMXChannel>"
+                )
+            })
+            .collect();
+        let xml = format!(
+            "<GDTF><FixtureType Name=\"Big\" Manufacturer=\"OL\"><DMXModes><DMXMode Name=\"M\">\
+             <DMXChannels>{channels}</DMXChannels></DMXMode></DMXModes></FixtureType></GDTF>"
+        );
+        let error = parse_description(&xml).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                GdtfErrorKind::Limit(LimitError::ModeChannels { found: 513, .. })
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_channel_over_4096_functions_is_refused() {
+        let functions: String = (0..=limits::MAX_CHANNEL_FUNCTIONS)
+            .map(|index| format!("<ChannelFunction Name=\"F{index}\" DMXFrom=\"0/0\"/>"))
+            .collect();
+        let xml = format!(
+            "<GDTF><FixtureType Name=\"Many\" Manufacturer=\"OL\"><DMXModes><DMXMode Name=\"M\">\
+             <DMXChannels><DMXChannel Offset=\"1\"><LogicalChannel Attribute=\"Dimmer\">\
+             {functions}</LogicalChannel></DMXChannel></DMXChannels></DMXMode></DMXModes></FixtureType></GDTF>"
+        );
+        let error = parse_description(&xml).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                GdtfErrorKind::Limit(LimitError::ChannelFunctions { found: 4097, .. })
+            ),
+            "{error}"
+        );
     }
 
     #[test]

@@ -1,0 +1,42 @@
+# cargo-deny: licences, advisories, duplicate versions and sources.
+#
+# The project is MIT. Every dependency must be compatible with that; the list
+# below is the set the locked graph actually uses, with the common permissive
+# alternatives rather than a blanket "anything goes".
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+    "Zlib",
+    "Unlicense",
+    "CC0-1.0",
+    "Unicode-3.0",
+    # libbz2-rs-sys, pulled in by zip's bzip2 support. Permissive and
+    # GPL-compatible, with only an attribution requirement.
+    "bzip2-1.0.6",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# The workspace crates depend on each other by path without repeating a
+# version; that is intentional and not an unpinned registry dependency.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

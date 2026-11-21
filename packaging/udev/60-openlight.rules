@@ -1,0 +1,19 @@
+# OpenLight: let the dialout group open common DMX USB-serial adapters.
+#
+# Install as /etc/udev/rules.d/60-openlight.rules, then:
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+# and add the operator to the group:
+#   sudo usermod -aG dialout "$USER"
+#
+# IDs cover FTDI (generic adapters and many consoles), CH340/CH341, Prolific,
+# Arduino-compatible ACM devices and the Anyma uDMX interface. Adjust the group
+# if your distribution does not use dialout.
+
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", GROUP="dialout", MODE="0660"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", GROUP="dialout", MODE="0660"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="067b", GROUP="dialout", MODE="0660"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2341", GROUP="dialout", MODE="0660"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", GROUP="dialout", MODE="0660"
+
+# Anyma uDMX (libusb path).
+SUBSYSTEM=="usb", ATTR{idVendor}=="16c0", ATTR{idProduct}=="05dc", GROUP="dialout", MODE="0660"

@@ -8,6 +8,7 @@
 pub mod enttec;
 pub mod error;
 pub mod generic;
+pub mod probe;
 pub mod serial;
 pub mod udmx;
 pub mod virtual_port;
