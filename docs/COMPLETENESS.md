@@ -34,7 +34,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 2 | Command Syntax and Keywords | cmd | 427 | 373 not-started, 51 in-progress, 3 implemented | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
 | 1 | Windows, Views, and Menus | ui/windows | 16 | 14 not-started, 2 in-progress | Windows/views/menus are item 18. |
 | 5 | Networking | session | 16 | 16 out-of-scope | Networked sessions and multi-user collaboration are outside the single-operator design. |
-| 1 | DMX In and Out | output | 6 | 1 in-progress, 1 implemented, 4 out-of-scope | Output exists; DMX In and merge need a bidirectional transport design. |
+| 1 | DMX In and Out | output | 6 | 1 in-progress, 1 implemented, 4 out-of-scope | Serial output, input and per-universe merge are built; Ethernet DMX and device-configuration import/export remain out of scope. |
 | 5 | Single User and Multi User Systems | users | 5 | 5 out-of-scope | User accounts, ownership and screen configuration are outside the single-operator design. |
 | 1 | Patch and Fixture Setup | patch | 21 | 5 not-started, 4 in-progress, 6 implemented, 6 out-of-scope | Item 11 adds patch tools; item 13 adds MVR; 3D rows are out of scope. |
 | 2 | Operate Fixtures | programmer | 24 | 20 not-started, 2 in-progress, 2 implemented | Selection/programmer exist; the sheet is partial; a colour picker, a gel library and Align need designs. |
@@ -71,9 +71,9 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 4 | Quickeys | ui/pools | 4 | 4 not-started | Needs a design (GUI/CLI shortcuts). |
 | 2 | Data Pools | pools | 1 | 1 not-started | Needs a small design. |
 | 5 | System | system | 7 | 4 not-started, 2 in-progress, 1 out-of-scope | Status covers part; date/time, clock and monitor windows need designs. |
-| 5 | Remote In and Out | io | 14 | 10 not-started, 2 in-progress, 2 out-of-scope | Item 12 covers inbound OSC and a token-protected web remote; MIDI, DMX and DC remotes need designs. |
+| 5 | Remote In and Out | io | 14 | 10 not-started, 2 in-progress, 2 out-of-scope | Item 12 covers inbound OSC and a token-protected web remote; item 21 adds DMX slot triggers, while MIDI, DC remotes and a general input map need designs. |
 | 7 | Sound | io/media | 3 | 3 out-of-scope | Sound playback is outside a serial-DMX desk. |
-| 5 | RDM (Remote Device Management) | io/rdm | 1 | 1 not-started | Needs a design; requires a read path in the DMX transport. |
+| 5 | RDM (Remote Device Management) | io/rdm | 1 | 1 not-started | The bidirectional read path exists; RDM discovery and remote patching still need a transaction design. |
 | 5 | Local Settings | system | 1 | 1 not-started | Needs a small settings design. |
 | 5 | Update the Software | platform | 8 | 8 out-of-scope | Vendor console/node update; the project has no auto-update. |
 | 1 | Fixture Types | fixturetypes | 12 | 2 in-progress, 6 implemented, 4 out-of-scope | Item 13 adds a profile builder and .olft export; geometry, models and environmental types are out of scope. |
@@ -154,7 +154,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 1 | Workspace | 19 | 5 | Terminal shell exists; windows, panels and themes are item 18. |
 | 2 | Command Syntax and Keywords | 373 | 51 | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
 | 1 | Windows, Views, and Menus | 14 | 2 | Windows/views/menus are item 18. |
-| 1 | DMX In and Out | 0 | 1 | Output exists; DMX In and merge need a bidirectional transport design. |
+| 1 | DMX In and Out | 0 | 1 | Serial output, input and per-universe merge are built; Ethernet DMX and device-configuration import/export remain out of scope. |
 | 1 | Patch and Fixture Setup | 5 | 4 | Item 11 adds patch tools; item 13 adds MVR; 3D rows are out of scope. |
 | 2 | Operate Fixtures | 20 | 2 | Selection/programmer exist; the sheet is partial; a colour picker, a gel library and Align need designs. |
 | 4 | Appearances | 4 | 0 | Pool appearance metadata needs a small design. |
@@ -181,8 +181,8 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 4 | Quickeys | 4 | 0 | Needs a design (GUI/CLI shortcuts). |
 | 2 | Data Pools | 1 | 0 | Needs a small design. |
 | 5 | System | 4 | 2 | Status covers part; date/time, clock and monitor windows need designs. |
-| 5 | Remote In and Out | 10 | 2 | Item 12 covers inbound OSC and a token-protected web remote; MIDI, DMX and DC remotes need designs. |
-| 5 | RDM (Remote Device Management) | 1 | 0 | Needs a design; requires a read path in the DMX transport. |
+| 5 | Remote In and Out | 10 | 2 | Item 12 covers inbound OSC and a token-protected web remote; item 21 adds DMX slot triggers, while MIDI, DC remotes and a general input map need designs. |
+| 5 | RDM (Remote Device Management) | 1 | 0 | The bidirectional read path exists; RDM discovery and remote patching still need a transaction design. |
 | 5 | Local Settings | 1 | 0 | Needs a small settings design. |
 | 1 | Fixture Types | 0 | 2 | Item 13 adds a profile builder and .olft export; geometry, models and environmental types are out of scope. |
 | 5 | File Management | 1 | 0 | A file browser needs a design; SFTP/folder layout are out of scope. |
@@ -192,9 +192,9 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 
 These are the gaps that a chapter-by-chapter audit would otherwise hide. Ranked by value to a working desk.
 
-1. **DMX In and merge** — The `dmx` chapter's first row is only half built: the transport is write-only, so there is no backup desk, house console or DMX-triggered snapshot.
+1. **DMX In and merge** — Item 21 builds the virtual and ENTTEC Pro read paths, per-universe HTP/LTP merge, priority, loss policy, status/metering, snapshot and DMX trigger. Physical adapter proof remains the hardware release gate.
 2. **Colour depth: gels and a picker** — Item 19 covers CMY, HSB, named and hex colours, wheel matching and kelvin whites. A gel/swatch-book library and a colour picker UI remain unbuilt.
-3. **RDM** — Discovery and remote patching; shares the bidirectional transport work with DMX In.
+3. **RDM** — Discovery and remote patching; the read path from item 21 exists, but the request/response transaction layer does not.
 4. **MAtricks, Shuffle and Align** — Programming speed for multi-fixture edits; the whole `matricks` chapter and `Align` are unbuilt.
 5. **Recipes and Generator** — Look generation beyond a single waveform; `recipes`, `generator` and recipe presets are unbuilt.
 6. **Special executors** — Item 20 builds executor pages and page-qualified runs; macros, chases and multi-cue stacks still need a design.

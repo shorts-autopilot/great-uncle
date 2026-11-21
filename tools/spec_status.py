@@ -466,7 +466,7 @@ CHAPTER_NOTES = {
     "workspace": "Terminal shell exists; windows, panels and themes are item 18.",
     "command_syntax_keywords": "Parser-recognized keywords are in-progress; the rest need a row-by-row audit.",
     "wvm": "Windows/views/menus are item 18.",
-    "dmx": "Output exists; DMX In and merge need a bidirectional transport design.",
+    "dmx": "Serial output, input and per-universe merge are built; Ethernet DMX and device-configuration import/export remain out of scope.",
     "patch": "Item 11 adds patch tools; item 13 adds MVR; 3D rows are out of scope.",
     "operate_fixtures": "Selection/programmer exist; the sheet is partial; a colour picker, a gel library and Align need designs.",
     "wvm_pool_label": "Pool labels are partial; editing labels needs a command/UI.",
@@ -491,8 +491,8 @@ CHAPTER_NOTES = {
     "quickeys": "Needs a design (GUI/CLI shortcuts).",
     "datapool": "Needs a small design.",
     "system_information": "Status covers part; date/time, clock and monitor windows need designs.",
-    "remote_inputs": "Item 12 covers inbound OSC and a token-protected web remote; MIDI, DMX and DC remotes need designs.",
-    "rdm": "Needs a design; requires a read path in the DMX transport.",
+    "remote_inputs": "Item 12 covers inbound OSC and a token-protected web remote; item 21 adds DMX slot triggers, while MIDI, DC remotes and a general input map need designs.",
+    "rdm": "The bidirectional read path exists; RDM discovery and remote patching still need a transaction design.",
     "local_settings": "Needs a small settings design.",
     "fixture_types": "Item 13 adds a profile builder and .olft export; geometry, models and environmental types are out of scope.",
     "file_management": "A file browser needs a design; SFTP/folder layout are out of scope.",
@@ -504,9 +504,9 @@ CHAPTER_NOTES = {
 # Designs that are larger than one manual chapter and therefore cannot be read
 # off the chapter table. Ordered by value to a working desk.
 CROSS_CUTTING = [
-    ("DMX In and merge", "The `dmx` chapter's first row is only half built: the transport is write-only, so there is no backup desk, house console or DMX-triggered snapshot."),
+    ("DMX In and merge", "Item 21 builds the virtual and ENTTEC Pro read paths, per-universe HTP/LTP merge, priority, loss policy, status/metering, snapshot and DMX trigger. Physical adapter proof remains the hardware release gate."),
     ("Colour depth: gels and a picker", "Item 19 covers CMY, HSB, named and hex colours, wheel matching and kelvin whites. A gel/swatch-book library and a colour picker UI remain unbuilt."),
-    ("RDM", "Discovery and remote patching; shares the bidirectional transport work with DMX In."),
+    ("RDM", "Discovery and remote patching; the read path from item 21 exists, but the request/response transaction layer does not."),
     ("MAtricks, Shuffle and Align", "Programming speed for multi-fixture edits; the whole `matricks` chapter and `Align` are unbuilt."),
     ("Recipes and Generator", "Look generation beyond a single waveform; `recipes`, `generator` and recipe presets are unbuilt."),
     ("Special executors", "Item 20 builds executor pages and page-qualified runs; macros, chases and multi-cue stacks still need a design."),

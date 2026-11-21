@@ -10,7 +10,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::builder::FixtureTypeFile;
 use crate::color::{self, ColorSpec};
@@ -27,6 +27,7 @@ use crate::effect::{
 use crate::fixture_type::{split_key, Channel, FixtureType, SetSelector, DIMMER};
 use crate::gdtf;
 use crate::history::{History, Snapshot};
+use crate::input::InputMixer;
 use crate::journal::ReplayFrom;
 use crate::levels::Levels;
 use crate::listing::{
@@ -42,7 +43,10 @@ use crate::playback::{
 };
 use crate::pools::{Filter, Group, World};
 use crate::render::{self, Highlight, OutputFrame, Stage};
-use crate::show::{Fixture, Show, MAX_FIXTURES, MAX_RATE_MASTER};
+use crate::show::{
+    Fixture, InputPriority, InputTrigger, LossPolicy, MergeMode, Show, MAX_FIXTURES,
+    MAX_RATE_MASTER,
+};
 use crate::timecode::{
     self, Action, Event, Marker, TimecodePlayer, TimecodeShow, TimecodeSource, MAX_FPS, MIN_FPS,
 };
@@ -163,6 +167,8 @@ pub struct Engine {
     /// this to decide whether a snapshot is worth building.
     revision_signal: Arc<AtomicU64>,
     pub status: Arc<Mutex<OutputStatus>>,
+    /// Latest input frame and merge state per bound universe. Session only.
+    inputs: BTreeMap<u16, InputMixer>,
     /// Running cues. Session state; the desk records where they are.
     pub playback: Playback,
     /// Running effects. Not part of the show file.
@@ -218,6 +224,7 @@ impl Engine {
             revision: 0,
             revision_signal: Arc::new(AtomicU64::new(0)),
             status: Arc::new(Mutex::new(OutputStatus::default())),
+            inputs: BTreeMap::new(),
             playback: Playback::new(),
             effects: Effects::default(),
             timecode: TimecodePlayer::default(),
@@ -300,12 +307,18 @@ impl Engine {
         let advanced = self.playback.refresh(&self.desk, now);
         // A running effect or timecode changes the output on every tick, even
         // when no cue is moving, so the sender keeps re-rendering.
+        let input_changing = self.inputs.iter().any(|(universe, mixer)| {
+            self.show
+                .universe(*universe)
+                .is_some_and(|config| mixer.needs_render(config, now))
+        });
         let changed = advanced
             || !fired.is_empty()
             || chained
             || external_changed
             || self.effects.is_running()
-            || self.timecode.is_running();
+            || self.timecode.is_running()
+            || input_changing;
         if changed {
             self.bump_revision();
         }
@@ -380,6 +393,7 @@ impl Engine {
     pub fn adopt(&mut self, show: Show, desk: Desk) {
         self.show = show;
         self.desk = desk;
+        self.clear_inputs();
         self.playback = Playback::new();
         self.effects.stop_all();
         self.stop_timecode_source();
@@ -476,7 +490,8 @@ impl Engine {
         Ok(outcome)
     }
 
-    pub fn render(&self) -> OutputFrame {
+    /// Build the local look, before any input merge.
+    fn local_frame(&self) -> OutputFrame {
         let effects = self.effects.output(
             &self.show,
             self.desk.masters.rate,
@@ -512,6 +527,110 @@ impl Engine {
             self.desk.blackout_master(self.clock),
             highlight,
         )
+    }
+
+    /// Build the frame the output thread sends, advancing the input merge's
+    /// LTP and loss state as it goes. Only the output thread may call this;
+    /// a UI preview must use [`Engine::display_frame`].
+    pub fn render(&mut self) -> OutputFrame {
+        let mut frame = self.local_frame();
+        for (universe, mixer) in &mut self.inputs {
+            let Some(config) = self.show.universe(*universe).cloned() else {
+                continue;
+            };
+            if let Some(slots) = frame.slots_mut(*universe) {
+                mixer.merge(slots, &config, self.clock);
+            }
+        }
+        frame
+    }
+
+    /// A merged frame for a window or a meter, without consuming input edge
+    /// or loss state. The output thread remains the only writer, so a repaint
+    /// cannot steal a rising edge or the final step of a loss fade.
+    pub fn display_frame(&self) -> OutputFrame {
+        let mut frame = self.local_frame();
+        for (universe, mixer) in &self.inputs {
+            let Some(config) = self.show.universe(*universe) else {
+                continue;
+            };
+            if let Some(slots) = frame.slots_mut(*universe) {
+                mixer.clone().merge(slots, config, self.clock);
+            }
+        }
+        frame
+    }
+
+    /// Drop session input state when the document is replaced. Counters stay
+    /// for telemetry; the signal returns to no-signal until the next frame.
+    fn clear_inputs(&mut self) {
+        self.inputs.clear();
+        let mut status = lock(&self.status);
+        for entry in status.inputs.values_mut() {
+            entry.state = crate::output::InputSignal::NoSignal;
+            entry.peak = 0;
+            entry.last_frame = None;
+        }
+    }
+
+    /// Deliver one complete input frame. The reader thread calls this after
+    /// `poll`; it never holds the engine lock while reading the device.
+    pub fn apply_input(&mut self, universe: u16, frame: dmx::DmxFrame, now: Instant) {
+        let peak = frame.slots.iter().copied().max().unwrap_or(0);
+        if frame.start_code != 0 {
+            let mut status = lock(&self.status);
+            if let Some(entry) = status.inputs.get_mut(&universe) {
+                entry.frames += 1;
+                entry.discarded += 1;
+                entry.last_frame = Some(SystemTime::now());
+                entry.state = crate::output::InputSignal::Ok;
+                entry.last_error = None;
+            }
+            return;
+        }
+
+        let config = self.show.universe(universe).cloned();
+        let trigger = {
+            let mixer = self
+                .inputs
+                .entry(universe)
+                .or_insert_with(|| InputMixer::new(universe));
+            match &config {
+                Some(config) => mixer.receive(&frame, config, now),
+                None => {
+                    let defaults = crate::show::Universe::default();
+                    mixer.receive(&frame, &defaults, now)
+                }
+            }
+        };
+        {
+            let mut status = lock(&self.status);
+            if let Some(entry) = status.inputs.get_mut(&universe) {
+                entry.frames += 1;
+                entry.last_frame = Some(SystemTime::now());
+                entry.peak = peak;
+                entry.state = crate::output::InputSignal::Ok;
+                entry.last_error = None;
+            }
+        }
+        if let Some(sequence) = trigger {
+            match self.playback_go(Some(PlaybackRef::Sequence(sequence))) {
+                Ok(_) => self.bump_revision(),
+                Err(error) => {
+                    lock(&self.status).warnings.push(format!(
+                        "input {universe}: trigger for sequence {sequence} failed: {error}"
+                    ));
+                }
+            }
+        }
+        if config.is_some_and(|config| config.merge != MergeMode::Off) {
+            self.bump_revision();
+        }
+    }
+
+    /// The last raw input frame, for the meter and `Dmx <n> Snapshot`.
+    pub fn input_levels(&self, universe: u16) -> Option<&[u8; dmx::DMX_SLOTS]> {
+        self.inputs.get(&universe)?.last()
     }
 
     /// Render the previewed cue with no programmer, effects or masters. Only
@@ -570,6 +689,18 @@ impl Engine {
             } => self.clone_fixtures(fixture, universe, address, count, step),
             Command::PatchCheck => Ok(self.patch_check()),
             Command::Probe => Ok(self.probe_report()),
+            Command::ListDmx { universe } => self.dmx_list(universe),
+            Command::SetDmxMerge { universe, mode } => self.set_dmx_merge(universe, mode),
+            Command::SetDmxPriority { universe, priority } => {
+                self.set_dmx_priority(universe, priority)
+            }
+            Command::SetDmxLoss { universe, loss } => self.set_dmx_loss(universe, loss),
+            Command::SetDmxTimeout { universe, ms } => self.set_dmx_timeout(universe, ms),
+            Command::SetDmxTrigger { universe, trigger } => {
+                self.set_dmx_trigger(universe, Some(trigger))
+            }
+            Command::ClearDmxTrigger { universe } => self.set_dmx_trigger(universe, None),
+            Command::DmxSnapshot { universe } => self.dmx_snapshot(universe),
             Command::ImportPatch { path } => self.import_patch(&path),
             Command::ImportGdtf { path } => self.import_gdtf(&path),
             Command::ImportMvr { path } => self.import_mvr(&path),
@@ -1192,6 +1323,7 @@ impl Engine {
         }
         let message = format!("New show `{}`", show.name);
         self.show = show;
+        self.clear_inputs();
         self.desk.clear();
         self.playback.clear();
         self.effects.stop_all();
@@ -2066,7 +2198,9 @@ impl Engine {
         )];
         self.show = show;
         // A loaded show has its own cues and pools; runs from the previous show
-        // must not keep writing the old values over the new rig.
+        // must not keep writing the old values over the new rig. A stale input
+        // frame belongs to the old document for the same reason.
+        self.clear_inputs();
         self.playback.clear();
         self.effects.stop_all();
         self.timecode.stop();
@@ -2503,10 +2637,48 @@ impl Engine {
                 serde_json::json!({"number": executor.number, "state": state})
             })
             .collect();
+        let status = lock(&self.status);
+        let input_universes: BTreeSet<u16> = status
+            .inputs
+            .keys()
+            .chain(self.inputs.keys())
+            .copied()
+            .collect();
+        let inputs: Vec<serde_json::Value> = input_universes
+            .iter()
+            .map(|universe| {
+                let entry = status.inputs.get(universe);
+                let mixer = self.inputs.get(universe);
+                let config = self.show.universe(*universe);
+                serde_json::json!({
+                    "universe": universe,
+                    "transport": entry.map(|entry| entry.transport.as_str()),
+                    "state": self.input_state(*universe, entry, self.clock),
+                    "age_ms": mixer.and_then(|mixer| mixer.age(self.clock)).map(|age| age.as_millis()),
+                    "frames": entry.map(|entry| entry.frames).unwrap_or(0),
+                    "discarded": entry.map(|entry| entry.discarded).unwrap_or(0),
+                    "peak": entry.map(|entry| entry.peak).unwrap_or(0),
+                    "errors": entry.map(|entry| entry.errors).unwrap_or(0),
+                    "reconnects": entry.map(|entry| entry.reconnects).unwrap_or(0),
+                    "merge": config.map(|config| config.merge.label()),
+                    "priority": config.map(|config| config.priority.label()),
+                    "loss": config.map(|config| config.loss.label()),
+                    "timeout_ms": config.map(|config| config.input_timeout_ms),
+                    "trigger": config.and_then(|config| config.input_trigger).map(|trigger| {
+                        serde_json::json!({
+                            "address": trigger.address,
+                            "threshold": trigger.threshold,
+                            "sequence": trigger.sequence,
+                        })
+                    }),
+                })
+            })
+            .collect();
         serde_json::json!({
             "page": page,
             "page_name": page_name,
             "executors": executors,
+            "inputs": inputs,
             "blackout": self.desk.is_blacked_out(self.clock),
             "blind": self.desk.blind,
             "lock": self.desk.lock.is_some(),
@@ -2544,6 +2716,292 @@ impl Engine {
     }
 
     /// The lines `Status` prints, as data for a front end's status pane.
+    fn missing_dmx_universe(universe: u16) -> CommandError {
+        CommandError::with_hint(
+            format!("universe {universe} is not in the show"),
+            format!(
+                "`Dmx` lists the show's universes; patch a fixture on universe {universe} first"
+            ),
+        )
+    }
+
+    fn set_dmx_merge(
+        &mut self,
+        universe: u16,
+        mode: MergeMode,
+    ) -> Result<CommandOutcome, CommandError> {
+        self.mutate(|show| {
+            let Some(entry) = show.universe_mut(universe) else {
+                return Err(Self::missing_dmx_universe(universe));
+            };
+            entry.merge = mode;
+            Ok(format!(
+                "Universe {universe} merges input with {}",
+                mode.label()
+            ))
+        })
+        .map(CommandOutcome::message)
+    }
+
+    fn set_dmx_priority(
+        &mut self,
+        universe: u16,
+        priority: InputPriority,
+    ) -> Result<CommandOutcome, CommandError> {
+        self.mutate(|show| {
+            let Some(entry) = show.universe_mut(universe) else {
+                return Err(Self::missing_dmx_universe(universe));
+            };
+            entry.priority = priority;
+            Ok(format!(
+                "Universe {universe} LTP priority {}",
+                priority.label()
+            ))
+        })
+        .map(CommandOutcome::message)
+    }
+
+    fn set_dmx_loss(
+        &mut self,
+        universe: u16,
+        loss: LossPolicy,
+    ) -> Result<CommandOutcome, CommandError> {
+        self.mutate(|show| {
+            let Some(entry) = show.universe_mut(universe) else {
+                return Err(Self::missing_dmx_universe(universe));
+            };
+            entry.loss = loss;
+            Ok(format!("Universe {universe} input loss: {}", loss.label()))
+        })
+        .map(CommandOutcome::message)
+    }
+
+    fn set_dmx_timeout(&mut self, universe: u16, ms: u64) -> Result<CommandOutcome, CommandError> {
+        if !(1..=60_000).contains(&ms) {
+            return Err(CommandError::new(format!(
+                "input timeout {ms} ms is outside 1..=60000"
+            )));
+        }
+        self.mutate(|show| {
+            let Some(entry) = show.universe_mut(universe) else {
+                return Err(Self::missing_dmx_universe(universe));
+            };
+            entry.input_timeout_ms = ms;
+            Ok(format!(
+                "Universe {universe} input timeout {:.3} s",
+                ms as f64 / 1000.0
+            ))
+        })
+        .map(CommandOutcome::message)
+    }
+
+    fn set_dmx_trigger(
+        &mut self,
+        universe: u16,
+        trigger: Option<InputTrigger>,
+    ) -> Result<CommandOutcome, CommandError> {
+        let outcome = self
+            .mutate(|show| {
+                let Some(entry) = show.universe_mut(universe) else {
+                    return Err(Self::missing_dmx_universe(universe));
+                };
+                entry.input_trigger = trigger;
+                Ok(match trigger {
+                    Some(trigger) => format!(
+                        "Universe {universe} trigger: slot {} at or above {} fires `Go Sequence {}`",
+                        trigger.address, trigger.threshold, trigger.sequence
+                    ),
+                    None => format!("Universe {universe} trigger removed"),
+                })
+            })
+            .map(CommandOutcome::message)?;
+        if let Some(mixer) = self.inputs.get_mut(&universe) {
+            mixer.reset_trigger();
+        }
+        Ok(outcome)
+    }
+
+    fn dmx_list(&self, only: Option<u16>) -> Result<CommandOutcome, CommandError> {
+        if let Some(universe) = only {
+            if self.show.universe(universe).is_none() {
+                return Err(Self::missing_dmx_universe(universe));
+            }
+        }
+        let status = lock(&self.status);
+        let mut universes: BTreeSet<u16> = self.show.universes.iter().map(|u| u.number).collect();
+        universes.extend(status.inputs.keys().copied());
+        universes.extend(self.inputs.keys().copied());
+        let universes: Vec<u16> = match only {
+            Some(universe) => vec![universe],
+            None => universes.into_iter().collect(),
+        };
+        let mut lines = Vec::new();
+        if only.is_none() {
+            lines.push(format!(
+                "DMX in ({} universe{})",
+                universes.len(),
+                if universes.len() == 1 { "" } else { "s" }
+            ));
+            if status.inputs.is_empty() {
+                lines.push(
+                    "No input readers bound; start the console with `--input <spec>`.".into(),
+                );
+            }
+        }
+        for universe in universes {
+            let (state, config) = self.dmx_rows(&status, universe);
+            lines.push(state);
+            lines.push(config);
+        }
+        Ok(CommandOutcome::message(lines.join("\n")))
+    }
+
+    fn dmx_rows(&self, status: &OutputStatus, universe: u16) -> (String, String) {
+        let entry = status.inputs.get(&universe);
+        let transport = entry
+            .map(|entry| entry.transport.as_str())
+            .unwrap_or("none");
+        let state = self.input_state(universe, entry, self.clock);
+        let frames = entry.map(|entry| entry.frames).unwrap_or(0);
+        let discarded = entry.map(|entry| entry.discarded).unwrap_or(0);
+        let errors = entry.map(|entry| entry.errors).unwrap_or(0);
+        let peak = entry.map(|entry| entry.peak).unwrap_or(0);
+        let last = self
+            .inputs
+            .get(&universe)
+            .and_then(|mixer| mixer.age(self.clock))
+            .map(|age| format!("{} ms ago", age.as_millis()))
+            .unwrap_or_else(|| "never".into());
+        let signal = format!(
+            "Universe {universe}  {transport:<24} {state:<12} frames {frames}  peak {peak}  \
+             last {last}  discarded {discarded}  errors {errors}"
+        );
+        let config = match self.show.universe(universe) {
+            Some(config) => {
+                let trigger = match config.input_trigger {
+                    Some(trigger) => format!(
+                        "slot {} >= {} -> Sequence {}",
+                        trigger.address, trigger.threshold, trigger.sequence
+                    ),
+                    None => "off".into(),
+                };
+                format!(
+                    "            merge {}  priority {}  loss {}  timeout {} ms  trigger {trigger}",
+                    config.merge.label(),
+                    config.priority.label(),
+                    config.loss.label(),
+                    config.input_timeout_ms
+                )
+            }
+            None => "            unmapped: no universe with this number in the show".into(),
+        };
+        (signal, config)
+    }
+
+    fn input_state(
+        &self,
+        universe: u16,
+        entry: Option<&crate::output::InputStatus>,
+        now: Instant,
+    ) -> String {
+        if let Some(entry) = entry {
+            if matches!(
+                entry.state,
+                crate::output::InputSignal::Reconnecting
+                    | crate::output::InputSignal::Offline
+                    | crate::output::InputSignal::Stopped
+            ) {
+                return entry.state.label().to_string();
+            }
+        }
+        let Some(mixer) = self.inputs.get(&universe) else {
+            return if entry.is_some() {
+                "no signal".into()
+            } else {
+                "no input".into()
+            };
+        };
+        if mixer.last().is_none() {
+            return entry
+                .map(|entry| entry.state.label().to_string())
+                .unwrap_or_else(|| "no signal".into());
+        }
+        let Some(config) = self.show.universe(universe) else {
+            return "unmapped".into();
+        };
+        match mixer.age(now) {
+            Some(age) if age > Duration::from_millis(config.input_timeout_ms.max(1)) => {
+                "stale".into()
+            }
+            _ => "ok".into(),
+        }
+    }
+
+    fn dmx_snapshot(&mut self, universe: u16) -> Result<CommandOutcome, CommandError> {
+        if self.show.universe(universe).is_none() {
+            return Err(Self::missing_dmx_universe(universe));
+        }
+        let frame = self
+            .inputs
+            .get(&universe)
+            .and_then(|mixer| mixer.last())
+            .copied()
+            .ok_or_else(|| {
+                CommandError::with_hint(
+                    format!("no DMX input received on universe {universe}"),
+                    "bind a reader with `--input <spec>` and check `Dmx`",
+                )
+            })?;
+        let size = usize::from(self.show.universe(universe).map(|u| u.size).unwrap_or(512));
+        let mut values: Vec<(u16, String, f64)> = Vec::new();
+        for fixture in self.show.fixtures.iter().filter(|f| f.universe == universe) {
+            let Ok((_, mode)) = self.show.mode_for(fixture) else {
+                continue;
+            };
+            for channel in &mode.channels {
+                let Some(coarse) = usize::from(fixture.address)
+                    .checked_add(usize::from(channel.offset))
+                    .and_then(|address| address.checked_sub(2))
+                else {
+                    continue;
+                };
+                if coarse >= dmx::DMX_SLOTS || coarse >= size {
+                    continue;
+                }
+                let level = match channel.fine_offset {
+                    Some(fine) => {
+                        let fine = usize::from(fixture.address)
+                            .saturating_add(usize::from(fine))
+                            .saturating_sub(2);
+                        if fine >= dmx::DMX_SLOTS || fine >= size {
+                            channel.level_from_raw(frame[coarse])
+                        } else {
+                            channel.level_from_raw16(
+                                (u16::from(frame[coarse]) << 8) | u16::from(frame[fine]),
+                            )
+                        }
+                    }
+                    None => channel.level_from_raw(frame[coarse]),
+                };
+                values.push((fixture.number, channel.attribute.clone(), level));
+            }
+        }
+        if values.is_empty() {
+            return Err(CommandError::with_hint(
+                format!("universe {universe} has no patched channels to snapshot"),
+                "patch a fixture on this universe first",
+            ));
+        }
+        let count = values.len();
+        let message = self.edit_programmer(|programmer| {
+            for (fixture, attribute, level) in &values {
+                programmer.set(*fixture, attribute, *level);
+            }
+            format!("Snapshotted {count} values from universe {universe} into the programmer")
+        });
+        Ok(CommandOutcome::message(message))
+    }
+
     pub fn status_lines(&self) -> Vec<String> {
         let status = lock(&self.status);
         let mut lines = vec![
@@ -2578,6 +3036,19 @@ impl Engine {
                 entry.last_send_us,
                 entry.stale_ms
             ));
+        }
+        let mut input_universes: BTreeSet<u16> = status.inputs.keys().copied().collect();
+        input_universes.extend(self.inputs.keys().copied());
+        input_universes.extend(
+            self.show
+                .universes
+                .iter()
+                .filter(|universe| universe.merge != MergeMode::Off)
+                .map(|universe| universe.number),
+        );
+        for universe in input_universes {
+            let (signal, _) = self.dmx_rows(&status, universe);
+            lines.push(format!("Input {signal}"));
         }
         for warning in status.warnings.iter().take(8) {
             lines.push(format!("Warning: {warning}"));
@@ -2790,6 +3261,41 @@ impl Engine {
                 })
             })
             .collect();
+        let inputs: Vec<serde_json::Value> = status
+            .inputs
+            .iter()
+            .map(|(universe, entry)| {
+                let config = self.show.universe(*universe);
+                let age = self
+                    .inputs
+                    .get(universe)
+                    .and_then(|mixer| mixer.age(self.clock))
+                    .map(|age| age.as_millis());
+                serde_json::json!({
+                    "universe": universe,
+                    "transport": entry.transport,
+                    "state": self.input_state(*universe, Some(entry), self.clock),
+                    "frames": entry.frames,
+                    "discarded": entry.discarded,
+                    "peak": entry.peak,
+                    "errors": entry.errors,
+                    "reconnects": entry.reconnects,
+                    "age_ms": age,
+                    "last_error": entry.last_error,
+                    "merge": config.map(|config| config.merge.label()),
+                    "priority": config.map(|config| config.priority.label()),
+                    "loss": config.map(|config| config.loss.label()),
+                    "timeout_ms": config.map(|config| config.input_timeout_ms),
+                    "trigger": config.and_then(|config| config.input_trigger).map(|trigger| {
+                        serde_json::json!({
+                            "address": trigger.address,
+                            "threshold": trigger.threshold,
+                            "sequence": trigger.sequence,
+                        })
+                    }),
+                })
+            })
+            .collect();
         let remote = status.remote.as_ref().map(|remote| {
             serde_json::json!({
                 "osc_port": remote.osc_port,
@@ -2815,6 +3321,7 @@ impl Engine {
             "frame_hz": status.frame_hz,
             "frames": status.frames,
             "universes": universes,
+            "inputs": inputs,
             "warnings": status.warnings,
             "show": {
                 "name": self.show.name,
@@ -7884,6 +8391,11 @@ pub const HELP: &[&str] = &[
     "Effect 1 Attributes Dimmer Red / Effect 1 Attribute Red Size 30 Phase 90",
     "Effect 1 Rate 1/4 | 2hz / Effect 1 Tempo Off",
     "Tempo 128 / Tap Tempo                  set the musical tempo",
+    "Dmx [1] / Dmx In                       input signal, merge and trigger",
+    "Dmx 1 Merge Off | Htp | Ltp            merge this universe with its input",
+    "Dmx 1 Priority Local | Input / Loss Hold | Zero | Fade 2 / Timeout 1.5",
+    "Dmx 1 Trigger 10 Sequence 1 [Threshold 128] / Trigger Off",
+    "Dmx 1 Snapshot                         capture the input into the programmer",
     "Blackout [Fade 2] / Blackout Off      darken the rig without losing the look",
     "Blind / Blind Off                      edit without changing the stage",
     "Preview [Cue 14] [Sequence 2] / Preview Off  inspect a cue without sending it",
@@ -11901,24 +12413,280 @@ mod tests {
     }
 
     #[test]
-    fn remote_state_mirrors_the_active_page() {
+    fn dmx_merge_config_is_undoable_and_htp_reaches_the_frame() {
         let mut engine = engine();
-        engine.execute("Fixture 1 At 60").unwrap();
-        engine.execute("Store Cue 1").unwrap();
-        engine.execute("Assign Executor 1 Sequence 1").unwrap();
-        engine.execute("Store Page 2 \"Specials\"").unwrap();
-        engine
-            .execute("Assign Page 2 Executor 2 Sequence 1")
-            .unwrap();
-        engine.execute("Page 2").unwrap();
+        engine.execute("Fixture 1 At 50").unwrap();
+        engine.execute("Dmx 1 Merge Htp").unwrap();
+        let mut slots = [0u8; dmx::DMX_SLOTS];
+        slots[0] = 200;
+        slots[1] = 10;
+        engine.apply_input(1, dmx::DmxFrame::dimmer(slots), engine.clock());
 
-        let state = engine.remote_state_json();
-        assert!(state.contains("\"page\":2"), "{state}");
-        assert!(state.contains("Specials"), "{state}");
-        assert!(state.contains("\"number\":2"), "{state}");
+        assert_eq!(engine.render().slot(1, 1), Some(200), "input is higher");
+        assert_eq!(engine.render().slot(1, 2), Some(10), "local is lower");
+        assert!(engine.remote_state_json().contains("\"inputs\""));
+
+        engine.execute("Undo").unwrap();
+        assert_eq!(engine.show.universe(1).unwrap().merge, MergeMode::Off);
+        assert_eq!(engine.render().slot(1, 1), Some(128), "local returns");
+    }
+
+    #[test]
+    fn dmx_ltp_keeps_a_local_change_on_its_own_slot() {
+        let mut engine = engine();
+        engine.execute("Dmx 1 Merge Ltp").unwrap();
+        engine.execute("Fixture 1 At 50").unwrap();
+        let mut slots = [0u8; dmx::DMX_SLOTS];
+        slots[0] = 10;
+        slots[1] = 200;
+        slots[2] = 30;
+        engine.apply_input(1, dmx::DmxFrame::dimmer(slots), engine.clock());
+        assert_eq!(engine.render().slot(1, 1), Some(10), "input takes over");
+
+        engine.execute("Fixture 1 At 20").unwrap();
+        assert_eq!(engine.render().slot(1, 1), Some(51), "local change wins");
+        assert_eq!(
+            engine.render().slot(1, 2),
+            Some(200),
+            "other slots stay input"
+        );
+    }
+
+    #[test]
+    fn dmx_zero_loss_renders_the_local_look_at_the_timeout() {
+        let mut engine = engine();
+        engine.execute("Dmx 1 Merge Htp").unwrap();
+        engine.execute("Dmx 1 Loss Zero").unwrap();
+        engine.execute("Dmx 1 Timeout 0.05").unwrap();
+        let now = engine.clock();
+        let mut slots = [0u8; dmx::DMX_SLOTS];
+        slots[0] = 200;
+        engine.apply_input(1, dmx::DmxFrame::dimmer(slots), now);
+        assert_eq!(engine.render().slot(1, 1), Some(200));
+
+        let later = now + Duration::from_millis(100);
+        assert!(engine.tick(later), "the loss transition forces a render");
+        assert_eq!(engine.render().slot(1, 1), Some(0), "input removed");
+    }
+
+    #[test]
+    fn a_dmx_trigger_goes_the_target_sequence_once_per_edge() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 50").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine
+            .execute("Dmx 1 Trigger 1 Sequence 1 Threshold 100")
+            .unwrap();
+        let now = engine.clock();
+        let mut low = [0u8; dmx::DMX_SLOTS];
+        low[0] = 10;
+        engine.apply_input(1, dmx::DmxFrame::dimmer(low), now);
+        assert!(engine.playback.run(Target::Sequence(1)).is_none());
+
+        let before = engine.revision;
+        let mut high = [0u8; dmx::DMX_SLOTS];
+        high[0] = 200;
+        engine.apply_input(1, dmx::DmxFrame::dimmer(high), now);
         assert!(
-            !state.contains("\"number\":1"),
-            "page 1's executor is not in page 2's state: {state}"
+            engine.playback.run(Target::Sequence(1)).is_some(),
+            "the rising edge starts the sequence"
+        );
+        assert!(
+            engine.revision > before,
+            "a trigger requests a render even with the merge off"
+        );
+    }
+
+    #[test]
+    fn dmx_fade_loss_removes_the_last_visible_step() {
+        let mut engine = engine();
+        engine.execute("Dmx 1 Merge Htp").unwrap();
+        engine.execute("Dmx 1 Loss Fade 0.1").unwrap();
+        engine.execute("Dmx 1 Timeout 0.05").unwrap();
+        let now = engine.clock();
+        let mut slots = [0u8; dmx::DMX_SLOTS];
+        slots[0] = 200;
+        engine.apply_input(1, dmx::DmxFrame::dimmer(slots), now);
+        assert_eq!(engine.render().slot(1, 1), Some(200));
+
+        assert!(engine.tick(now + Duration::from_millis(100)));
+        let middle = engine.render().slot(1, 1).unwrap();
+        assert!(
+            middle > 0 && middle < 200,
+            "the fade is still visible: {middle}"
+        );
+        assert!(engine.tick(now + Duration::from_millis(200)));
+        let shown = engine.display_frame();
+        assert_eq!(
+            shown.slot(1, 1),
+            Some(0),
+            "a window sees the completed fade"
+        );
+        assert!(
+            engine.tick(now + Duration::from_millis(300)),
+            "a display frame must not consume the output's final loss render"
+        );
+        assert_eq!(
+            engine.render().slot(1, 1),
+            Some(0),
+            "the final step reaches the local look"
+        );
+        assert!(
+            !engine.tick(now + Duration::from_millis(400)),
+            "the finished fade stops requesting renders"
+        );
+    }
+
+    #[test]
+    fn dmx_merge_configuration_round_trips_through_the_show_file() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 50").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Dmx 1 Merge Ltp").unwrap();
+        engine.execute("Dmx 1 Priority Input").unwrap();
+        engine.execute("Dmx 1 Loss Fade 2.5").unwrap();
+        engine.execute("Dmx 1 Timeout 1.5").unwrap();
+        engine
+            .execute("Dmx 1 Trigger 10 Sequence 1 Threshold 200")
+            .unwrap();
+
+        let path = std::env::temp_dir().join(format!(
+            "openlight-phase5-{}-dmx-round-trip.olshow",
+            std::process::id()
+        ));
+        engine
+            .execute(&format!("Save \"{}\"", path.display()))
+            .unwrap();
+        engine
+            .execute(&format!("Load \"{}\"", path.display()))
+            .unwrap();
+        let universe = engine.show.universe(1).unwrap();
+        assert_eq!(universe.merge, MergeMode::Ltp);
+        assert_eq!(universe.priority, InputPriority::Input);
+        assert_eq!(universe.loss, LossPolicy::Fade(2.5));
+        assert_eq!(universe.input_timeout_ms, 1_500);
+        assert_eq!(
+            universe.input_trigger,
+            Some(InputTrigger {
+                address: 10,
+                threshold: 200,
+                sequence: 1,
+            })
+        );
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(crate::desk::Desk::path_for(&path));
+    }
+
+    #[test]
+    fn replacing_the_show_drops_the_old_input_frame() {
+        let mut engine = engine();
+        engine.execute("Dmx 1 Merge Htp").unwrap();
+        let mut slots = [0u8; dmx::DMX_SLOTS];
+        slots[0] = 200;
+        engine.apply_input(1, dmx::DmxFrame::dimmer(slots), engine.clock());
+        assert_eq!(engine.render().slot(1, 1), Some(200));
+
+        engine.execute("New Show").unwrap();
+        assert!(engine.inputs.is_empty());
+        assert_eq!(
+            engine.render().slot(1, 1),
+            Some(0),
+            "the old document's input does not leak into the new show"
+        );
+    }
+
+    #[test]
+    fn an_alternate_start_code_is_counted_but_never_merged() {
+        let mut engine = engine();
+        lock(&engine.status).inputs.insert(
+            1,
+            crate::output::InputStatus {
+                transport: "virtual".into(),
+                state: crate::output::InputSignal::NoSignal,
+                ..Default::default()
+            },
+        );
+        engine.execute("Dmx 1 Merge Htp").unwrap();
+        let mut dimmer = [0u8; dmx::DMX_SLOTS];
+        dimmer[0] = 200;
+        engine.apply_input(1, dmx::DmxFrame::dimmer(dimmer), engine.clock());
+        assert_eq!(engine.render().slot(1, 1), Some(200));
+
+        let mut alternate = [0u8; dmx::DMX_SLOTS];
+        alternate[0] = 10;
+        engine.apply_input(1, dmx::DmxFrame::new(0xCF, alternate), engine.clock());
+        assert_eq!(
+            engine.render().slot(1, 1),
+            Some(200),
+            "a non-dimmer frame does not reach the merge"
+        );
+        let text = engine.execute("Dmx 1").unwrap().lines.join("\n");
+        assert!(text.contains("discarded 1"), "{text}");
+    }
+
+    #[test]
+    fn dmx_snapshot_reads_a_fine_channel_as_sixteen_bit() {
+        use crate::test_support::demo_moving_show;
+
+        let mut engine = Engine::new(demo_moving_show());
+        let expected = {
+            let (_, mode) = engine.show.mode_for(&engine.show.fixtures[0]).unwrap();
+            mode.channels[0].level_from_raw16(0x4080)
+        };
+        let mut slots = [0u8; dmx::DMX_SLOTS];
+        slots[0] = 0x40;
+        slots[1] = 0x80;
+        engine.apply_input(1, dmx::DmxFrame::dimmer(slots), engine.clock());
+        engine.execute("Dmx 1 Snapshot").unwrap();
+        assert_eq!(engine.desk.programmer.get(1, "Pan"), Some(expected));
+    }
+
+    #[test]
+    fn dmx_snapshot_captures_patched_values() {
+        let mut engine = engine();
+        let mut slots = [0u8; dmx::DMX_SLOTS];
+        slots[0] = 255;
+        slots[1] = 128;
+        slots[2] = 64;
+        slots[3] = 32;
+        engine.apply_input(1, dmx::DmxFrame::dimmer(slots), engine.clock());
+        let outcome = engine.execute("Dmx 1 Snapshot").unwrap();
+        assert!(outcome.lines[0].contains("Snapshotted 4 values"));
+        assert_eq!(dimmer(&engine, 1), 1.0);
+        assert_eq!(
+            engine.desk.programmer.get(1, "ColorAdd_R"),
+            Some(128.0 / 255.0)
+        );
+    }
+
+    #[test]
+    fn dmx_listing_and_status_name_the_input() {
+        let mut engine = engine();
+        engine.execute("Dmx 1 Merge Ltp").unwrap();
+        engine.execute("Dmx 1 Priority Input").unwrap();
+        engine.execute("Dmx 1 Loss Fade 2").unwrap();
+        let listing = engine.execute("Dmx 1").unwrap();
+        let text = listing.lines.join("\n");
+        assert!(text.contains("merge LTP"), "{text}");
+        assert!(text.contains("priority Input"), "{text}");
+        assert!(text.contains("loss Fade 2 s"), "{text}");
+
+        let status = engine.status_lines().join("\n");
+        assert!(status.contains("Input Universe 1"), "{status}");
+    }
+
+    #[test]
+    fn dmx_config_rejects_a_missing_universe_and_trigger() {
+        let mut engine = engine();
+        assert!(engine.execute("Dmx 2 Merge Htp").is_err());
+        engine.execute("Fixture 1 At 50").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        let error = engine
+            .execute("Dmx 1 Trigger 1 Sequence 9 Threshold 100")
+            .unwrap_err();
+        assert!(
+            error.message.contains("sequence 9"),
+            "validation names the missing sequence: {error}"
         );
     }
 }

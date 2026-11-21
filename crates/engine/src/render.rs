@@ -80,6 +80,13 @@ impl OutputFrame {
     fn ensure(&mut self, universe: u16) -> &mut [u8; DMX_SLOTS] {
         self.universes.entry(universe).or_insert([0; DMX_SLOTS])
     }
+
+    /// Mutable slots for the input merge stage. The renderer creates every
+    /// universe the show owns, so a missing universe means there is nothing
+    /// to merge into.
+    pub(crate) fn slots_mut(&mut self, universe: u16) -> Option<&mut [u8; DMX_SLOTS]> {
+        self.universes.get_mut(&universe)
+    }
 }
 
 /// Combined master for one fixture: the grand master times the lowest group
@@ -594,6 +601,7 @@ mod tests {
             number: 2,
             label: "Universe 2".into(),
             size: 512,
+            ..crate::show::Universe::default()
         });
         show.fixtures.push(Fixture {
             number: 2,

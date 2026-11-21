@@ -117,6 +117,12 @@ serial transport reports `unsupported`; only *device* support varies. ENTTEC is
 the path to add first on a new platform because the widget owns the frame
 timing, but today it uses the same serial layer as `generic:`.
 
+DMX can also be read on platforms with a serial backend. `--input 1=virtual`
+or `--input 1=enttec:/dev/ttyUSB0` binds a reader to a universe; `Dmx`, `Dmx 1` and `Status` report its signal,
+peak, frame and error counters. The virtual reader is the tested path; the
+ENTTEC Pro receive path is implemented against its published protocol but has
+not yet met a widget, so physical input is part of the hardware release gate.
+
 `openlight --probe` sends three frames to every detected serial port (and every
 `--output`) and reports the achieved rate, break/MAB and jitter without starting
 the output threads. `Probe` inside the shell does the same and skips ports the
@@ -284,7 +290,7 @@ cargo run -p openlight-console -- --output 1=enttec:/dev/ttyUSB0
 ## Layout
 
 ```
-crates/dmx/       DMX512 transports: virtual, generic serial, ENTTEC, uDMX
+crates/dmx/       DMX512 transports: virtual, generic serial, ENTTEC, uDMX, input readers
 crates/engine/    show file, fixture types, GDTF import, commands, levels, palettes,
                   playback, pools (groups/worlds/filters), effects, render,
                   output runtime, structured listings

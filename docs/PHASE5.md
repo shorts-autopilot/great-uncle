@@ -456,11 +456,41 @@ new field, and new handles are written under `page_executors`. `DeskView`,
 the GUI fader pane and the web remote all follow the active page, and saved run
 positions remember the page they came from.
 
+## DMX in and merge (21)
+
+The output path can now read as well as write. `--input 1=virtual` or
+`--input 1=enttec:/dev/ttyUSB0` binds a reader to a universe; the ENTTEC
+reader configures 57600 8N1, puts the widget in send-always receive mode and
+parses its label-5 frames. `Dmx`, `Dmx In` and `Dmx 1` show the transport,
+signal age, peak, frame and error counters, merge policy and trigger; `Status`
+and the remote state carry the same input summary. A reader gets its own
+thread, so a blocked or failed port cannot stall the engine tick or an output
+worker.
+
+Merge is per universe and stored in the show: `Dmx 1 Merge Off|Htp|Ltp`,
+`Dmx 1 Priority Local|Input`, `Dmx 1 Loss Hold|Zero|Fade <s>` and
+`Dmx 1 Timeout <s>`. HTP takes the higher value slot by slot. LTP remembers
+which source owns each slot and when it last changed, so a local cue moving one
+channel does not take the other 511 from the input; source priority breaks a
+tie when both changed between renders. Loss of signal holds, drops or fades the
+input by itself, while the local look keeps running. A raw slot can fire
+`Dmx 1 Trigger <slot> Sequence <n> [Threshold <v>]` on a rising edge, and
+`Dmx 1 Snapshot` captures the incoming look into the programmer through the
+patched profiles, including fine channels.
+
+Show format v14 adds the merge fields and the trigger to each universe; older
+shows load with merging off, local priority, hold-on-loss and a one-second
+timeout. The desk file is unchanged. The read path is hardware-gated: the
+ENTTEC reader is tested against a fake serial link, not a widget, and a bare
+`generic:` input is deliberately refused until break detection is proven on
+real adapters. The hardware matrix remains the release gate.
+
 ## Known limitations
 
 - **No DMX hardware in the test environment.** Timing is exercised against a
-  pty and a virtual transport; electrical timing and real serial adapters remain
-  unproven.
+  pty and a virtual transport, and input has only been seen through the virtual
+  reader and fake serial links; electrical timing, real adapters and a widget in
+  receive mode remain unproven.
 - **Recovery is path-based.** A snapshot's revision belongs to the journal it
   was taken with; moving a show and its journal to another directory is not a
   supported recovery workflow.
@@ -478,6 +508,10 @@ positions remember the page they came from.
   backend is compile-checked, but electrical timing on actual USB-serial
   hardware remains unmeasured. `--probe` is the tool for the first person who
   can run it; report the numbers rather than assuming them.
+- **The ENTTEC input reader has not met a widget.** Its label-8 receive-mode
+  request, label-5 framing, short-payload padding and resynchronisation are
+  covered through a fake serial link, but receive mode, the 57600 baud
+  handshake and hot-unplug recovery are still part of the hardware gate.
 - **Windows has no serial backend in this build.** `virtual` works, while
   `generic:` and `enttec:` both report `unsupported`: ENTTEC shares the serial
   layer rather than owning a separate COM path. The workspace still builds and

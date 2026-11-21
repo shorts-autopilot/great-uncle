@@ -53,6 +53,7 @@ fn show_of(fixtures: u16, attributes: &[&str]) -> Show {
             number,
             label: format!("Universe {number}"),
             size: 512,
+            ..Universe::default()
         })
         .collect();
     show.fixture_types.push(FixtureType {
@@ -152,7 +153,7 @@ fn renders(criterion: &mut Criterion) {
         BenchmarkId::new("programmer", "2048 fixtures / 4 universes"),
         &2048,
         |bencher, fixtures| {
-            let engine = programmer_engine(*fixtures);
+            let mut engine = programmer_engine(*fixtures);
             bencher.iter(|| engine.render());
         },
     );
@@ -161,7 +162,7 @@ fn renders(criterion: &mut Criterion) {
         BenchmarkId::new("playback", "1000 lanes"),
         &1000,
         |bencher, lanes| {
-            let engine = playback_engine(2048, *lanes);
+            let mut engine = playback_engine(2048, *lanes);
             bencher.iter(|| engine.render());
         },
     );
@@ -170,7 +171,7 @@ fn renders(criterion: &mut Criterion) {
         BenchmarkId::new("effect", "512 fixtures / 3 targets"),
         &512,
         |bencher, fixtures| {
-            let engine = effect_engine(*fixtures);
+            let mut engine = effect_engine(*fixtures);
             bencher.iter(|| engine.render());
         },
     );

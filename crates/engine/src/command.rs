@@ -92,6 +92,7 @@ use std::fmt;
 
 use crate::color::{self, ColorSpec};
 use crate::playback::{Curve, ExecutorMode, Trigger};
+use crate::show::{InputPriority, InputTrigger, LossPolicy, MergeMode};
 use crate::timecode::TimecodeSource;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -242,6 +243,37 @@ pub enum Command {
     },
     /// `Patch Check`: overlaps, overflow and gaps, without changing anything.
     PatchCheck,
+    /// `Dmx` / `Dmx In` / `Dmx <n>`: input, merge and meter listing.
+    ListDmx {
+        universe: Option<u16>,
+    },
+    SetDmxMerge {
+        universe: u16,
+        mode: MergeMode,
+    },
+    SetDmxPriority {
+        universe: u16,
+        priority: InputPriority,
+    },
+    SetDmxLoss {
+        universe: u16,
+        loss: LossPolicy,
+    },
+    SetDmxTimeout {
+        universe: u16,
+        ms: u64,
+    },
+    SetDmxTrigger {
+        universe: u16,
+        trigger: InputTrigger,
+    },
+    ClearDmxTrigger {
+        universe: u16,
+    },
+    /// `Dmx <n> Snapshot`: capture the raw input frame into the programmer.
+    DmxSnapshot {
+        universe: u16,
+    },
     /// `Patch Import "rig.csv"`: replace the patch from a spreadsheet.
     ImportPatch {
         path: String,
@@ -697,6 +729,7 @@ impl Command {
             | Command::ListTimecodes { .. }
             | Command::Unlock { .. }
             | Command::PatchCheck
+            | Command::ListDmx { .. }
             | Command::Probe
             | Command::ExportType { .. }
             | Command::MacroList { .. }
@@ -1109,6 +1142,14 @@ const RESERVED: &[&str] = &[
     "preview",
     "highlight",
     "color",
+    "dmx",
+    "priority",
+    "loss",
+    "hold",
+    "zero",
+    "timeout",
+    "threshold",
+    "snapshot",
 ];
 
 struct Parser<'a> {
@@ -1233,6 +1274,9 @@ impl Parser<'_> {
         }
         if word.eq_ignore_ascii_case("patch") {
             return self.patch();
+        }
+        if word.eq_ignore_ascii_case("dmx") {
+            return self.dmx();
         }
         if word.eq_ignore_ascii_case("unpatch") {
             self.eat_word("fixture");
@@ -2025,6 +2069,134 @@ impl Parser<'_> {
             count,
             step,
         })
+    }
+
+    fn dmx(&mut self) -> Result<Command, CommandError> {
+        if self.peek().is_none() {
+            return Ok(Command::ListDmx { universe: None });
+        }
+        if self.eat_word("in") {
+            self.expect_end()?;
+            return Ok(Command::ListDmx { universe: None });
+        }
+        let universe = self.whole_number("universe number")?;
+        if self.peek().is_none() {
+            return Ok(Command::ListDmx {
+                universe: Some(universe),
+            });
+        }
+        if self.eat_word("merge") {
+            let mode = if self.eat_word("off") {
+                MergeMode::Off
+            } else if self.eat_word("htp") {
+                MergeMode::Htp
+            } else if self.eat_word("ltp") {
+                MergeMode::Ltp
+            } else {
+                return Err(CommandError::with_hint(
+                    "`Dmx <universe> Merge` needs `Off`, `Htp` or `Ltp`",
+                    "for example `Dmx 1 Merge Htp`",
+                ));
+            };
+            self.expect_end()?;
+            return Ok(Command::SetDmxMerge { universe, mode });
+        }
+        if self.eat_word("priority") {
+            let priority = if self.eat_word("local") {
+                InputPriority::Local
+            } else if self.eat_word("input") {
+                InputPriority::Input
+            } else {
+                return Err(CommandError::with_hint(
+                    "`Dmx <universe> Priority` needs `Local` or `Input`",
+                    "for example `Dmx 1 Priority Input`",
+                ));
+            };
+            self.expect_end()?;
+            return Ok(Command::SetDmxPriority { universe, priority });
+        }
+        if self.eat_word("loss") {
+            let loss = if self.eat_word("hold") {
+                LossPolicy::Hold
+            } else if self.eat_word("zero") {
+                LossPolicy::Zero
+            } else if self.eat_word("fade") {
+                let seconds = self.number_value("fade seconds")?;
+                if !seconds.is_finite() || !(0.0..=60.0).contains(&seconds) {
+                    return Err(CommandError::with_hint(
+                        format!("fade {seconds} is outside 0..60 seconds"),
+                        "for example `Dmx 1 Loss Fade 2`",
+                    ));
+                }
+                LossPolicy::Fade(seconds)
+            } else {
+                return Err(CommandError::with_hint(
+                    "`Dmx <universe> Loss` needs `Hold`, `Zero` or `Fade <seconds>`",
+                    "for example `Dmx 1 Loss Fade 2`",
+                ));
+            };
+            self.expect_end()?;
+            return Ok(Command::SetDmxLoss { universe, loss });
+        }
+        if self.eat_word("timeout") {
+            let seconds = self.number_value("timeout seconds")?;
+            if !seconds.is_finite() || !(0.001..=60.0).contains(&seconds) {
+                return Err(CommandError::with_hint(
+                    format!("timeout {seconds} is outside 0.001..60 seconds"),
+                    "for example `Dmx 1 Timeout 1.5`",
+                ));
+            }
+            let ms = (seconds * 1000.0).round() as u64;
+            self.expect_end()?;
+            return Ok(Command::SetDmxTimeout {
+                universe,
+                ms: ms.max(1),
+            });
+        }
+        if self.eat_word("trigger") {
+            if self.eat_word("off") {
+                self.expect_end()?;
+                return Ok(Command::ClearDmxTrigger { universe });
+            }
+            let address = self.whole_number("trigger address")?;
+            if !(1..=512).contains(&address) {
+                return Err(CommandError::with_hint(
+                    format!("trigger address {address} is outside 1..512"),
+                    "DMX addresses are 1-based",
+                ));
+            }
+            self.eat_word("sequence");
+            let sequence = self.whole_number("sequence number")?;
+            let threshold = if self.eat_word("threshold") {
+                let value = self.whole_number("trigger threshold")?;
+                if !(1..=255).contains(&value) {
+                    return Err(CommandError::with_hint(
+                        format!("trigger threshold {value} is outside 1..255"),
+                        "a trigger at zero would fire continuously",
+                    ));
+                }
+                value as u8
+            } else {
+                128
+            };
+            self.expect_end()?;
+            return Ok(Command::SetDmxTrigger {
+                universe,
+                trigger: InputTrigger {
+                    address,
+                    threshold,
+                    sequence,
+                },
+            });
+        }
+        if self.eat_word("snapshot") {
+            self.expect_end()?;
+            return Ok(Command::DmxSnapshot { universe });
+        }
+        Err(CommandError::with_hint(
+            format!("unknown DMX action for universe {universe}"),
+            "use `Merge`, `Priority`, `Loss`, `Timeout`, `Trigger` or `Snapshot`",
+        ))
     }
 
     fn patch(&mut self) -> Result<Command, CommandError> {
@@ -4934,6 +5106,89 @@ mod tests {
         assert!(command("Color Red").mutates());
         assert!(!command("Color").mutates(), "the listing is a view");
         assert!(!command("Fixture 1 Color").mutates());
+    }
+
+    #[test]
+    fn parses_dmx_input_and_merge_commands() {
+        assert_eq!(command("Dmx"), Command::ListDmx { universe: None });
+        assert_eq!(command("Dmx In"), Command::ListDmx { universe: None });
+        assert_eq!(command("Dmx 2"), Command::ListDmx { universe: Some(2) });
+        assert_eq!(
+            command("Dmx 1 Merge Htp"),
+            Command::SetDmxMerge {
+                universe: 1,
+                mode: MergeMode::Htp
+            }
+        );
+        assert_eq!(
+            command("Dmx 1 Priority Input"),
+            Command::SetDmxPriority {
+                universe: 1,
+                priority: InputPriority::Input
+            }
+        );
+        assert_eq!(
+            command("Dmx 1 Loss Fade 2"),
+            Command::SetDmxLoss {
+                universe: 1,
+                loss: LossPolicy::Fade(2.0)
+            }
+        );
+        assert_eq!(
+            command("Dmx 1 Timeout 1.5"),
+            Command::SetDmxTimeout {
+                universe: 1,
+                ms: 1_500
+            }
+        );
+        assert_eq!(
+            command("Dmx 1 Trigger 10 Sequence 2 Threshold 200"),
+            Command::SetDmxTrigger {
+                universe: 1,
+                trigger: InputTrigger {
+                    address: 10,
+                    threshold: 200,
+                    sequence: 2
+                }
+            }
+        );
+        assert_eq!(
+            command("Dmx 1 Trigger Off"),
+            Command::ClearDmxTrigger { universe: 1 }
+        );
+        assert_eq!(
+            command("Dmx 1 Snapshot"),
+            Command::DmxSnapshot { universe: 1 }
+        );
+
+        assert!(!command("Dmx").mutates());
+        assert!(!command("Dmx 1").mutates());
+        assert!(command("Dmx 1 Merge Htp").mutates());
+        assert!(command("Dmx 1 Snapshot").mutates());
+    }
+
+    #[test]
+    fn rejects_bad_dmx_commands() {
+        for (line, needle) in [
+            ("Dmx 1 Merge", "Off"),
+            ("Dmx 1 Merge Sideways", "Off"),
+            ("Dmx 1 Priority", "Local"),
+            ("Dmx 1 Loss Fade", "fade"),
+            ("Dmx 1 Loss Fade 90", "0..60"),
+            ("Dmx 1 Timeout 0", "0.001"),
+            ("Dmx 1 Trigger 0 Sequence 1", "trigger address"),
+            (
+                "Dmx 1 Trigger 1 Sequence 1 Threshold 0",
+                "trigger threshold",
+            ),
+            ("Dmx 1 Nonsense", "unknown DMX action"),
+        ] {
+            let error = error(line);
+            assert!(
+                error.to_string().contains(needle),
+                "`{line}` should name `{needle}`: {error}"
+            );
+        }
     }
 
     #[test]

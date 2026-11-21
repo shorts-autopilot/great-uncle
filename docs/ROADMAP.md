@@ -70,13 +70,14 @@ a preference: item 3 must land before anything that reads a desk file.
 
 A follow-up review ranked the work outside these eighteen. The hardware and
 display proof it put first remains the release gate: no row is `verified`
-until it has run on real DMX hardware and a real display. The first two
+until it has run on real DMX hardware and a real display. The first three
 buildable items from that review are designed and built:
 
 | Item | State |
 |---|---|
 | [19 the colour model](design/19-colour-model.md) | **built** — `Color` by name, hex, RGB, CMY, HSB or kelvin; additive, CMY and wheel assignment; RGBW extraction; sheet swatches for every system; no format change |
 | [20 executor pages](design/20-executor-pages.md) | **built** — named pages, page-qualified executor numbers and runs, `Page`/`Store Page`/`Delete Page`, per-page handles, show v13 with the v12 upgrade, active-page GUI and remote views |
+| [21 DMX in and merge](design/21-dmx-in-and-merge.md) | **built, hardware-gated** — virtual and ENTTEC Pro readers, per-universe HTP/LTP merge, local/input priority, hold/zero/fade loss, `Dmx` status and meter, rising-edge `Go Sequence` trigger, programmer snapshot, show v14; physical input remains unproven until the hardware pass |
 
 ## Why this order
 
@@ -164,6 +165,7 @@ for every older version. This is the schedule the designs assume.
 | show v11 | effect `targets`, `tempo` | 14 |
 | show v12 | timecode `source`, `tracks`, markers | 15 |
 | show v13 | `pages`, executor `page`; page one is implicit | 20 |
+| show v14 | universe input `merge`, `priority`, `loss`, `input_timeout_ms`, `input_trigger` | 21 |
 | desk v1 | programmer, selection, world/filter, masters, run positions | 03 |
 
 The desk file is additive: later items add `#[serde(default)]` fields without a

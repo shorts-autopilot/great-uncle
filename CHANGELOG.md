@@ -8,6 +8,16 @@ All notable changes to OpenLight are recorded here. The format follows
 
 ### Added
 
+- DMX input and merge: `--input 1=virtual` or `--input
+  1=enttec:/dev/ttyUSB0` reads a universe on its own thread, and
+  `Dmx 1 Merge Htp|Ltp|Off`, `Dmx 1 Priority Local|Input`, `Dmx 1 Loss
+  Hold|Zero|Fade 2` and `Dmx 1 Timeout 1.5` control a per-universe merge.
+  `Dmx`/`Dmx In` report transport, signal, peak, frames and errors; `Dmx 1
+  Trigger 10 Sequence 2` fires a cue list on a rising slot edge, and `Dmx 1
+  Snapshot` captures the incoming look into the programmer. Show format v14
+  adds the universe merge fields; the desk file stays v1. The virtual reader is
+  the tested path; the ENTTEC Pro reader is fake-link tested and physical
+  input remains part of the hardware release gate.
 - Executor pages: `Store Page 2 "Specials"`, `Page 2`, `Page Next`/`Page
   Prev`, `Delete Page 2` and `Assign Page 2 Executor 1 Sequence 3` bank
   executors without stopping playback. Executor numbers and runs are

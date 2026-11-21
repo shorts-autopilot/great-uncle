@@ -38,6 +38,7 @@ pub mod engine;
 pub mod fixture_type;
 pub mod gdtf;
 pub mod history;
+pub mod input;
 pub mod journal;
 pub mod levels;
 pub mod limits;
@@ -64,11 +65,15 @@ pub use desk::{Desk, Masters};
 pub use effect::{Effect, Waveform};
 pub use engine::{CommandOutcome, Engine, RecoveryReport};
 pub use fixture_type::{split_key, Channel, ChannelFunction, FixtureType, Mode, DIMMER};
+pub use input::InputMixer;
 pub use levels::Levels;
 pub use listing::{
     Listings, PlaybackRow, PoolRow, SheetCell, SheetRow, TimecodeRow, TimecodeRowKind,
 };
-pub use output::{OutputStatus, RemoteStatus, Runtime, RuntimeConfig, TransportBinding};
+pub use output::{
+    InputBinding, InputSignal, InputStatus, OutputStatus, RemoteStatus, Runtime, RuntimeConfig,
+    TransportBinding,
+};
 pub use palette::Palette;
 pub use playback::{Cue, Executor, Playback, Sequence, Target};
 pub use pools::{Filter, Group, World};

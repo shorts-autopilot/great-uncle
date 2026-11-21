@@ -38,6 +38,8 @@ Options:
   --output <spec>      bind a universe to an output, e.g. 1=virtual,
                        1=generic:/dev/ttyUSB0, 1=enttec:/dev/ttyUSB0, 1=udmx
                        (repeatable, defaults to 1=virtual)
+  --input <spec>       bind a universe to an input, e.g. 1=virtual or
+                       1=enttec:/dev/ttyUSB0 (repeatable, no input by default)
   --command <line>    run one command before the script (repeatable)
   --script <file>      run commands from a file, or `-` for stdin, one per line
                        (# comments); `Wait <seconds>` pauses during a fade
@@ -213,6 +215,7 @@ struct Options {
     mvr: Option<PathBuf>,
     gdtf: Vec<PathBuf>,
     outputs: Vec<(u16, String)>,
+    inputs: Vec<(u16, String)>,
     commands: Vec<String>,
     frames: Option<u64>,
     fps: f64,
@@ -247,6 +250,7 @@ impl Options {
             mvr: None,
             gdtf: Vec::new(),
             outputs: Vec::new(),
+            inputs: Vec::new(),
             commands: Vec::new(),
             frames: None,
             fps: 30.0,
@@ -312,6 +316,9 @@ impl Options {
                     &arguments, &mut index, inline, flag,
                 )?)),
                 "--output" => options.outputs.push(parse_output(&take_value(
+                    &arguments, &mut index, inline, flag,
+                )?)?),
+                "--input" => options.inputs.push(parse_output(&take_value(
                     &arguments, &mut index, inline, flag,
                 )?)?),
                 "--script" => path_option(
@@ -472,6 +479,7 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
         mvr: options.mvr.clone(),
         gdtf: options.gdtf.clone(),
         outputs: options.outputs.clone(),
+        inputs: options.inputs.clone(),
         autosave: options.autosave,
         journal: options.journal.clone(),
         recover: options.recover,
@@ -595,6 +603,7 @@ fn status_only(options: &Options) -> Result<(), Box<dyn Error>> {
         options
             .outputs
             .iter()
+            .chain(options.inputs.iter())
             .map(|(_, spec)| spec.clone())
             .collect(),
     );
@@ -936,7 +945,7 @@ mod tests {
         let line = version_line();
         assert!(line.starts_with("openlight "), "{line}");
         assert!(line.contains(env!("CARGO_PKG_VERSION")), "{line}");
-        assert!(line.contains("show format v13"), "{line}");
+        assert!(line.contains("show format v14"), "{line}");
         if !env!("OPENLIGHT_GIT_HASH").is_empty() {
             assert!(line.contains(env!("OPENLIGHT_GIT_HASH")), "{line}");
         }
@@ -967,5 +976,26 @@ mod tests {
     fn bad_remote_ports_and_binds_are_startup_errors() {
         assert!(Options::parse(vec!["--remote-port".into(), "nope".into()]).is_err());
         assert!(Options::parse(vec!["--remote-bind".into(), "not-an-ip".into()]).is_err());
+    }
+
+    #[test]
+    fn input_bindings_use_the_output_spec_shape() {
+        let options = Options::parse(vec![
+            "--input".into(),
+            "2=enttec:/dev/ttyUSB0".into(),
+            "--input".into(),
+            "1=virtual".into(),
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            options.inputs,
+            vec![
+                (2, "enttec:/dev/ttyUSB0".to_string()),
+                (1, "virtual".to_string())
+            ]
+        );
+        let none = Options::parse(Vec::new()).unwrap().unwrap();
+        assert!(none.inputs.is_empty(), "inputs are opt-in");
     }
 }

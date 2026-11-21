@@ -16,11 +16,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use dmx::virtual_input::{VirtualInput, VirtualInputHandle};
 use dmx::virtual_port::{VirtualState, VirtualTransport};
-use dmx::DmxTransport;
+use dmx::{DmxInput, DmxTransport};
 use engine::listing::Listings;
 use engine::render::OutputFrame;
-use engine::{Engine, Runtime, RuntimeConfig, TransportBinding};
+use engine::{Engine, InputBinding, Runtime, RuntimeConfig, TransportBinding};
 
 pub use engine::listing::{
     PlaybackRow, PoolRow, RowRun, SheetCell, SheetRow, TimecodeRow, TimecodeRowKind,
@@ -47,6 +48,8 @@ pub struct AppOptions {
     pub gdtf: Vec<PathBuf>,
     /// `(universe, transport spec)`. Empty means one virtual universe.
     pub outputs: Vec<(u16, String)>,
+    /// `(universe, input spec)`. Empty means no input readers.
+    pub inputs: Vec<(u16, String)>,
     /// Snapshot interval in seconds. `None` or zero disables autosave.
     pub autosave: Option<f64>,
     pub journal: JournalChoice,
@@ -66,6 +69,7 @@ impl Default for AppOptions {
             mvr: None,
             gdtf: Vec::new(),
             outputs: Vec::new(),
+            inputs: Vec::new(),
             autosave: None,
             journal: JournalChoice::Default,
             recover: true,
@@ -150,6 +154,7 @@ pub struct App {
     revision: Arc<AtomicU64>,
     runtime: Option<Runtime>,
     virtual_states: BTreeMap<u16, Arc<Mutex<VirtualState>>>,
+    virtual_inputs: BTreeMap<u16, VirtualInputHandle>,
     show_path: Option<PathBuf>,
     journal_path: Option<PathBuf>,
     recovery: Option<RecoveryReport>,
@@ -168,6 +173,26 @@ impl App {
         if let Some(seconds) = options.autosave {
             if !seconds.is_finite() || seconds < 0.0 {
                 return Err("--autosave needs a number of seconds".to_string());
+            }
+        }
+        let mut input_universes = std::collections::BTreeSet::new();
+        for (universe, _) in &options.inputs {
+            if !input_universes.insert(*universe) {
+                return Err(format!("universe {universe} has more than one input"));
+            }
+        }
+        for (_, output) in &options.outputs {
+            for (_, input) in &options.inputs {
+                if let (Some(output_port), Some(input_port)) =
+                    (serial_port(output), serial_port(input))
+                {
+                    if output_port == input_port {
+                        return Err(format!(
+                            "`{output_port}` is bound for both output and input; \
+                             an ENTTEC Pro can only send or receive at one time"
+                        ));
+                    }
+                }
             }
         }
         let mut messages = Vec::new();
@@ -191,6 +216,7 @@ impl App {
             options
                 .outputs
                 .iter()
+                .chain(options.inputs.iter())
                 .map(|(_, spec)| spec.clone())
                 .collect(),
         );
@@ -284,6 +310,7 @@ impl App {
 
         let revision = engine.revision_signal();
         let mut virtual_states = BTreeMap::new();
+        let mut virtual_inputs = BTreeMap::new();
         let (engine, runtime) = if options.start_runtime {
             let mut outputs = options.outputs.clone();
             if outputs.is_empty() {
@@ -304,9 +331,25 @@ impl App {
                     transport,
                 });
             }
-            let runtime = Runtime::start(
+            let mut input_bindings = Vec::new();
+            for (universe, spec) in &options.inputs {
+                let input: Box<dyn DmxInput> = if spec == "virtual" {
+                    let (virtual_input, handle) = VirtualInput::new();
+                    virtual_inputs.insert(*universe, handle);
+                    Box::new(virtual_input)
+                } else {
+                    dmx::open_input(spec).map_err(|error| error.to_string())?
+                };
+                messages.push(format!("Input universe {universe} <- {}", input.describe()));
+                input_bindings.push(InputBinding {
+                    universe: *universe,
+                    input,
+                });
+            }
+            let runtime = Runtime::start_with_inputs(
                 engine,
                 bindings,
+                input_bindings,
                 RuntimeConfig {
                     engine_hz: options.engine_hz,
                     frame_hz: options.frame_hz,
@@ -323,6 +366,7 @@ impl App {
             revision,
             runtime,
             virtual_states,
+            virtual_inputs,
             show_path: options.show,
             journal_path,
             recovery,
@@ -343,7 +387,7 @@ impl App {
             revision: engine.revision,
             show_name: engine.show().name.clone(),
             listings: engine.listings(),
-            frame: engine.render(),
+            frame: engine.display_frame(),
             desk: desk_view(&engine),
             playing: playing_views(&engine),
         }
@@ -368,6 +412,11 @@ impl App {
     /// The state the virtual transport for `universe` sent, for `--trace`.
     pub fn virtual_state(&self, universe: u16) -> Option<Arc<Mutex<VirtualState>>> {
         self.virtual_states.get(&universe).cloned()
+    }
+
+    /// Producer for a `--input <universe>=virtual` reader.
+    pub fn virtual_input(&self, universe: u16) -> Option<VirtualInputHandle> {
+        self.virtual_inputs.get(&universe).cloned()
     }
 
     pub fn show_path(&self) -> Option<&Path> {
@@ -397,6 +446,14 @@ impl App {
         if let Some(runtime) = self.runtime.take() {
             runtime.stop();
         }
+    }
+}
+
+/// The device path in a `generic:` or `enttec:` spec, if it has one.
+fn serial_port(spec: &str) -> Option<&str> {
+    match spec.split_once(':') {
+        Some(("generic" | "enttec", path)) if !path.is_empty() => Some(path),
+        _ => None,
     }
 }
 
@@ -672,5 +729,44 @@ mod tests {
 
         app.execute("Page 1").unwrap();
         assert_eq!(app.snapshot().desk.page, 1);
+    }
+
+    #[test]
+    fn a_serial_port_cannot_be_input_and_output_at_once() {
+        let error = App::load(AppOptions {
+            outputs: vec![(1, "enttec:/dev/ttyUSB0".into())],
+            inputs: vec![(1, "enttec:/dev/ttyUSB0".into())],
+            start_runtime: false,
+            journal: JournalChoice::Off,
+            ..AppOptions::default()
+        })
+        .err()
+        .expect("the duplicate port is refused");
+        assert!(error.contains("both output and input"), "{error}");
+    }
+
+    #[test]
+    fn a_virtual_input_is_wired_and_reaches_the_snapshot() {
+        let mut app = App::load(AppOptions {
+            inputs: vec![(1, "virtual".into())],
+            start_runtime: true,
+            journal: JournalChoice::Off,
+            frame_hz: 100.0,
+            ..AppOptions::default()
+        })
+        .unwrap();
+        app.execute("Dmx 1 Merge Htp").unwrap();
+        let handle = app.virtual_input(1).expect("the virtual input handle");
+        let mut slots = [0u8; 512];
+        slots[0] = 200;
+        handle.send_slots(slots).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+
+        assert!(app
+            .messages()
+            .iter()
+            .any(|line| line.contains("Input universe 1 <- virtual")));
+        assert_eq!(app.snapshot().frame.slot(1, 1), Some(200));
+        app.stop();
     }
 }

@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
-use dmx::{DmxTransport, DMX_SLOTS};
+use dmx::{DmxInput, DmxTransport, DMX_SLOTS};
 
 use crate::engine::Engine;
 use crate::render::OutputFrame;
@@ -105,6 +105,72 @@ impl Default for UniverseStatus {
     }
 }
 
+/// What an input reader is doing right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InputSignal {
+    /// No complete frame has arrived since the reader started.
+    #[default]
+    NoSignal,
+    /// The reader is delivering frames.
+    Ok,
+    /// The reader failed and is backing off before reopening.
+    Reconnecting,
+    /// The reader could not be reopened; it keeps retrying but is not usable.
+    Offline,
+    /// Input has been stopped.
+    Stopped,
+}
+
+impl InputSignal {
+    pub fn label(self) -> &'static str {
+        match self {
+            InputSignal::NoSignal => "no signal",
+            InputSignal::Ok => "ok",
+            InputSignal::Reconnecting => "reconnecting",
+            InputSignal::Offline => "offline",
+            InputSignal::Stopped => "stopped",
+        }
+    }
+}
+
+impl std::fmt::Display for InputSignal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.label())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct InputStatus {
+    pub transport: String,
+    pub state: InputSignal,
+    /// Frames accepted from the reader, including alternate start codes.
+    pub frames: u64,
+    /// Frames with a non-zero start code; read and counted but never merged.
+    pub discarded: u64,
+    pub errors: u64,
+    pub reconnects: u64,
+    pub last_frame: Option<SystemTime>,
+    /// Highest slot value in the last accepted frame.
+    pub peak: u8,
+    pub last_error: Option<String>,
+}
+
+impl Default for InputStatus {
+    fn default() -> Self {
+        Self {
+            transport: String::new(),
+            state: InputSignal::Stopped,
+            frames: 0,
+            discarded: 0,
+            errors: 0,
+            reconnects: 0,
+            last_frame: None,
+            peak: 0,
+            last_error: None,
+        }
+    }
+}
+
 /// Counters and addresses for the optional OSC/HTTP remote.
 #[derive(Debug, Clone, Default)]
 pub struct RemoteStatus {
@@ -128,6 +194,7 @@ pub struct OutputStatus {
     pub frames: u64,
     pub last_frame: Option<SystemTime>,
     pub universes: BTreeMap<u16, UniverseStatus>,
+    pub inputs: BTreeMap<u16, InputStatus>,
     pub warnings: Vec<String>,
     pub remote: Option<RemoteStatus>,
 }
@@ -141,6 +208,7 @@ impl Default for OutputStatus {
             frames: 0,
             last_frame: None,
             universes: BTreeMap::new(),
+            inputs: BTreeMap::new(),
             warnings: Vec::new(),
             remote: None,
         }
@@ -151,6 +219,12 @@ impl Default for OutputStatus {
 pub struct TransportBinding {
     pub universe: u16,
     pub transport: Box<dyn DmxTransport>,
+}
+
+/// One universe bound to one input reader.
+pub struct InputBinding {
+    pub universe: u16,
+    pub input: Box<dyn DmxInput>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -209,6 +283,19 @@ type Shared = Arc<Mutex<SharedFrame>>;
 
 impl Runtime {
     pub fn start(engine: Engine, transports: Vec<TransportBinding>, config: RuntimeConfig) -> Self {
+        Self::start_with_inputs(engine, transports, Vec::new(), config)
+    }
+
+    /// Start the engine, every output worker and every input reader.
+    ///
+    /// Input readers are independent threads: a blocked or failed reader
+    /// cannot stall the engine tick or an output worker.
+    pub fn start_with_inputs(
+        engine: Engine,
+        transports: Vec<TransportBinding>,
+        inputs: Vec<InputBinding>,
+        config: RuntimeConfig,
+    ) -> Self {
         let config = config.sanitized();
         let status = Arc::clone(&engine.status);
         {
@@ -231,6 +318,19 @@ impl Runtime {
                     )
                 })
                 .collect();
+            status.inputs = inputs
+                .iter()
+                .map(|binding| {
+                    (
+                        binding.universe,
+                        InputStatus {
+                            transport: binding.input.describe(),
+                            state: InputSignal::NoSignal,
+                            ..InputStatus::default()
+                        },
+                    )
+                })
+                .collect();
         }
 
         let engine = Arc::new(Mutex::new(engine));
@@ -249,6 +349,14 @@ impl Runtime {
         };
 
         let mut threads = vec![engine_thread];
+        for binding in inputs {
+            let engine = Arc::clone(&engine);
+            let stop = Arc::clone(&stop);
+            let status = Arc::clone(&status);
+            threads.push(thread::spawn(move || {
+                input_loop(engine, binding, stop, status, config)
+            }));
+        }
         for binding in transports {
             let shared = Arc::clone(&shared);
             let stop = Arc::clone(&stop);
@@ -336,6 +444,107 @@ fn engine_loop(engine: Arc<Mutex<Engine>>, shared: Shared, stop: Arc<AtomicBool>
             shared.revision = revision;
         }
         shared.built_at = now;
+    }
+}
+
+/// One reader thread for one input universe.
+fn input_loop(
+    engine: Arc<Mutex<Engine>>,
+    mut binding: InputBinding,
+    stop: Arc<AtomicBool>,
+    status: Arc<Mutex<OutputStatus>>,
+    config: RuntimeConfig,
+) {
+    let universe = binding.universe;
+    let poll = Duration::from_millis(50);
+    let initial_backoff = Duration::from_millis(config.reconnect_ms);
+    let mut backoff = initial_backoff;
+
+    while !stop.load(Ordering::Relaxed) {
+        match binding.input.poll(poll) {
+            Ok(Some(frame)) => {
+                lock(&engine).apply_input(universe, frame, Instant::now());
+                if let Some(warning) = binding.input.take_warning() {
+                    push_warning(&status, format!("input {universe}: {warning}"));
+                }
+                backoff = initial_backoff;
+            }
+            Ok(None) => {
+                if let Some(warning) = binding.input.take_warning() {
+                    push_warning(&status, format!("input {universe}: {warning}"));
+                }
+            }
+            Err(error) => {
+                let mut guard = lock(&status);
+                if let Some(entry) = guard.inputs.get_mut(&universe) {
+                    entry.errors += 1;
+                    entry.state = InputSignal::Reconnecting;
+                    entry.last_error = Some(error.to_string());
+                }
+                guard.warnings.push(format!("input {universe}: {error}"));
+                trim_warnings(&mut guard.warnings);
+                drop(guard);
+
+                if let Some(warning) = binding.input.take_warning() {
+                    push_warning(&status, format!("input {universe}: {warning}"));
+                }
+                sleep_unless_stopped(&stop, backoff);
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                match binding.input.reopen() {
+                    Ok(()) => {
+                        let mut guard = lock(&status);
+                        if let Some(entry) = guard.inputs.get_mut(&universe) {
+                            entry.reconnects += 1;
+                            entry.state = InputSignal::Reconnecting;
+                        }
+                        drop(guard);
+                        backoff = initial_backoff;
+                    }
+                    Err(error) => {
+                        let mut guard = lock(&status);
+                        if let Some(entry) = guard.inputs.get_mut(&universe) {
+                            entry.state = InputSignal::Offline;
+                            entry.last_error = Some(error.to_string());
+                        }
+                        guard
+                            .warnings
+                            .push(format!("input {universe}: reopen failed: {error}"));
+                        trim_warnings(&mut guard.warnings);
+                        drop(guard);
+                        backoff = (backoff * 2).min(Duration::from_secs(8));
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(entry) = lock(&status).inputs.get_mut(&universe) {
+        entry.state = InputSignal::Stopped;
+    }
+}
+
+fn push_warning(status: &Arc<Mutex<OutputStatus>>, line: String) {
+    let mut status = lock(status);
+    status.warnings.push(line);
+    trim_warnings(&mut status.warnings);
+}
+
+fn trim_warnings(warnings: &mut Vec<String>) {
+    if warnings.len() > 64 {
+        warnings.drain(..warnings.len() - 64);
+    }
+}
+
+fn sleep_unless_stopped(stop: &AtomicBool, duration: Duration) {
+    let deadline = Instant::now() + duration;
+    while !stop.load(Ordering::Relaxed) {
+        let now = Instant::now();
+        if now >= deadline {
+            break;
+        }
+        thread::sleep((deadline - now).min(Duration::from_millis(25)));
     }
 }
 
@@ -652,6 +861,7 @@ mod tests {
             number: 2,
             label: "Two".into(),
             size: 512,
+            ..crate::show::Universe::default()
         });
         show.fixtures.push(crate::show::Fixture {
             number: 2,
@@ -855,5 +1065,160 @@ mod tests {
         let mut engine = Engine::new(demo_show());
         engine.desk.programmer.set(1, "Dimmer", 1.0);
         engine
+    }
+
+    #[test]
+    fn a_virtual_input_reaches_the_output() {
+        let mut engine = Engine::new(demo_show());
+        engine.show.universes[0].merge = crate::show::MergeMode::Htp;
+        let (input, handle) = dmx::virtual_input::VirtualInput::new();
+        let (transport, state) = bind_virtual();
+        let runtime = Runtime::start_with_inputs(
+            engine,
+            vec![TransportBinding {
+                universe: 1,
+                transport: Box::new(transport),
+            }],
+            vec![InputBinding {
+                universe: 1,
+                input: Box::new(input),
+            }],
+            RuntimeConfig {
+                engine_hz: 100.0,
+                frame_hz: 100.0,
+                ..RuntimeConfig::default()
+            },
+        );
+
+        let mut slots = [0u8; DMX_SLOTS];
+        slots[0] = 200;
+        handle.send_slots(slots).unwrap();
+        thread::sleep(Duration::from_millis(250));
+        runtime.stop();
+
+        let state = lock(&state);
+        assert!(
+            state.history.iter().any(|frame| frame[1] == 200),
+            "the merged input reached the wire: {} frames",
+            state.frames
+        );
+    }
+
+    struct SlowInput {
+        polls: Arc<Mutex<u64>>,
+    }
+
+    impl DmxInput for SlowInput {
+        fn describe(&self) -> String {
+            "slow".into()
+        }
+
+        fn poll(&mut self, _timeout: Duration) -> dmx::DmxResult<Option<dmx::DmxFrame>> {
+            *self.polls.lock().unwrap() += 1;
+            thread::sleep(Duration::from_millis(40));
+            Ok(None)
+        }
+
+        fn reopen(&mut self) -> dmx::DmxResult<()> {
+            Ok(())
+        }
+    }
+
+    struct OnceFailingInput {
+        attempts: Arc<Mutex<u64>>,
+        reopened: Arc<Mutex<u64>>,
+    }
+
+    impl DmxInput for OnceFailingInput {
+        fn describe(&self) -> String {
+            "failing".into()
+        }
+
+        fn poll(&mut self, _timeout: Duration) -> dmx::DmxResult<Option<dmx::DmxFrame>> {
+            let mut attempts = self.attempts.lock().unwrap();
+            *attempts += 1;
+            if *attempts == 1 {
+                return Err(test_error("unplugged"));
+            }
+            Ok(None)
+        }
+
+        fn reopen(&mut self) -> dmx::DmxResult<()> {
+            *self.reopened.lock().unwrap() += 1;
+            Ok(())
+        }
+    }
+
+    fn test_error(message: &str) -> dmx::DmxError {
+        dmx::DmxError::Protocol(message.into())
+    }
+
+    #[test]
+    fn a_failing_reader_reconnects_without_stopping_output() {
+        let attempts = Arc::new(Mutex::new(0));
+        let reopened = Arc::new(Mutex::new(0));
+        let (transport, state) = bind_virtual();
+        let runtime = Runtime::start_with_inputs(
+            Engine::new(demo_show()),
+            vec![TransportBinding {
+                universe: 1,
+                transport: Box::new(transport),
+            }],
+            vec![InputBinding {
+                universe: 1,
+                input: Box::new(OnceFailingInput {
+                    attempts: Arc::clone(&attempts),
+                    reopened: Arc::clone(&reopened),
+                }),
+            }],
+            RuntimeConfig {
+                engine_hz: 100.0,
+                frame_hz: 100.0,
+                reconnect_ms: 1,
+                ..RuntimeConfig::default()
+            },
+        );
+        thread::sleep(Duration::from_millis(200));
+        let status = {
+            let handle = runtime.engine();
+            let status = Arc::clone(&lock(&handle).status);
+            status
+        };
+        runtime.stop();
+
+        assert!(*lock(&reopened) >= 1, "the reader was reopened");
+        assert!(lock(&state).frames > 0, "output kept running");
+        let status = lock(&status);
+        assert!(status.inputs[&1].errors >= 1);
+        assert!(status.inputs[&1].reconnects >= 1);
+    }
+
+    #[test]
+    fn a_slow_input_reader_does_not_stall_output() {
+        let polls = Arc::new(Mutex::new(0));
+        let (transport, state) = bind_virtual();
+        let runtime = Runtime::start_with_inputs(
+            Engine::new(demo_show()),
+            vec![TransportBinding {
+                universe: 1,
+                transport: Box::new(transport),
+            }],
+            vec![InputBinding {
+                universe: 1,
+                input: Box::new(SlowInput {
+                    polls: Arc::clone(&polls),
+                }),
+            }],
+            RuntimeConfig {
+                engine_hz: 100.0,
+                frame_hz: 100.0,
+                ..RuntimeConfig::default()
+            },
+        );
+        thread::sleep(Duration::from_millis(250));
+        runtime.stop();
+
+        assert!(*lock(&polls) > 0, "the reader was polled");
+        assert!(lock(&state).frames > 0, "output kept sending");
     }
 }

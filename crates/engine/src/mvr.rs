@@ -219,6 +219,7 @@ pub fn apply(show: &mut Show, import: Import) -> ImportReport {
                 number: entry.universe,
                 label: format!("Universe {}", entry.universe),
                 size: MAX_UNIVERSE_SIZE,
+                ..Universe::default()
             });
             show.universes.sort_by_key(|universe| universe.number);
         }

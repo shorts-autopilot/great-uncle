@@ -45,9 +45,9 @@ use crate::timecode::{
 };
 
 pub const SHOW_FORMAT: &str = "openlight-show";
-pub const SHOW_VERSION: u32 = 13;
+pub const SHOW_VERSION: u32 = 14;
 /// Older documents that still load, oldest first.
-pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 /// Fastest rate master accepted, as a factor (400%).
 pub const MAX_RATE_MASTER: f64 = 4.0;
 pub const MAX_UNIVERSE_SIZE: u16 = 512;
@@ -93,6 +93,83 @@ pub struct Show {
     pub timecodes: Vec<TimecodeShow>,
 }
 
+/// How a universe merges its local output with an incoming DMX frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum MergeMode {
+    /// Read and meter the input, but do not merge it.
+    #[default]
+    Off,
+    /// Per slot, the higher of local and input wins.
+    Htp,
+    /// Per slot, the source that changed most recently wins.
+    Ltp,
+}
+
+impl MergeMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            MergeMode::Off => "Off",
+            MergeMode::Htp => "HTP",
+            MergeMode::Ltp => "LTP",
+        }
+    }
+}
+
+/// Which source owns an LTP slot when both changed in the same frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum InputPriority {
+    #[default]
+    Local,
+    Input,
+}
+
+impl InputPriority {
+    pub fn label(self) -> &'static str {
+        match self {
+            InputPriority::Local => "Local",
+            InputPriority::Input => "Input",
+        }
+    }
+}
+
+/// What happens to an input after its universe's timeout.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub enum LossPolicy {
+    /// Keep the last input values indefinitely.
+    #[default]
+    Hold,
+    /// Remove the input contribution at once.
+    Zero,
+    /// Scale the input to zero over this many seconds, then remove it.
+    Fade(f64),
+}
+
+impl LossPolicy {
+    pub fn label(self) -> String {
+        match self {
+            LossPolicy::Hold => "Hold".into(),
+            LossPolicy::Zero => "Zero".into(),
+            LossPolicy::Fade(seconds) => format!("Fade {seconds} s"),
+        }
+    }
+}
+
+fn default_input_timeout_ms() -> u64 {
+    1_000
+}
+
+/// One raw input slot that fires a playback action on a rising edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputTrigger {
+    /// 1-based DMX address in the incoming frame.
+    pub address: u16,
+    /// Fire when the slot reaches this value (1..=255).
+    pub threshold: u8,
+    /// Sequence to `Go` on the rising edge.
+    pub sequence: u16,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Universe {
@@ -101,6 +178,31 @@ pub struct Universe {
     pub label: String,
     #[serde(default = "default_universe_size")]
     pub size: u16,
+    #[serde(default)]
+    pub merge: MergeMode,
+    #[serde(default)]
+    pub priority: InputPriority,
+    #[serde(default)]
+    pub loss: LossPolicy,
+    #[serde(default = "default_input_timeout_ms")]
+    pub input_timeout_ms: u64,
+    #[serde(default)]
+    pub input_trigger: Option<InputTrigger>,
+}
+
+impl Default for Universe {
+    fn default() -> Self {
+        Self {
+            number: 1,
+            label: String::new(),
+            size: MAX_UNIVERSE_SIZE,
+            merge: MergeMode::Off,
+            priority: InputPriority::Local,
+            loss: LossPolicy::Hold,
+            input_timeout_ms: default_input_timeout_ms(),
+            input_trigger: None,
+        }
+    }
 }
 
 /// One named bank of executor assignments. Pages are labels and selections;
@@ -163,6 +265,7 @@ impl Show {
                 number: 1,
                 label: "Universe 1".into(),
                 size: MAX_UNIVERSE_SIZE,
+                ..Universe::default()
             }],
             fixtures: Vec::new(),
             palettes: Vec::new(),
@@ -191,6 +294,12 @@ impl Show {
     pub fn universe(&self, number: u16) -> Option<&Universe> {
         self.universes
             .iter()
+            .find(|universe| universe.number == number)
+    }
+
+    pub fn universe_mut(&mut self, number: u16) -> Option<&mut Universe> {
+        self.universes
+            .iter_mut()
             .find(|universe| universe.number == number)
     }
 
@@ -370,6 +479,40 @@ impl Show {
                 problems.push(format!("universe {}: defined twice", universe.number));
             }
             universe_sizes.insert(universe.number, universe.size);
+            if universe.input_timeout_ms == 0 || universe.input_timeout_ms > 60_000 {
+                problems.push(format!(
+                    "universe {}: input timeout must be 1..=60000 ms",
+                    universe.number
+                ));
+            }
+            if let LossPolicy::Fade(seconds) = universe.loss {
+                if !seconds.is_finite() || !(0.0..=60.0).contains(&seconds) {
+                    problems.push(format!(
+                        "universe {}: input fade must be 0..=60 seconds",
+                        universe.number
+                    ));
+                }
+            }
+            if let Some(trigger) = universe.input_trigger {
+                if !(1..=MAX_UNIVERSE_SIZE).contains(&trigger.address) {
+                    problems.push(format!(
+                        "universe {}: trigger address {} must be 1..={MAX_UNIVERSE_SIZE}",
+                        universe.number, trigger.address
+                    ));
+                }
+                if trigger.threshold == 0 {
+                    problems.push(format!(
+                        "universe {}: trigger threshold must be 1..=255",
+                        universe.number
+                    ));
+                }
+                if self.sequence(trigger.sequence).is_none() {
+                    problems.push(format!(
+                        "universe {}: trigger targets sequence {}, which does not exist",
+                        universe.number, trigger.sequence
+                    ));
+                }
+            }
         }
 
         let mut type_keys = BTreeSet::new();
@@ -1572,7 +1715,7 @@ mod tests {
             .read_to_string(&mut text)
             .unwrap();
         assert!(text.contains("\"format\": \"openlight-show\""));
-        assert!(text.contains("\"version\": 13"));
+        assert!(text.contains("\"version\": 14"));
         assert!(text.contains("OpenLight Demo Wash"), "types are embedded");
         let _ = fs::remove_file(&path);
     }
@@ -1623,13 +1766,13 @@ mod tests {
         let path = temp_path("future");
         fs::write(
             &path,
-            r#"{"format":"openlight-show","version":14,"name":"x","fixture_types":[],"universes":[],"fixtures":[]}"#,
+            r#"{"format":"openlight-show","version":15,"name":"x","fixture_types":[],"universes":[],"fixtures":[]}"#,
         )
         .unwrap();
         let error = Show::load(&path).unwrap_err();
         assert!(matches!(
             error,
-            ShowError::UnsupportedVersion { found: 14, .. }
+            ShowError::UnsupportedVersion { found: 15, .. }
         ));
         let _ = fs::remove_file(&path);
     }
@@ -2524,6 +2667,48 @@ mod tests {
     }
 
     #[test]
+    fn version_thirteen_universes_merge_off_by_default() {
+        let path = temp_path("v13-dmx");
+        fs::write(
+            &path,
+            r#"{"format":"openlight-show","version":13,"name":"Old",
+                "universes":[{"number":1,"label":"Universe 1","size":512}],
+                "pages":[{"number":1,"name":"Main"}]}"#,
+        )
+        .unwrap();
+        let show = Show::load(&path).unwrap();
+        assert_eq!(show.version, SHOW_VERSION);
+        let universe = show.universe(1).unwrap();
+        assert_eq!(universe.merge, MergeMode::Off);
+        assert_eq!(universe.priority, InputPriority::Local);
+        assert_eq!(universe.loss, LossPolicy::Hold);
+        assert_eq!(universe.input_timeout_ms, 1_000);
+        assert!(universe.input_trigger.is_none());
+        show.save(&path).unwrap();
+        let saved = fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("\"version\": 14"), "{saved}");
+        assert!(saved.contains("\"merge\": \"Off\""), "{saved}");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_trigger_must_name_a_stored_sequence() {
+        let mut show = Show::new();
+        show.universes[0].input_trigger = Some(InputTrigger {
+            address: 1,
+            threshold: 128,
+            sequence: 7,
+        });
+        let problems = show.validate();
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("sequence 7")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
     fn version_twelve_executors_upgrade_to_page_one() {
         let path = temp_path("v12-pages");
         fs::write(
@@ -2555,7 +2740,7 @@ mod tests {
             .unwrap()
             .read_to_string(&mut text)
             .unwrap();
-        assert!(text.contains("\"version\": 13"), "{text}");
+        assert!(text.contains("\"version\": 14"), "{text}");
         assert!(text.contains("\"pages\""), "{text}");
         assert!(
             !text.contains("\"page\": 1"),
