@@ -48,6 +48,17 @@ jobs:
       - name: Build portable tarball
         run: GUI=1 packaging/make-tarball.sh
 
+      - name: Smoke-test packaged desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          tar -xzf dist/*.tar.gz -C "$tmp"
+          binary="$(find "$tmp" -type f -name openlight-desktop -print -quit)"
+          test -n "$binary"
+          "$binary" --headless-smoke
+
       - name: Write checksum
         run: |
           cd dist
@@ -73,6 +84,19 @@ jobs:
 
       - name: Build portable zip
         run: .\packaging\windows\make-zip.ps1
+
+      - name: Smoke-test packaged desktop
+        shell: pwsh
+        run: |
+          $tmp = Join-Path $env:RUNNER_TEMP "openlight-smoke"
+          Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $tmp | Out-Null
+          $zip = Get-ChildItem dist -Filter *.zip | Select-Object -First 1
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $tmp -Force
+          $binary = Get-ChildItem $tmp -Recurse -Filter openlight-desktop.exe | Select-Object -First 1
+          if (-not $binary) { throw "openlight-desktop.exe missing from archive" }
+          & $binary.FullName --headless-smoke
+          if ($LASTEXITCODE -ne 0) { throw "packaged desktop smoke test failed (exit $LASTEXITCODE)" }
 
       - name: Write checksum
         shell: pwsh
