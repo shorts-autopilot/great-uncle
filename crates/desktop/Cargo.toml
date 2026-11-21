@@ -1,0 +1,22 @@
+[package]
+publish = false
+name = "openlight-desktop"
+description = "OpenLight desktop window"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "openlight-desktop"
+path = "src/main.rs"
+
+[features]
+default = []
+# The window. Kept off by default so Cargo test and the MSRV job never need a
+# display or a GL driver; release packaging turns it on explicitly.
+gui = ["dep:eframe"]
+
+[dependencies]
+openlight-app = { path = "../app" }
+eframe = { version = "0.32.3", optional = true, default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }

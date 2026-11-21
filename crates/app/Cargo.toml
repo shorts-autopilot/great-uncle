@@ -1,0 +1,12 @@
+[package]
+publish = false
+name = "openlight-app"
+description = "Wiring shared by every OpenLight front end"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+engine = { package = "openlight-engine", path = "../engine" }
+dmx = { package = "openlight-dmx", path = "../dmx" }

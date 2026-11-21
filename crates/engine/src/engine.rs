@@ -8,6 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -27,6 +28,9 @@ use crate::gdtf;
 use crate::history::{History, Snapshot};
 use crate::journal::ReplayFrom;
 use crate::levels::Levels;
+use crate::listing::{
+    Listings, PlaybackRow, PoolRow, RowRun, SheetCell, SheetRow, TimecodeRow, TimecodeRowKind,
+};
 use crate::mtc::{MtcMessage, MtcPosition, MtcReader};
 use crate::output::{lock, OutputStatus};
 use crate::palette::{self, Palette};
@@ -147,11 +151,16 @@ impl RecoveryReport {
 }
 
 pub struct Engine {
-    pub show: Show,
+    /// The show. Read it through [`Engine::show`]; only the engine writes it,
+    /// so a front end cannot grow a second mutation path.
+    pub(crate) show: Show,
     /// The handles: selection, programmer, masters, playback positions.
     pub desk: Desk,
     /// Bumped on every change the output threads must pick up.
     pub revision: u64,
+    /// The same number, readable without the engine lock. A front end polls
+    /// this to decide whether a snapshot is worth building.
+    revision_signal: Arc<AtomicU64>,
     pub status: Arc<Mutex<OutputStatus>>,
     /// Running cues. Session state; the desk records where they are.
     pub playback: Playback,
@@ -206,6 +215,7 @@ impl Engine {
             show,
             desk: Desk::new(),
             revision: 0,
+            revision_signal: Arc::new(AtomicU64::new(0)),
             status: Arc::new(Mutex::new(OutputStatus::default())),
             playback: Playback::new(),
             effects: Effects::default(),
@@ -226,6 +236,22 @@ impl Engine {
             probe_specs: None,
             bound_outputs: Vec::new(),
         }
+    }
+
+    /// Read the show. Mutation goes through [`Engine::execute`] only.
+    pub fn show(&self) -> &Show {
+        &self.show
+    }
+
+    /// The revision as a lock-free handle, for a UI's change poll.
+    pub fn revision_signal(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.revision_signal)
+    }
+
+    /// Bump both the stored revision and its lock-free shadow.
+    fn bump_revision(&mut self) {
+        self.revision += 1;
+        self.revision_signal.store(self.revision, Ordering::Release);
     }
 
     /// Replace the probe's candidate list. Tests use this so a report is about
@@ -280,7 +306,7 @@ impl Engine {
             || self.effects.is_running()
             || self.timecode.is_running();
         if changed {
-            self.revision += 1;
+            self.bump_revision();
         }
         if let Some((path, interval, last)) = &mut self.autosave {
             if now.duration_since(*last) >= *interval {
@@ -359,7 +385,7 @@ impl Engine {
         self.history = History::default();
         self.group = None;
         self.restore_desk_runs();
-        self.revision += 1;
+        self.bump_revision();
     }
 
     /// Replay the journal tail from `from`, the revision the document is at.
@@ -810,7 +836,7 @@ impl Engine {
         self.desk.selection = fixtures;
         // A selection change is normally invisible, but highlight renders it.
         if self.desk.highlight {
-            self.revision += 1;
+            self.bump_revision();
         }
         Ok(CommandOutcome::message(message))
     }
@@ -1103,7 +1129,7 @@ impl Engine {
             // Dropping a highlight is an output change even though no value
             // was touched.
             if std::mem::take(&mut self.desk.highlight) {
-                self.revision += 1;
+                self.bump_revision();
             }
             return Ok(CommandOutcome::message("Selection cleared"));
         }
@@ -1158,7 +1184,7 @@ impl Engine {
         self.effects.stop_all();
         self.stop_timecode_source();
         self.group = None;
-        self.revision += 1;
+        self.bump_revision();
         // `New` replaces the document, so replay has to replace it too.
         self.note(crate::journal::EntryKind::Show);
         Ok(CommandOutcome::message(message))
@@ -2064,7 +2090,7 @@ impl Engine {
                 .map(|warning| format!("Warning: {warning}")),
         );
         self.restore_desk_runs();
-        self.revision += 1;
+        self.bump_revision();
         Ok(CommandOutcome::with_lines(lines))
     }
 
@@ -2182,8 +2208,22 @@ impl Engine {
             "{:<4} {:<22} {:<26} {:<10} {:<10} {}",
             "No.", "Name", "Type", "Mode", "Patch", "Output"
         ));
-        let mut fixtures: Vec<&Fixture> = self.show.fixtures.iter().collect();
-        fixtures.sort_by_key(|fixture| fixture.number);
+        for row in self.sheet_rows() {
+            lines.push(format!(
+                "{:<4} {:<22} {:<26} {:<10} {:<10} {}",
+                row.number,
+                truncate(&row.name, 22),
+                truncate(&row.type_key, 26),
+                truncate(&row.mode, 10),
+                row.patch(),
+                row.output()
+            ));
+        }
+        CommandOutcome::with_lines(lines)
+    }
+
+    /// Sheet rows for a front end: the same values `Sheet` prints, as data.
+    pub fn sheet_rows(&self) -> Vec<SheetRow> {
         let playback = self.playback.output();
         let effects = self.effects.output(
             &self.show,
@@ -2199,45 +2239,232 @@ impl Engine {
             &self.desk.masters,
             self.desk.blackout_master(self.clock),
         );
-
-        for fixture in fixtures {
-            let (patch, levels) = match self.show.mode_for(fixture) {
-                Ok((fixture_type, mode)) => {
-                    let mut seen = BTreeSet::new();
-                    let mut parts = Vec::new();
-                    for channel in &mode.channels {
-                        if !seen.insert(channel.attribute.to_ascii_lowercase()) {
-                            continue;
-                        }
-                        // The sheet shows what the rig is doing and where the
-                        // base value came from: P, Pb, H or nothing.
-                        let source = stage.source(fixture, &channel.attribute);
-                        let level = stage.level(fixture, &channel.attribute);
-                        parts.push(format!(
-                            "{} {} {}%",
-                            source.label(),
-                            fixture_type.pretty_attribute(&channel.attribute),
-                            (level * 100.0).round() as i64
-                        ));
+        let mut fixtures: Vec<&Fixture> = self.show.fixtures.iter().collect();
+        fixtures.sort_by_key(|fixture| fixture.number);
+        fixtures
+            .into_iter()
+            .map(|fixture| {
+                let mut row = SheetRow {
+                    number: fixture.number,
+                    name: fixture.name.clone(),
+                    type_key: fixture.type_key.clone(),
+                    mode: fixture.mode.clone(),
+                    universe: fixture.universe,
+                    address: fixture.address,
+                    cells: Vec::new(),
+                    colour: None,
+                    error: None,
+                };
+                let (fixture_type, mode) = match self.show.mode_for(fixture) {
+                    Ok(pair) => pair,
+                    Err(error) => {
+                        row.error = Some(error);
+                        return row;
                     }
-                    (
-                        format!("{}.{:03}", fixture.universe, fixture.address),
-                        parts.join("  "),
-                    )
+                };
+                let mut seen = BTreeSet::new();
+                let mut rgb = [0u8; 3];
+                let mut has_colour = false;
+                for channel in &mode.channels {
+                    let key = channel.attribute.to_ascii_lowercase();
+                    let level = stage.level(fixture, &channel.attribute);
+                    let percent = (level * 100.0).round().clamp(0.0, 100.0) as u8;
+                    if let Some(slot) = colour_slot(&key) {
+                        rgb[slot] = (level.clamp(0.0, 1.0) * 255.0).round() as u8;
+                        has_colour = true;
+                    }
+                    if !seen.insert(key) {
+                        continue;
+                    }
+                    row.cells.push(SheetCell {
+                        source: stage.source(fixture, &channel.attribute),
+                        attribute: fixture_type.pretty_attribute(&channel.attribute),
+                        level: percent,
+                    });
                 }
-                Err(error) => ("?".to_string(), error),
-            };
-            lines.push(format!(
-                "{:<4} {:<22} {:<26} {:<10} {:<10} {}",
-                fixture.number,
-                truncate(&fixture.name, 22),
-                truncate(&fixture.type_key, 26),
-                truncate(&fixture.mode, 10),
-                patch,
-                levels
-            ));
+                if has_colour {
+                    row.colour = Some(rgb);
+                }
+                row
+            })
+            .collect()
+    }
+
+    /// Cue rows for a front end, with the running state of each cue.
+    pub fn playback_rows(&self) -> Vec<PlaybackRow> {
+        let mut rows = Vec::new();
+        for sequence in &self.show.sequences {
+            let mut targets = vec![Target::Sequence(sequence.number)];
+            targets.extend(
+                self.show
+                    .executors
+                    .iter()
+                    .filter(|executor| executor.sequence == sequence.number)
+                    .map(|executor| Target::Executor(executor.number)),
+            );
+            for cue in &sequence.cues {
+                let mut running = None;
+                for target in &targets {
+                    let Some(run) = self.playback.run(*target) else {
+                        continue;
+                    };
+                    if (run.cue_number - cue.number).abs() > 1e-9 {
+                        continue;
+                    }
+                    running = Some(RowRun {
+                        progress: run.progress(self.clock),
+                        paused: run.is_paused(),
+                        done: run.done,
+                    });
+                    break;
+                }
+                rows.push(PlaybackRow {
+                    sequence: sequence.number,
+                    sequence_name: sequence.name.clone(),
+                    cue: cue.number,
+                    cue_name: cue.name.clone(),
+                    trigger: format_trigger(cue.trigger, cue.trigger_time),
+                    fade: cue.fade,
+                    delay: cue.delay,
+                    mib: cue.mib,
+                    blocked: cue.blocked,
+                    values: cue.levels.len(),
+                    running,
+                });
+            }
         }
-        CommandOutcome::with_lines(lines)
+        rows
+    }
+
+    /// Palette, group, world, filter and effect rows for a front end.
+    pub fn pool_rows(&self) -> Vec<PoolRow> {
+        let mut rows = Vec::new();
+        let pool_name = |name: &str| {
+            if name.trim().is_empty() {
+                "-".to_string()
+            } else {
+                name.to_string()
+            }
+        };
+        for palette in &self.show.palettes {
+            rows.push(PoolRow {
+                kind: "Palette".into(),
+                number: palette.number,
+                name: pool_name(&palette.name),
+                detail: palette.feature.clone(),
+                active: false,
+            });
+        }
+        for group in &self.show.groups {
+            rows.push(PoolRow {
+                kind: "Group".into(),
+                number: group.number,
+                name: pool_name(&group.name),
+                detail: format_fixture_list(&group.fixtures),
+                active: false,
+            });
+        }
+        for world in &self.show.worlds {
+            rows.push(PoolRow {
+                kind: "World".into(),
+                number: world.number,
+                name: pool_name(&world.name),
+                detail: format_fixture_list(&world.fixtures),
+                active: self.desk.world == Some(world.number),
+            });
+        }
+        for filter in &self.show.filters {
+            rows.push(PoolRow {
+                kind: "Filter".into(),
+                number: filter.number,
+                name: pool_name(&filter.name),
+                detail: filter.features.join(", "),
+                active: self.desk.filter == Some(filter.number),
+            });
+        }
+        for effect in &self.show.effects {
+            rows.push(PoolRow {
+                kind: "Effect".into(),
+                number: effect.number,
+                name: pool_name(&effect.name),
+                detail: format!(
+                    "{} {} on {}",
+                    effect.waveform.name(),
+                    effect.rate_label(self.desk.tempo),
+                    effect.target_names()
+                ),
+                active: self
+                    .effects
+                    .runs()
+                    .any(|(number, _)| number == effect.number),
+            });
+        }
+        rows
+    }
+
+    /// Timecode shows, their events and their markers, flat enough for a list.
+    pub fn timecode_rows(&self) -> Vec<TimecodeRow> {
+        let mut rows = Vec::new();
+        for timecode in &self.show.timecodes {
+            rows.push(TimecodeRow {
+                kind: TimecodeRowKind::Show,
+                timecode: timecode.number,
+                name: if timecode.name.trim().is_empty() {
+                    "-".to_string()
+                } else {
+                    timecode.name.clone()
+                },
+                track: 0,
+                at: String::new(),
+                action: format!(
+                    "{} fps, {}, {} track{}, {} event{}",
+                    timecode.frame_rate(),
+                    timecode.source.label(),
+                    timecode.tracks.len(),
+                    if timecode.tracks.len() == 1 { "" } else { "s" },
+                    timecode.event_count(),
+                    if timecode.event_count() == 1 { "" } else { "s" }
+                ),
+            });
+            for track in &timecode.tracks {
+                for event in &track.events {
+                    rows.push(TimecodeRow {
+                        kind: TimecodeRowKind::Event,
+                        timecode: timecode.number,
+                        name: if track.name.trim().is_empty() {
+                            "-".to_string()
+                        } else {
+                            track.name.clone()
+                        },
+                        track: track.number,
+                        at: event.at.clone(),
+                        action: Self::action_label(&event.action),
+                    });
+                }
+            }
+            for marker in &timecode.markers {
+                rows.push(TimecodeRow {
+                    kind: TimecodeRowKind::Marker,
+                    timecode: timecode.number,
+                    name: String::new(),
+                    track: 0,
+                    at: marker.at.clone(),
+                    action: marker.name.clone(),
+                });
+            }
+        }
+        rows
+    }
+
+    /// Every listing, built under the caller's engine lock.
+    pub fn listings(&self) -> Listings {
+        Listings {
+            sheet: self.sheet_rows(),
+            playback: self.playback_rows(),
+            pools: self.pool_rows(),
+            timecode: self.timecode_rows(),
+            status: self.status_lines(),
+        }
     }
 
     /// Compact state for the web remote. Built here, beside `Status`, so the
@@ -2296,6 +2523,11 @@ impl Engine {
     }
 
     fn status_report(&self) -> CommandOutcome {
+        CommandOutcome::with_lines(self.status_lines())
+    }
+
+    /// The lines `Status` prints, as data for a front end's status pane.
+    pub fn status_lines(&self) -> Vec<String> {
         let status = lock(&self.status);
         let mut lines = vec![
             format!(
@@ -2501,7 +2733,7 @@ impl Engine {
         } else {
             lines.push("Playback: idle".to_string());
         }
-        CommandOutcome::with_lines(lines)
+        lines
     }
 
     /// The stable machine-readable status used by `--status --json`.
@@ -4315,7 +4547,7 @@ impl Engine {
 
     fn refresh_playback(&mut self) {
         self.playback.refresh(&self.desk, self.clock);
-        self.revision += 1;
+        self.bump_revision();
     }
 
     fn running_cue_label(&self, target: Target) -> String {
@@ -4474,7 +4706,7 @@ impl Engine {
             )))
         } else {
             if highlighted {
-                self.revision += 1;
+                self.bump_revision();
             }
             Ok(CommandOutcome::message(format!(
                 "{} is not running",
@@ -5052,7 +5284,7 @@ impl Engine {
         }
         self.desk
             .set_blackout(level, std::time::Duration::from_secs_f64(fade), self.clock);
-        self.revision += 1;
+        self.bump_revision();
         Ok(CommandOutcome::message(if off {
             "Blackout lifted".to_string()
         } else {
@@ -5064,7 +5296,7 @@ impl Engine {
     /// a second buffer. The edit, the store and the listing all stay ordinary.
     fn set_blind(&mut self, on: bool) -> Result<CommandOutcome, CommandError> {
         self.desk.blind = on;
-        self.revision += 1;
+        self.bump_revision();
         Ok(CommandOutcome::message(if on {
             "Blind; the programmer no longer reaches the stage"
         } else {
@@ -5082,7 +5314,7 @@ impl Engine {
             ));
         }
         self.desk.highlight = on;
-        self.revision += 1;
+        self.bump_revision();
         Ok(CommandOutcome::message(if on {
             "Highlight on; selected fixtures are at full intensity"
         } else {
@@ -5278,7 +5510,7 @@ impl Engine {
     fn set_grand_master(&mut self, level: Level) -> Result<CommandOutcome, CommandError> {
         let value = level_value(&level)?;
         self.desk.masters.grand = value;
-        self.revision += 1;
+        self.bump_revision();
         Ok(CommandOutcome::message(format!(
             "Grand master at {}%",
             (value * 100.0).round() as i64
@@ -5299,7 +5531,7 @@ impl Engine {
             }
         };
         self.desk.masters.rate = value;
-        self.revision += 1;
+        self.bump_revision();
         Ok(CommandOutcome::message(format!(
             "Rate master at {}%",
             (value * 100.0).round() as i64
@@ -5319,7 +5551,7 @@ impl Engine {
         }
         let value = level_value(&level)?;
         self.desk.masters.set_group(number, value);
-        self.revision += 1;
+        self.bump_revision();
         Ok(CommandOutcome::message(format!(
             "Group {number} master at {}%",
             (value * 100.0).round() as i64
@@ -5759,7 +5991,7 @@ impl Engine {
         self.desk.tempo = bpm;
         self.desk.taps.clear();
         if changed {
-            self.revision += 1;
+            self.bump_revision();
         }
         Ok(CommandOutcome::message(format!(
             "Tempo {} BPM",
@@ -5775,7 +6007,7 @@ impl Engine {
             ))),
             Some(bpm) => {
                 let taps = self.desk.taps.len();
-                self.revision += 1;
+                self.bump_revision();
                 Ok(CommandOutcome::message(format!(
                     "Tempo {} BPM (from {taps} taps)",
                     bpm.round() as i64
@@ -5839,7 +6071,7 @@ impl Engine {
         }
         let skipped = targets.len() - applied.len();
         self.effects.start(number, applied.clone(), self.clock);
-        self.revision += 1;
+        self.bump_revision();
         let mut message = format!(
             "{} on {} ({}, {}, {})",
             effect.display_name(),
@@ -5861,7 +6093,7 @@ impl Engine {
         match effect {
             Some(number) => {
                 if self.effects.stop(number) {
-                    self.revision += 1;
+                    self.bump_revision();
                     Ok(CommandOutcome::message(format!("Stopped effect {number}")))
                 } else {
                     Ok(CommandOutcome::message(format!(
@@ -5871,7 +6103,7 @@ impl Engine {
             }
             None => {
                 if self.effects.stop_all() {
-                    self.revision += 1;
+                    self.bump_revision();
                     Ok(CommandOutcome::message("Stopped all effects"))
                 } else {
                     Ok(CommandOutcome::message("No effects are running"))
@@ -6564,7 +6796,7 @@ impl Engine {
                 message.push_str(", waiting for OSC positions");
             }
         }
-        self.revision += 1;
+        self.bump_revision();
         Ok(CommandOutcome::message(message))
     }
 
@@ -6582,7 +6814,7 @@ impl Engine {
         }
         self.timecode.pause(&timecode, self.clock);
         self.mtc = None;
-        self.revision += 1;
+        self.bump_revision();
         Ok(CommandOutcome::message(format!(
             "Paused timecode {number} at {}",
             timecode::format(self.timecode.position(), timecode.frame_rate())
@@ -6602,7 +6834,7 @@ impl Engine {
             )));
         }
         self.stop_timecode_source();
-        self.revision += 1;
+        self.bump_revision();
         Ok(CommandOutcome::message(format!(
             "Stopped timecode {number} at 00:00:00:00"
         )))
@@ -6617,7 +6849,7 @@ impl Engine {
         };
         let frames = timecode::parse(at, timecode.frame_rate()).map_err(CommandError::new)?;
         self.timecode.locate(number, frames, self.clock);
-        self.revision += 1;
+        self.bump_revision();
         Ok(CommandOutcome::message(format!(
             "Timecode {number} located to {} — {}",
             timecode::format(frames, timecode.frame_rate()),
@@ -6844,7 +7076,7 @@ impl Engine {
             self.apply_action(&event.action, now);
         }
         if !fired.is_empty() {
-            self.revision += 1;
+            self.bump_revision();
         }
         fired.len()
     }
@@ -6972,7 +7204,7 @@ impl Engine {
         if self.recovering {
             return;
         }
-        self.revision += 1;
+        self.bump_revision();
         self.note(crate::journal::EntryKind::Desk);
     }
 
@@ -7204,7 +7436,7 @@ impl Engine {
             }
         }
         self.playback.refresh(&self.desk, self.clock);
-        self.revision += 1;
+        self.bump_revision();
     }
 
     /// Apply a programmer edit and record it for undo.
@@ -7222,7 +7454,7 @@ impl Engine {
         };
         let message = change(&mut self.desk.programmer);
         self.record_change(snapshot);
-        self.revision += 1;
+        self.bump_revision();
         self.note(crate::journal::EntryKind::Programmer);
         message
     }
@@ -7256,7 +7488,7 @@ impl Engine {
                 programmer,
             });
         }
-        self.revision += 1;
+        self.bump_revision();
         if changed {
             self.note(crate::journal::EntryKind::Show);
         }
@@ -7513,6 +7745,16 @@ fn channel_set_error(
                 format!("sets: {}", names.join(", ")),
             )
         }
+    }
+}
+
+/// Which RGB component an attribute name feeds, if any.
+fn colour_slot(attribute: &str) -> Option<usize> {
+    match attribute {
+        "coloradd_r" | "color_r" | "red" => Some(0),
+        "coloradd_g" | "color_g" | "green" => Some(1),
+        "coloradd_b" | "color_b" | "blue" => Some(2),
+        _ => None,
     }
 }
 
@@ -10936,5 +11178,122 @@ mod tests {
         let _ = std::fs::remove_file(&show_path);
         let _ = std::fs::remove_file(show_path.with_extension("oldesk"));
         let _ = std::fs::remove_file(&journal);
+    }
+    #[test]
+    fn listings_carry_the_values_the_commands_print() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 50").unwrap();
+        engine.execute("Fixture 1 At ColorAdd_R Full").unwrap();
+
+        let rows = engine.sheet_rows();
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.patch(), "1.001");
+        assert_eq!(row.colour, Some([255, 0, 0]));
+        let dimmer = row
+            .cells
+            .iter()
+            .find(|cell| cell.attribute == "Dimmer")
+            .unwrap();
+        assert_eq!(dimmer.level, 50);
+        assert_eq!(dimmer.source.label(), "P");
+        let red = row
+            .cells
+            .iter()
+            .find(|cell| cell.attribute == "Red")
+            .unwrap();
+        assert_eq!(red.level, 100);
+
+        let printed = engine.execute("Sheet").unwrap().lines;
+        assert!(
+            printed.iter().any(|line| line.contains("P Dimmer 50%")),
+            "{printed:#?}"
+        );
+        assert_eq!(
+            engine.status_lines(),
+            engine.execute("Status").unwrap().lines,
+            "the status pane and the command share one formatter"
+        );
+    }
+
+    #[test]
+    fn playback_rows_follow_the_running_cue() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At Full").unwrap();
+        engine.execute("Store Cue 1 Fade 1").unwrap();
+        engine.execute("Fixture 1 At 0").unwrap();
+        engine.execute("Store Cue 2 Fade 1").unwrap();
+        engine.execute("Clear Values").unwrap();
+        engine.execute("Assign Executor 1 Sequence 1").unwrap();
+        engine.execute("Go").unwrap();
+
+        let rows = engine.playback_rows();
+        assert_eq!(rows.len(), 2);
+        let first = rows[0].running.as_ref().expect("cue 1 is running");
+        assert!((0.0..=1.0).contains(&first.progress));
+        assert!(!first.paused);
+        assert!(rows[1].running.is_none(), "cue 2 has not started");
+        assert_eq!(rows[0].sequence, 1);
+        assert_eq!(rows[0].trigger, "Go");
+    }
+
+    #[test]
+    fn pool_and_timecode_rows_share_the_engine_labels() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 50").unwrap();
+        engine.execute("Store Group 1 \"All\"").unwrap();
+        engine.execute("Store World 1 \"Front\"").unwrap();
+        engine.execute("Store Filter 1 \"Dim\" Dimmer").unwrap();
+        engine
+            .execute("Store Effect 1 \"Pulse\" Attributes Dimmer Waveform Sine Rate 2 Size 40")
+            .unwrap();
+
+        let pools = engine.pool_rows();
+        let kind = |name: &str| {
+            pools
+                .iter()
+                .find(|row| row.kind == name)
+                .unwrap_or_else(|| panic!("no {name} row: {pools:#?}"))
+        };
+        assert!(kind("Group").name.contains("All"));
+        assert!(!kind("World").active);
+        assert!(!kind("Filter").active);
+        assert!(!kind("Effect").active);
+
+        engine.execute("World 1").unwrap();
+        engine.execute("Filter 1").unwrap();
+        engine.execute("Effect 1 On").unwrap();
+        let pools = engine.pool_rows();
+        assert!(pools.iter().any(|row| row.kind == "World" && row.active));
+        assert!(pools.iter().any(|row| row.kind == "Filter" && row.active));
+        assert!(pools.iter().any(|row| row.kind == "Effect" && row.active));
+
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Store Timecode 1 \"Song\" Fps 25").unwrap();
+        engine
+            .execute("Timecode 1 Add 00:00:00:00 Sequence 1 Cue 1")
+            .unwrap();
+        engine
+            .execute("Timecode 1 Marker 00:00:01:00 \"Red\"")
+            .unwrap();
+        let rows = engine.timecode_rows();
+        assert!(rows
+            .iter()
+            .any(|row| row.kind == crate::listing::TimecodeRowKind::Show));
+        let event = rows
+            .iter()
+            .find(|row| row.kind == crate::listing::TimecodeRowKind::Event)
+            .expect("an event row");
+        assert_eq!(event.at, "00:00:00:00");
+        assert!(
+            event.action.contains("Sequence 1 Cue 1"),
+            "{}",
+            event.action
+        );
+        let marker = rows
+            .iter()
+            .find(|row| row.kind == crate::listing::TimecodeRowKind::Marker)
+            .expect("a marker row");
+        assert_eq!(marker.action, "Red");
     }
 }

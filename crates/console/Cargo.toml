@@ -12,6 +12,7 @@ name = "openlight"
 path = "src/main.rs"
 
 [dependencies]
+openlight-app = { path = "../app" }
 engine = { package = "openlight-engine", path = "../engine" }
 remote = { package = "openlight-remote", path = "../remote" }
 dmx = { package = "openlight-dmx", path = "../dmx" }

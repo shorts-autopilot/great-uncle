@@ -7,18 +7,17 @@
 //! `--ui` opens the terminal shell (see [`ui`]); without it the console is a
 //! line-oriented REPL.
 
-use std::collections::BTreeMap;
 use std::error::Error;
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use dmx::virtual_port::{VirtualState, VirtualTransport};
-use dmx::DmxTransport;
-use engine::{Engine, Runtime, RuntimeConfig, TransportBinding};
+use dmx::virtual_port::VirtualState;
+use engine::Engine;
+use openlight_app::{App, AppOptions, JournalChoice};
 
 mod completions;
 mod session;
@@ -206,14 +205,6 @@ fn probe_exit(options: &Options) -> ExitCode {
         }
     }
     ExitCode::SUCCESS
-}
-
-/// Where the journal goes.
-enum JournalChoice {
-    /// `<show>.journal` when a show is open, off otherwise.
-    Default,
-    Off,
-    Path(PathBuf),
 }
 
 struct Options {
@@ -466,43 +457,8 @@ fn parse_output(spec: &str) -> Result<(u16, String), String> {
 }
 
 fn run(options: Options) -> Result<(), Box<dyn Error>> {
-    let mut engine = match &options.show {
-        Some(path) => {
-            let (engine, warnings) = Engine::open_with_desk(path, options.desk.as_deref())?;
-            if !options.quiet && !options.status {
-                println!("Loaded `{}` from {}", engine.show.name, path.display());
-                for warning in warnings {
-                    println!("Warning: {warning}");
-                }
-            }
-            engine
-        }
-        None => Engine::empty(),
-    };
-    engine.set_bound_outputs(
-        options
-            .outputs
-            .iter()
-            .map(|(_, spec)| spec.clone())
-            .collect(),
-    );
-
     if options.status {
-        if let Some(show_path) = &options.show {
-            let journal = match &options.journal {
-                JournalChoice::Off => None,
-                JournalChoice::Path(path) => Some(path.clone()),
-                JournalChoice::Default => Some(engine::journal::path_for(show_path, ".journal")),
-            };
-            engine.set_journal_path_hint(journal);
-        }
-        if options.json {
-            println!("{}", engine.status_json());
-        } else {
-            let outcome = engine.execute("Status")?;
-            print_outcome(&outcome);
-        }
-        return Ok(());
+        return status_only(&options);
     }
 
     let mut log = match options.log.as_deref() {
@@ -510,56 +466,39 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
         None => None,
     };
 
-    if let Some(show_path) = options.show.clone() {
-        let journal_path = match &options.journal {
-            JournalChoice::Off => None,
-            JournalChoice::Path(path) => Some(path.clone()),
-            JournalChoice::Default => Some(engine::journal::path_for(&show_path, ".journal")),
-        };
-        let autosave_path = engine::journal::path_for(&show_path, ".autosave");
-        // Even with the journal switched off, its head decides where a snapshot
-        // says replay starts. Reading the file does not append to it: entries
-        // from earlier sessions are already reflected by the saved show, while
-        // anything written later still has to replay.
-        let recovery_path = journal_path
-            .clone()
-            .unwrap_or_else(|| engine::journal::path_for(&show_path, ".journal"));
-        let tail = engine::journal::read(&recovery_path)?;
-        engine.set_journal_head(tail.entries.last().map(|entry| entry.rev).unwrap_or(0));
+    let mut app = App::load(AppOptions {
+        show: options.show.clone(),
+        desk: options.desk.clone(),
+        mvr: options.mvr.clone(),
+        gdtf: options.gdtf.clone(),
+        outputs: options.outputs.clone(),
+        autosave: options.autosave,
+        journal: options.journal.clone(),
+        recover: options.recover,
+        engine_hz: options.engine_hz,
+        frame_hz: options.fps,
+        start_runtime: true,
+    })?;
 
-        // Recovery runs before the journal opens, so replay is never journaled.
-        if options.recover {
-            let snapshot = engine::journal::Snapshot::load(&autosave_path)?;
-            let from = match &snapshot {
-                Some(snapshot) => {
-                    let (show, desk, warnings) = snapshot.restore();
-                    engine.adopt(show, desk);
-                    if !options.quiet {
-                        for warning in warnings {
-                            println!("Warning: {warning}");
-                        }
-                        match snapshot.rev {
-                            Some(rev) => println!(
-                                "Recovering from autosave {} (revision {rev})",
-                                snapshot.at
-                            ),
-                            None => println!(
-                                "Recovering from autosave {} (taken with the journal off)",
-                                snapshot.at
-                            ),
-                        }
-                    }
-                    snapshot.replay_from()
-                }
-                None => engine::journal::ReplayFrom::File,
-            };
-            let report = engine.recover(&tail, &show_path, from);
-            if !options.quiet {
-                for line in report.summary() {
-                    println!("{line}");
-                }
-            }
-            if report.recovered_anything() && !options.quiet && io::stdin().is_terminal() {
+    // Startup lines come from the shared wiring, so the console and the GUI
+    // print the same show, journal and transport messages in the same order.
+    for line in app.messages() {
+        if !options.quiet {
+            println!("{line}");
+        } else if line.starts_with("Warning:") {
+            eprintln!("{line}");
+        }
+    }
+    for (command, outcome) in app.imports() {
+        for line in &outcome.lines {
+            println!("{line}");
+        }
+        record_log(&mut log, command, &outcome.lines.join(" | "));
+    }
+
+    if let Some(report) = app.recovery() {
+        if report.recovered_anything() && !options.quiet && io::stdin().is_terminal() {
+            if let Some(show_path) = app.show_path() {
                 print!(
                     "The recovered session is not saved. Save it to {}? [Y/n] ",
                     show_path.display()
@@ -569,92 +508,15 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
                 io::stdin().read_line(&mut answer)?;
                 if !answer.trim().eq_ignore_ascii_case("n") {
                     let save = format!("Save {}", quote(&show_path.to_string_lossy()));
-                    let outcome = engine.execute(&save).map_err(|error| error.to_string())?;
+                    let outcome = app.execute(&save)?;
                     print_outcome(&outcome);
-                }
-            }
-        }
-
-        if let Some(seconds) = options.autosave {
-            let interval = Duration::from_secs_f64(seconds);
-            if interval.is_zero() {
-                if !options.quiet {
-                    println!("Autosave off");
-                }
-            } else {
-                if !options.quiet {
-                    println!(
-                        "Auto-saving to {} every {seconds} s",
-                        autosave_path.display()
-                    );
-                }
-                engine.enable_autosave(autosave_path, interval);
-            }
-        }
-
-        if let Some(path) = journal_path {
-            match engine::journal::Journal::open(path) {
-                Ok(journal) => {
-                    if !options.quiet {
-                        println!("Journal at {}", journal.path().display());
-                    }
-                    engine.set_journal(Some(journal));
-                }
-                Err(error) => {
-                    if !options.quiet {
-                        println!("Warning: journal disabled: {error}");
-                    } else {
-                        eprintln!("warning: journal disabled: {error}");
-                    }
+                    record_log(&mut log, &save, &outcome.lines.join(" | "));
                 }
             }
         }
     }
 
-    for path in &options.gdtf {
-        let line = format!("Import Gdtf {}", quote(&path.to_string_lossy()));
-        let outcome = engine.execute(&line)?;
-        print_outcome(&outcome);
-        record_log(&mut log, &line, &outcome.lines.join(" | "));
-    }
-
-    if let Some(path) = &options.mvr {
-        let line = format!("Import Mvr {}", quote(&path.to_string_lossy()));
-        let outcome = engine.execute(&line)?;
-        for line in &outcome.lines {
-            println!("{line}");
-        }
-        record_log(&mut log, &line, &outcome.lines.join(" | "));
-    }
-
-    let mut virtual_states: BTreeMap<u16, Arc<Mutex<VirtualState>>> = BTreeMap::new();
-    let mut bindings = Vec::new();
-    for (universe, spec) in &options.outputs {
-        let transport: Box<dyn DmxTransport> = if spec == "virtual" {
-            let virtual_transport = VirtualTransport::new();
-            virtual_states.insert(*universe, virtual_transport.handle());
-            Box::new(virtual_transport)
-        } else {
-            dmx::open(spec)?
-        };
-        if !options.quiet {
-            println!("Universe {universe} -> {}", transport.describe());
-        }
-        bindings.push(TransportBinding {
-            universe: *universe,
-            transport,
-        });
-    }
-
-    let runtime = Runtime::start(
-        engine,
-        bindings,
-        RuntimeConfig {
-            engine_hz: options.engine_hz,
-            frame_hz: options.fps,
-            ..RuntimeConfig::default()
-        },
-    );
+    let runtime = app.runtime().ok_or("the output runtime did not start")?;
 
     let remote = if options.remote {
         let config = remote::RemoteConfig {
@@ -688,51 +550,80 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
 
     let has_commands = !options.commands.is_empty();
     for command in &options.commands {
-        execute_command_line(&runtime, command, &mut log)?;
+        execute_command_line(&app, command, &mut log)?;
     }
     if let Some(script) = &options.script {
-        execute_script(&runtime, script, options.quiet, &mut log)?;
+        execute_script(&app, script, options.quiet, &mut log)?;
     }
 
     if let Some(frames) = options.frames {
-        wait_for_frames(&runtime, frames)?;
+        wait_for_frames(&app, frames)?;
     } else if !has_commands && options.script.is_none() {
         if options.ui {
-            ui::run(&runtime, log.take())?;
+            ui::run(runtime, log.take())?;
         } else {
-            repl(&runtime, &mut log, options.quiet)?;
+            repl(&app, &mut log, options.quiet)?;
         }
     }
 
-    {
-        let handle = runtime.engine();
-        let mut engine = lock(&handle);
-        let outcome = engine.execute("Status")?;
-        print_outcome(&outcome);
-    }
+    let outcome = app.execute("Status")?;
+    print_outcome(&outcome);
 
     if options.trace {
-        for (universe, state) in &virtual_states {
-            println!("{}", trace_line(*universe, &lock(state)));
+        for (universe, _) in &options.outputs {
+            if let Some(state) = app.virtual_state(*universe) {
+                println!("{}", trace_line(*universe, &lock(&state)));
+            }
         }
     }
 
     if let Some(remote) = remote {
         remote.stop();
     }
-    runtime.stop();
+    app.stop();
+    Ok(())
+}
+
+/// `--status`: load, report and exit without opening a transport or starting a
+/// thread. It shares the same journal-path hint the full run would use.
+fn status_only(options: &Options) -> Result<(), Box<dyn Error>> {
+    let mut engine = match &options.show {
+        Some(path) => Engine::open_with_desk(path, options.desk.as_deref())?.0,
+        None => Engine::empty(),
+    };
+    engine.set_bound_outputs(
+        options
+            .outputs
+            .iter()
+            .map(|(_, spec)| spec.clone())
+            .collect(),
+    );
+    if let Some(show_path) = &options.show {
+        let journal = match &options.journal {
+            JournalChoice::Off => None,
+            JournalChoice::Path(path) => Some(path.clone()),
+            JournalChoice::Default => Some(engine::journal::path_for(show_path, ".journal")),
+        };
+        engine.set_journal_path_hint(journal);
+    }
+    if options.json {
+        println!("{}", engine.status_json());
+    } else {
+        let outcome = engine.execute("Status")?;
+        print_outcome(&outcome);
+    }
     Ok(())
 }
 
 /// Wait until `frames` frames have actually been sent, not just until enough
 /// time has passed: the sender may be slower than its nominal rate.
-fn wait_for_frames(runtime: &Runtime, frames: u64) -> Result<(), Box<dyn Error>> {
-    let handle = runtime.engine();
-    let status = {
-        let engine = lock(&handle);
-        Arc::clone(&engine.status)
-    };
-    let expected = Duration::from_secs_f64(frames as f64 / runtime.config().frame_hz.max(1.0));
+fn wait_for_frames(app: &App, frames: u64) -> Result<(), Box<dyn Error>> {
+    let status = app.status();
+    let frame_hz = app
+        .runtime()
+        .map(|runtime| runtime.config().frame_hz)
+        .unwrap_or(30.0);
+    let expected = Duration::from_secs_f64(frames as f64 / frame_hz.max(1.0));
     let deadline = Instant::now() + expected + Duration::from_secs(5);
 
     while lock(&status).frames < frames {
@@ -748,8 +639,7 @@ fn wait_for_frames(runtime: &Runtime, frames: u64) -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
-fn repl(runtime: &Runtime, log: &mut Option<SessionLog>, quiet: bool) -> io::Result<()> {
-    let handle = runtime.engine();
+fn repl(app: &App, log: &mut Option<SessionLog>, quiet: bool) -> io::Result<()> {
     if !quiet {
         println!("Type `Help` for commands, `exit` to quit.");
     }
@@ -779,7 +669,7 @@ fn repl(runtime: &Runtime, log: &mut Option<SessionLog>, quiet: bool) -> io::Res
             }
             continue;
         }
-        match lock(&handle).execute(trimmed) {
+        match app.execute(trimmed) {
             Ok(outcome) => {
                 print_outcome(&outcome);
                 record_log(log, trimmed, &outcome.lines.join(" | "));
@@ -794,7 +684,7 @@ fn repl(runtime: &Runtime, log: &mut Option<SessionLog>, quiet: bool) -> io::Res
 }
 
 fn execute_command_line(
-    runtime: &Runtime,
+    app: &App,
     line: &str,
     log: &mut Option<SessionLog>,
 ) -> Result<(), Box<dyn Error>> {
@@ -806,8 +696,7 @@ fn execute_command_line(
         record_log(log, line, &format!("waited {seconds}s"));
         return Ok(());
     }
-    let handle = runtime.engine();
-    let result = match lock(&handle).execute(line) {
+    let result = match app.execute(line) {
         Ok(outcome) => {
             print_outcome(&outcome);
             record_log(log, line, &outcome.lines.join(" | "));
@@ -822,7 +711,7 @@ fn execute_command_line(
 }
 
 fn execute_script(
-    runtime: &Runtime,
+    app: &App,
     path: &Path,
     quiet: bool,
     log: &mut Option<SessionLog>,
@@ -839,7 +728,6 @@ fn execute_script(
     } else {
         std::fs::read_to_string(path).map_err(|error| format!("{label}: {error}"))?
     };
-    let handle = runtime.engine();
     for (line_number, raw) in text.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -864,7 +752,7 @@ fn execute_script(
             }
             continue;
         }
-        match lock(&handle).execute(line) {
+        match app.execute(line) {
             Ok(outcome) => {
                 print_outcome(&outcome);
                 record_log(log, line, &outcome.lines.join(" | "));

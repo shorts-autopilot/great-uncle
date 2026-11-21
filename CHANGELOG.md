@@ -8,6 +8,13 @@ All notable changes to OpenLight are recorded here. The format follows
 
 ### Added
 
+- A native desktop window, `openlight-desktop`: five panes, the command line,
+  nine executor faders and a grand master. It is built on `openlight-app`, the
+  shared startup and snapshot layer the console now uses too, and is behind the
+  non-default `gui` feature. `--headless-smoke` loads and snapshots without a
+  display for CI. See `docs/DESKTOP.md`.
+- Structured engine listings (`Listings`, sheet/playback/pool/timecode rows and
+  status lines) shared by the command line and the window.
 - Release readiness: CI on Linux, macOS and Windows, a tested MSRV, archive and
   document limits on every untrusted input, property tests and fuzz targets for
   the show, GDTF, MVR and command parsers, and `--probe` (`Probe`) for measuring
@@ -22,6 +29,8 @@ All notable changes to OpenLight are recorded here. The format follows
 
 ### Changed
 
+- Show state is read-only outside the engine crate: `Engine::show` is
+  `pub(crate)` and `Engine::show()` is the accessor every front end uses.
 - The workspace MSRV is 1.89, raised from 1.82 to match the locked dependency
   set. CI tests the declared version in the platform matrix.
 - `zip` moved from 2.6 to 9.8 after `cargo deny` found RUSTSEC-2026-0545 and

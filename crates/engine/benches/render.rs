@@ -120,9 +120,10 @@ fn playback_engine(fixtures: u16, lanes: u16) -> Engine {
     show.sequences.push(sequence);
     let mut engine = Engine::new(show);
     let now = engine.clock();
+    let show = engine.show().clone();
     engine
         .playback
-        .go(&engine.show, Target::Sequence(1), 1, 0, now)
+        .go(&show, Target::Sequence(1), 1, 0, now)
         .expect("the bench cue starts");
     engine.tick(now + Duration::from_secs(1));
     engine

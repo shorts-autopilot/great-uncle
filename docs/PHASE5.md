@@ -390,6 +390,28 @@ The design asked for 4096 fixtures over four universes. A 512-slot universe
 holds at most 512 one-channel fixtures, so four universes physically hold 2048;
 the bench uses that maximum rather than a rig the patch validator would reject.
 
+## Desktop GUI (18)
+
+`crates/app` now owns the startup sequence every front end needs: show and desk
+loading, journal replay, autosave, GDTF/MVR imports, transport binding and the
+runtime. The console keeps its argument parser and calls the shared `App`;
+`crates/desktop` draws the same five panes, command line, nine executor faders
+and grand master in an eframe window behind the non-default `gui` feature.
+
+Drawing reads an owned `Snapshot` — revision, show name, structured listings,
+rendered frame, desk view and playing cues — built under the engine lock and
+used after it is released; the revision poll itself is lock-free. A click or drag turns into command text and goes
+through `App::execute`; there is no second mutation path. `Engine::show` became
+`pub(crate)` with a read accessor, and a test forbids the desktop crate from
+depending on the engine, renderer, playback or timecode modules at all.
+
+The toolkit spike, its measurements and the choice of eframe over iced and
+slint are in [`DESKTOP.md`](DESKTOP.md). `--headless-smoke` loads, builds a
+snapshot and exits without a display, which is how CI tests the model half.
+The window itself was compile-checked and the GUI feature passes clippy, but it
+has not been opened on a desktop in this environment; first-frame latency and
+visual layout remain for the first person with a display.
+
 ## Known limitations
 
 - **No DMX hardware in the test environment.** Timing is exercised against a
@@ -401,8 +423,12 @@ the bench uses that maximum rather than a rig the patch validator would reject.
 - **Home is per fixture and attribute.** There is no per-mode home table, no
   park/default distinction and no automatic re-seed when a profile is
   re-imported.
-- **Only seventeen of the eighteen roadmap designs are built.** The GUI is
-  listed in [`ROADMAP.md`](ROADMAP.md).
+- **The desktop window has not been opened on a real display here.** The model
+  half is tested headless, the GUI feature compiles and passes clippy, and the
+  X11/Wayland builds are wired, but window creation, first-frame latency and
+  visual layout were not observed in this environment. The build host has no
+  display, so the glow renderer has not rendered a frame. See
+  [`DESKTOP.md`](DESKTOP.md).
 - **The hardware probe has not met a real adapter.** Its timing, timeout and
   report logic are tested against a pty and a blocking fake, and the macOS
   backend is compile-checked, but electrical timing on actual USB-serial

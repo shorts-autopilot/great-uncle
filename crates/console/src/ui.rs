@@ -253,7 +253,7 @@ impl UiState {
 
         let left = format!(
             " OpenLight — {}{}{}",
-            engine.show.name,
+            engine.show().name,
             if engine.desk.blackout.is_some() {
                 "   BLACKOUT"
             } else {

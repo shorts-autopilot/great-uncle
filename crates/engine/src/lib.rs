@@ -39,6 +39,7 @@ pub mod history;
 pub mod journal;
 pub mod levels;
 pub mod limits;
+pub mod listing;
 pub mod mtc;
 pub mod mvr;
 pub mod output;
@@ -59,9 +60,12 @@ pub use builder::FixtureTypeFile;
 pub use command::CommandError;
 pub use desk::{Desk, Masters};
 pub use effect::{Effect, Waveform};
-pub use engine::{CommandOutcome, Engine};
+pub use engine::{CommandOutcome, Engine, RecoveryReport};
 pub use fixture_type::{split_key, Channel, ChannelFunction, FixtureType, Mode, DIMMER};
 pub use levels::Levels;
+pub use listing::{
+    Listings, PlaybackRow, PoolRow, SheetCell, SheetRow, TimecodeRow, TimecodeRowKind,
+};
 pub use output::{OutputStatus, RemoteStatus, Runtime, RuntimeConfig, TransportBinding};
 pub use palette::Palette;
 pub use playback::{Cue, Executor, Playback, Sequence, Target};

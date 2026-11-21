@@ -3,8 +3,8 @@
 Phase 4 closed the first loop: the desk plays cues, follows timecode, moves in
 black and can undo. This document is the **design set for the next eighteen
 pieces of work**, ranked by value to a working desk. Each item has a design in
-[`docs/design/`](design/). Seventeen of them are built so far, in the order the
-designs ask for:
+[`docs/design/`](design/). All eighteen are built, in the order the designs ask
+for:
 
 | Item | State |
 |---|---|
@@ -24,8 +24,8 @@ designs ask for:
 | 12 OSC and web remote | **built** — inbound OSC 1.0 codec with bundles, ten address mappings plus OSC timecode, token-protected HTTP page/state/command/SSE, bounded dispatch queue, `Status` counters; no format change |
 | 13 MVR and fixture builder | **built** — MVR zip scene walk, embedded GDTF extraction, per-fixture warnings, next-free numbering and re-import updates; `.olft` import/export/validation, `Type New`/`Mode`/`Channel`, `Copy Type`, `--mvr` |
 | 16 CLI ergonomics, macros, undo grouping | **built** — `--version`, repeatable `--command`, `--script -`, stable `--check`, `--status --json`, `--quiet`, `--log`, `--desk`, completions; desk macros with cycle/depth guards, `Begin`/`End` groups and grouped bulk imports |
-| 17 | Release readiness | **built** — archive/document limits, property tests and fuzz targets, `--probe`, macOS serial backend and a portable fallback, CI matrix with a tested MSRV, licences and advisories, tarball and udev rules, render benchmarks |
-| 18 | Desktop GUI | designed, not built |
+| 17 release readiness | **built** — archive/document limits, property tests and fuzz targets, `--probe`, macOS serial backend and a portable fallback, CI matrix with a tested MSRV, licences and advisories, tarball and udev rules, render benchmarks |
+| 18 desktop GUI | **built** — `openlight-app` wiring, owned snapshots and structured listings, an eframe window behind the `gui` feature with five panes, command line, nine executor faders and a grand master, and a headless `--headless-smoke` path |
 
 The designs are written to be implemented one at a time. Every one names the
 files it touches, the command grammar it adds, the show/desk format change it

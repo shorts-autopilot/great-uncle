@@ -19,8 +19,7 @@ profiles that you supply.
 | 2 | Palettes, cues, sequences, executor faders | done — see [`docs/PHASE2.md`](docs/PHASE2.md) |
 | 3 | Groups, worlds, filters, masters, effects | done — see [`docs/PHASE3.md`](docs/PHASE3.md) |
 | 4 | Timecode, move-in-black, undo, first UI shell | done — see [`docs/PHASE4.md`](docs/PHASE4.md) |
-| 5+ | desk state, output, journal, blackout/lock, cues, timing, home, cue editing, viewing, 16-bit, patch tools, effects, external timecode, remote, MVR, fixture builder, macros/CLI, release readiness | in progress — 03, 04, 05, 06, 01, 02, 07, 10, 09, 08, 11, 12, 13, 14, 15, 16 and 17 built; see [`docs/PHASE5.md`](docs/PHASE5.md) |
-| 5+ | the remaining roadmap designs | designed — see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
+| 5+ | desk state, output, journal, blackout/lock, cues, timing, home, cue editing, viewing, 16-bit, patch tools, effects, external timecode, remote, MVR, fixture builder, macros/CLI, release readiness, desktop GUI | done — all eighteen roadmap designs built; see [`docs/PHASE5.md`](docs/PHASE5.md) |
 
 It is a console with a command line, a full-screen terminal shell, a script
 runner and four output transports. You can program, store palettes and cues, run
@@ -69,24 +68,31 @@ whole rig no longer means typing every address: `Clone Fixture 1 At 1.101 Count
 gaps and footprint overflow, and `Patch Import` / `Report Patch` round-trip the
 patch through a spreadsheet. `Report Cues`, `Report Palettes`, `Report Status`
 and `Report Show` write the listings as files, and `--check` runs the patch
-check for CI. There is no desktop GUI yet.
+check for CI. A native window (`cargo run -p openlight-desktop --features gui`)
+draws the same five panes and command line, with draggable executor faders and
+a blackout button; the terminal shell stays the default for headless boxes, and
+the window build is feature-gated so tests and the MSRV job need no display.
 
 ## Quick start
 
 ```bash
-cargo test --workspace            # 475 tests, no hardware needed
+cargo test --workspace            # 495 tests, no hardware needed
 cargo run -p openlight-console    # interactive console
 cargo run -p openlight-console -- --ui   # full-screen terminal shell
+cargo run -p openlight-desktop --features gui   # native window
+cargo run -p openlight-desktop -- --headless-smoke  # load, snapshot, exit (no display)
 ```
 
 ## Installing a release
 
 `packaging/make-tarball.sh` writes `dist/openlight-<version>-<target>.tar.gz`
-with the binary, this README, the docs, the examples and the udev rules. From an
+with both binaries (`openlight` and `openlight-desktop`), this README, the docs,
+the examples and the udev rules. `GUI=0` builds the console only. From an
 extracted tarball:
 
 ```bash
 sudo install -m 0755 openlight /usr/local/bin/openlight
+[ -f openlight-desktop ] && sudo install -m 0755 openlight-desktop /usr/local/bin/openlight-desktop
 sudo install -m 0644 packaging/udev/60-openlight.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
 sudo usermod -aG dialout "$USER"   # log out and back in for the group change
@@ -281,8 +287,10 @@ cargo run -p openlight-console -- --output 1=enttec:/dev/ttyUSB0
 crates/dmx/       DMX512 transports: virtual, generic serial, ENTTEC, uDMX
 crates/engine/    show file, fixture types, GDTF import, commands, levels, palettes,
                   playback, pools (groups/worlds/filters), effects, render,
-                  output runtime
+                  output runtime, structured listings
+crates/app/       wiring shared by every front end: load, recover, runtime, snapshots
 crates/console/   the `openlight` binary: CLI, REPL, terminal shell, script runner
+crates/desktop/   the `openlight-desktop` window (feature `gui`) and its headless model
 examples/         demo show scripts and their synthetic GDTF profile
 tools/            manual crawler (Phase 0), status stamping, demo profile generator
 spec/             the Phase 0 feature specification, statuses and evidence
@@ -301,6 +309,8 @@ docs/             per-phase design notes
   terminal UI shell, show format v4, limitations.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — the ranked work after Phase 4, with a
   design in [`docs/design/`](docs/design/) for every item.
+- [`docs/DESKTOP.md`](docs/DESKTOP.md) — the window's crate split, the toolkit
+  spike and its measurements, and what the GUI deliberately does not do.
 - [`CHANGELOG.md`](CHANGELOG.md) — released and unreleased changes.
 - [`SECURITY.md`](SECURITY.md) — how to report a problem and what the desk lock
   does not protect.
