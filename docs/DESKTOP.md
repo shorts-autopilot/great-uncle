@@ -1,18 +1,25 @@
 # Desktop GUI
 
-**Status** built in item 18. The terminal shell is still the default on a
-headless box; `openlight-desktop` is the same desk with panes, a command line,
-draggable faders and a blackout button.
+**Status** built in item 18; item 25 replaces its fixed panes with a blank,
+user-defined window workspace. The terminal shell is still the default on a
+headless box; `openlight-desktop` is the same desk with a command line,
+movable windows, draggable faders and a blackout button.
 
 ## What the window is
 
-A 1280×800 window with five panes — Sheet, Playback, Pools, Timecode, Status —
-selected by F1–F5. The command line is always visible at the bottom and has
-focus at start. Nine executor faders for the active page and a grand master sit
-on the right; the fader pane names the page, and `Page 2` switches the bank
-without disturbing a running cue. Every
-widget action is echoed above the prompt as command text, so a mouse user learns
-the grammar and a keyboard user is never blocked by a missing control.
+A 1440×900 window that opens on an empty **Screen 1**. The operator adds windows
+from the Add Window picker or by clicking an empty grid cell, then drags a title
+bar to move one or the lower-right grip to resize it. The screen is a 12 × 8 snap
+grid and windows may not overlap. Layout is session state: it starts blank on
+every launch and is not saved into the show or desk.
+
+The left control rail has `ADD` (or F1), `CLEAR` and `RESET`, plus the active
+page, selection count and running-playback count. The command line is always
+visible at the bottom and has focus at start. Nine executor faders for the
+active page and a grand master live in a Playbacks window; `Page 2` switches the
+bank without disturbing a running cue. Every widget action is echoed above the
+prompt as command text, so a mouse user learns the grammar and a keyboard user is
+never blocked by a missing control.
 
 ```bash
 cargo run -p openlight-desktop --features gui
@@ -23,14 +30,25 @@ The window is behind the non-default `gui` feature. `cargo test --workspace`
 and the MSRV job build and test the model without eframe, a display or a GL
 driver; release packaging enables the feature.
 
-| Pane | Shows | Actions |
+The picker is grouped into **Common**, **Pools**, **Playback**, **Tools** and
+**All**. It exposes every window this build can fill from the current snapshot;
+the rest of the official grandMA3 catalogue is listed in
+[`design/25-window-workspace.md`](design/25-window-workspace.md) and stays
+unbuilt until its engine data exists.
+
+| Window | Shows | Actions |
 |---|---|---|
-| Sheet | fixture, type, mode, patch, per-attribute level and source (`P`/`Pb`/`H`), colour swatch | `Sel`, `At` the selection to the slider level, `Home`; `Def` sets an attribute/value from the fields, or lists the effective home when they are empty |
-| Playback | cues with trigger, fade, delay, MIB and running state | `Sel` chooses a row's sequence without running it, `Go` runs it; the transport bar offers `Go` / `Back` / `Pause` / `Release` |
-| Pools | palettes, groups, worlds, filters, effects and active/running state | `Use` / `Off` and `Del` |
-| Timecode | shows, tracks, events and markers | `Start` / `Pause` / `Stop`, `Locate` from the time field, and `Add` with the event field |
+| Fixture Sheet | fixture, type, mode, patch, per-attribute level and source (`P`/`Pb`/`H`), colour swatch | `Sel`, `At` the selection to the slider level, `Home`; `Def` sets an attribute/value from the fields, or lists the effective home when they are empty |
+| Sequence Sheet | cues with trigger, fade, delay, MIB and running state | `Sel` chooses a row's sequence without running it, `Go` runs it; the transport bar offers `Go` / `Back` / `Pause` / `Release` |
+| Playbacks | the active page's nine executor faders, `F` (flash) under each, grand master | drag or use the arrow keys in 5% steps; flash on/off; grand drag |
+| Pools, Presets, Groups, Worlds, Filters, Effects | the matching pool rows, active/running state | `Use` / `Off` and `Del` |
+| Timecode Viewer | shows, tracks, events and markers | `Start` / `Pause` / `Stop`, `Locate` from the time field, and `Add` with the event field |
+| Command Line History | the last commands, their result and error state | click a line to put it back in the command input |
+| DMX Sheet | rendered slot values per universe | read-only |
+| Masters | page, grand, rate, tempo, selection, blind and blackout | `Page Prev` / `Page Next` |
+| Running Playbacks | target, cue, progress and state | read-only |
+| Patch | number, name, type, mode and address | read-only |
 | Status | the same lines `Status` prints | `BLACKOUT`, `LOCK` and `UNLOCK` in the top bar |
-| Faders | the active page's nine executor faders, `F` (flash) under each, grand master | drag or use the arrow keys in 5% steps; flash on/off; grand drag |
 
 Every control above writes the command the terminal would receive. The event
 field accepts the command's own action text (`Sequence 1 Cue 1`, `Effect 1 On`),
@@ -89,7 +107,11 @@ drag produces `Executor 1 At 63`, not a field write. The model in
 - a 0..1 fader position maps to a whole 0..100 % command;
 - a keyboard step is 5 % and clamps at both ends;
 - a cue-row click produces `Go Sequence 1`;
-- pane switching executes nothing;
+- adding, removing or resizing a window executes nothing;
+- adding a window chooses the clicked cell when it fits and otherwise the first
+  free grid slot, and never overlaps another window;
+- command history records one entry per successful or failed command, bounded
+  at 100;
 - every widget action is echoed, including a command that fails;
 - the window refreshes the snapshot when the revision changes, after an action,
   or every 250 ms for status counters;
@@ -97,8 +119,8 @@ drag produces `Executor 1 At 63`, not a field write. The model in
 
 ## Toolkit spike
 
-The same Playback-pane program — eight cue rows with a Go button and one
-vertical fader — was built against each candidate with release settings
+The same playback program — eight cue rows with a Go button and one vertical
+fader — was built against each candidate with release settings
 (`lto = "thin"`, `strip = true`) on the development host (Linux x86_64,
 Rust 1.100.0). Builds were cold, one at a time, and startup is the median of 30
 runs of a `--headless` path that parses the arguments and exits before creating
@@ -121,9 +143,9 @@ above are the same Playback pane in isolation, so they compare toolkits rather
 than the product.
 
 **Decision: eframe 0.32.3.** All three table columns are acceptance criteria,
-not a score. eframe's immediate-mode `Grid` and `Slider` are a direct fit for
-five table panes and a row of faders, and its model start is a millisecond
-faster. Iced passes the licence, MSRV, pure-Rust and software-renderer tests and
+not a score. eframe's immediate-mode `Grid`, `Slider`, `Ui::new_child` and
+`Ui::interact` are a direct fit for clipped, movable table windows and a row of
+faders, and its model start is a millisecond faster. Iced passes the licence, MSRV, pure-Rust and software-renderer tests and
 is 0.94 MB smaller; that is inside the ~20 MB budget and did not outweigh the
 extra retained-state code every pane would need. Glow is the GL fallback the
 design allows; there is no software renderer in this build, so a machine with
@@ -140,7 +162,8 @@ here. The next person with a desktop should check those and record the result.
 ## Deliberate limits
 
 No 3D visualiser, fixture-position rendering, pixel mapping, drag-and-drop cue
-reordering, wheel/gobo image editors, touch layout or themes. One binary covers
-Linux, macOS and Windows; there is no platform-specific shell. The terminal
-shell remains the scriptable, headless front end and the GUI adds no command
-the console does not accept.
+reordering, wheel/gobo image editors, saved views/layouts, multiple screens,
+quickeys or themes. The window catalogue is limited to views the current
+snapshot can fill. One binary covers Linux, macOS and Windows; there is no
+platform-specific shell. The terminal shell remains the scriptable, headless
+front end and the GUI adds no command the console does not accept.

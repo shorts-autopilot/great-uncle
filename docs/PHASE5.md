@@ -398,8 +398,9 @@ the bench uses that maximum rather than a rig the patch validator would reject.
 `crates/app` now owns the startup sequence every front end needs: show and desk
 loading, journal replay, autosave, GDTF/MVR imports, transport binding and the
 runtime. The console keeps its argument parser and calls the shared `App`;
-`crates/desktop` draws the same five panes, command line, nine executor faders
-and grand master in an eframe window behind the non-default `gui` feature.
+`crates/desktop` drew the five panes, command line, nine executor faders and
+grand master in an eframe window behind the non-default `gui` feature; item 25
+replaced the fixed panes with the window workspace below.
 
 Drawing reads an owned `Snapshot` — revision, show name, structured listings,
 rendered frame, desk view and playing cues — built under the engine lock and
@@ -560,6 +561,35 @@ rename and delete commands operate on the files on disk, so the in-memory show
 must be saved first when those files are meant to be current. Show and desk
 formats are unchanged. The hardware and display proof remains the release gate.
 
+## Window workspace (25)
+
+The desktop window no longer opens as a fixed five-pane viewer. It starts on a
+blank **Screen 1** with a 12 × 8 snap grid. `ADD` or F1 opens the Add Window
+picker; clicking an empty cell opens it with that cell preferred. The picker
+groups the 16 supported windows into Common, Pools, Playback, Tools and All:
+Fixture Sheet, Sequence Sheet, Playbacks, Pools, Presets, Groups, Worlds,
+Filters, Effects, Timecode Viewer, Command Line History, DMX Sheet, Masters,
+Running Playbacks, Patch and Status. A window is moved by its title bar and
+resized from its lower-right grip; moves and resizes never overlap and keep the
+last valid rectangle. `CLEAR` removes every window, while `RESET` also closes
+the picker and returns to the blank screen. The layout is session state: it is
+not written into the show or desk and starts empty on every launch.
+
+The picker deliberately shows only windows the current `Snapshot` can fill.
+The official grandMA3 catalogue — 3D and layout viewers, content/phaser/recipe
+editors, MAtricks, selection grids, media and user pools, menus, saved views and
+quickeys — is recorded in [`design/25-window-workspace.md`](design/25-window-workspace.md)
+with the subsystem each one is waiting for. Adding one later is a `WindowKind`
+and a body renderer, not a new layout model.
+
+`Model` keeps the same command-only mutation path: adding a window, selecting a
+fixture, recalling a pool or moving a fader writes command text through
+`App::execute`. A bounded 100-entry command history is available in its own
+window; clicking an entry puts it back in the command input rather than running
+it a second way. The workspace model is headless and unit-tested; the GUI
+feature compiles and passes clippy, but no frame, drag or resize has been seen
+on a real display here.
+
 ## Known limitations
 
 - **No DMX hardware in the test environment.** Timing is exercised against a
@@ -572,12 +602,12 @@ formats are unchanged. The hardware and display proof remains the release gate.
 - **Home is per fixture and attribute.** There is no per-mode home table, no
   park/default distinction and no automatic re-seed when a profile is
   re-imported.
-- **The desktop window has not been opened on a real display here.** The model
-  half is tested headless, the GUI feature compiles and passes clippy, and the
-  X11/Wayland builds are wired, but window creation, first-frame latency and
-  visual layout were not observed in this environment. The build host has no
-  display, so the glow renderer has not rendered a frame. See
-  [`DESKTOP.md`](DESKTOP.md).
+- **The desktop window has not been opened on a real display here.** The
+  workspace model and command mapping are tested headless, the GUI feature
+  compiles and passes clippy, and the X11/Wayland builds are wired, but window
+  creation, first-frame latency, visual layout, title-bar drag feel and resize
+  feel were not observed in this environment. The build host has no display, so
+  the glow renderer has not rendered a frame. See [`DESKTOP.md`](DESKTOP.md).
 - **The hardware probe has not met a real adapter.** Its timing, timeout and
   report logic are tested against a pty and a blocking fake, and the macOS and
   Windows backends are compile-checked, but electrical timing on actual

@@ -235,9 +235,9 @@ Scope reasons and chapter dispositions: [`docs/COMPLETENESS.md`](../docs/COMPLET
 | `CX-WORKSPACE-0002` | User Interface | 1 | 1 | in-progress |
 | `CX-WORKSPACE-0003` | Configuration of Displays | 5 | 1 | not-started |
 | `CX-WORKSPACE-0004` | Desk Lock | 1 | 1 | implemented |
-| `CX-WORKSPACE-0005` | User-Defined Area | 1 | 1 | not-started |
+| `CX-WORKSPACE-0005` | User-Defined Area | 1 | 1 | implemented |
 | `CX-WORKSPACE-0006` | Command Line | 17 | 1 | implemented |
-| `CX-WORKSPACE-0007` | Control Bar | 2 | 1 | not-started |
+| `CX-WORKSPACE-0007` | Control Bar | 2 | 1 | implemented |
 | `CX-WORKSPACE-0008` | Tables in General | 1 | 1 | not-started |
 | `CX-WORKSPACE-0009` | View Bar and View Buttons | 3 | 1 | not-started |
 | `CX-WORKSPACE-0010` | Adjustable Columns | 5 | 1 | not-started |
@@ -702,16 +702,16 @@ Scope reasons and chapter dispositions: [`docs/COMPLETENESS.md`](../docs/COMPLET
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-WVM-0001` | Windows, Views, and Menus | 0 | 1 | not-started |
-| `CX-WVM-0002` | Add Window | 8 | 1 | not-started |
-| `CX-WVM-0003` | Rearrange Windows | 1 | 1 | not-started |
+| `CX-WVM-0001` | Windows, Views, and Menus | 0 | 1 | in-progress |
+| `CX-WVM-0002` | Add Window | 8 | 1 | in-progress |
+| `CX-WVM-0003` | Rearrange Windows | 1 | 1 | implemented |
 | `CX-WVM-0004` | Store and Recall Views | 17 | 1 | not-started |
-| `CX-WVM-0005` | Remove Windows from a Screen | 5 | 1 | not-started |
+| `CX-WVM-0005` | Remove Windows from a Screen | 5 | 1 | implemented |
 | `CX-WVM-0006` | Common Window Settings | 8 | 1 | not-started |
 | `CX-WVM-0007` | Title Bar Configuration | 1 | 1 | not-started |
 | `CX-WVM-0008` | Menus | 2 | 1 | not-started |
 | `CX-WVM-0009` | Change Menu Locations | 4 | 1 | not-started |
-| `CX-WVM-0010` | Pool Windows | 3 | 1 | not-started |
+| `CX-WVM-0010` | Pool Windows | 3 | 1 | in-progress |
 | `CX-WVM-0011` | Create Pool Objects | 1 | 1 | in-progress |
 | `CX-WVM-0012` | Move Pool Objects | 1 | 1 | not-started |
 | `CX-WVM-0013` | Insert Pool Objects | 1 | 1 | not-started |

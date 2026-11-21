@@ -25,7 +25,7 @@ for:
 | 13 MVR and fixture builder | **built** — MVR zip scene walk, embedded GDTF extraction, per-fixture warnings, next-free numbering and re-import updates; `.olft` import/export/validation, `Type New`/`Mode`/`Channel`, `Copy Type`, `--mvr` |
 | 16 CLI ergonomics, macros, undo grouping | **built** — `--version`, repeatable `--command`, `--script -`, stable `--check`, `--status --json`, `--quiet`, `--log`, `--desk`, completions; desk macros with cycle/depth guards, `Begin`/`End` groups and grouped bulk imports |
 | 17 release readiness | **built** — archive/document limits, property tests and fuzz targets, `--probe`, macOS serial backend and a portable fallback, CI matrix with a tested MSRV, licences and advisories, tarball and udev rules, render benchmarks |
-| 18 desktop GUI | **built** — `openlight-app` wiring, owned snapshots and structured listings, an eframe window behind the `gui` feature with five panes, command line, nine executor faders and a grand master, and a headless `--headless-smoke` path |
+| 18 desktop GUI | **built** — `openlight-app` wiring, owned snapshots and structured listings, an eframe window behind the `gui` feature with the command line and a headless `--headless-smoke` path; item 25 replaces its fixed panes with the window workspace |
 
 The designs are written to be implemented one at a time. Every one names the
 files it touches, the command grammar it adds, the show/desk format change it
@@ -70,7 +70,7 @@ a preference: item 3 must land before anything that reads a desk file.
 
 A follow-up review ranked the work outside these eighteen. The hardware and
 display proof it put first remains the release gate: no row is `verified`
-until it has run on real DMX hardware and a real display. The first six
+until it has run on real DMX hardware and a real display. The first seven
 buildable items from that review are designed and built:
 
 | Item | State |
@@ -81,6 +81,7 @@ buildable items from that review are designed and built:
 | [22 MAtricks, Shuffle and Align](design/22-matricks-shuffle-align.md) | **built** — block/group/wing/width selection cells, deterministic seeded shuffle, mirror transform, `Align` across selection order with linear/sinus/slow/fast curves, fine-channel resolution; no show format change |
 | [23 Windows serial backend](design/23-windows-serial.md) | **built, hardware-gated** — native COM link with 250000 8N2/57600 8N1 and break/MAB, ENTTEC over COM, registry COM discovery in `--probe`, Windows CI tests and a portable install script; no adapter timing measured |
 | [24 File management, backups and templates](design/24-file-management-backups-templates.md) | **built** — automatic ten-deep timestamped backups, `Files`, `Save As`, explicit `Backup`, companion-aware `Copy`/`Rename`/`Delete Show`, and show-only `Save`/`Load Template`; no format change, no active-path rebinding |
+| [25 Window workspace](design/25-window-workspace.md) | **built** — a blank screen, 12 × 8 snap grid, Add Window picker, movable/resizable non-overlapping windows, 16 snapshot-backed window types, left control rail and bounded command history; layout is session-only, no format change. Visual/drag confirmation remains part of the display release gate |
 
 ## Why this order
 
@@ -211,8 +212,9 @@ Deliberately left out, so no design quietly grows into them:
 - **Art-Net or sACN output.** The project's constraint is serial DMX out.
 - **LTC audio decoding.** Needs an audio capture stack and DSP; item 15 does
   MIDI timecode and OSC instead, and says why.
-- **3D visualisation, wheel/position editors, pixel mapping.** Item 18 stops at
-  the five listings plus a command line.
+- **3D visualisation, wheel/position editors, pixel mapping.** Item 25 adds a
+  user-defined window workspace over the supported snapshot views, but not the
+  deferred viewers, editors or media pools that need new engine data.
 - **Multi-user or networked show collaboration.** No authentication model
   exists to build on, and the desk is single-operator by design.
 - **Third-party fixture libraries.** GDTF and MVR remain the only sources.

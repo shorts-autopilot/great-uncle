@@ -98,8 +98,9 @@ PHASE1 = {
             ("out-of-scope", "2 3"),
         ],
     ),
-    # The console has a command line; every other row in this chapter is a
-    # window, bar or gesture that Phase 1 deliberately does not draw.
+    # The console has a command line and item 25 adds the user-defined window
+    # area and its control bar; the encoder, calculator and theme surfaces are
+    # still unbuilt.
     **expand(
         "WORKSPACE",
         [
@@ -108,12 +109,14 @@ PHASE1 = {
             ("out-of-scope", "12 13 18 25"),
         ],
     ),
-    # No windows yet. Pool objects can be created and deleted by command.
+    # Item 25 adds the Add Window picker, placement, resize and removal for the
+    # supported catalogue. Saved views/layouts, menus and object editing remain.
     **expand(
         "WVM",
         [
-            ("in-progress", "11 16"),
-            ("not-started", "1 2 3 4 5 6 7 8 9 10 12 13 14 15"),
+            ("in-progress", "1 2 10 11 16"),
+            ("implemented", "3 5"),
+            ("not-started", "4 6 7 8 9 12 13 14 15"),
         ],
     ),
     # DMX leaves through a serial port by design, so the Ethernet rows are out
@@ -235,9 +238,12 @@ PHASE4 = {
 # records what the full-manual audit found.
 EXTRA = {
     # The workspace's command line is implemented; desk lock landed in item 06;
-    # the command area and master/playback bars exist in the terminal shell.
+    # item 25 adds the user-defined area and control rail. The command area and
+    # master/playback bars still live only in the terminal shell.
     "CX-WORKSPACE-0001": "in-progress",
     "CX-WORKSPACE-0004": "implemented",
+    "CX-WORKSPACE-0005": "implemented",
+    "CX-WORKSPACE-0007": "implemented",
     "CX-WORKSPACE-0014": "in-progress",
     "CX-WORKSPACE-0016": "in-progress",
     "CX-WORKSPACE-0017": "in-progress",
@@ -485,7 +491,7 @@ CHAPTER_NOTES = {
     "system": "The standalone desk is built; networked parameter distribution is out of scope.",
     "onpc": "The headless `openlight` binary is the onPC equivalent; vendor installer/OS rows are out of scope.",
     "show_file_management": "Item 24 adds backups, templates, save-as and show-file operations; demo shows, history, description, automatic numbering, media export and the converter remain deferred.",
-    "workspace": "Terminal shell exists; windows, panels and themes are item 18.",
+    "workspace": "Item 25 adds the user-defined window area and control rail; encoder, calculator and theme windows remain.",
     "command_syntax_keywords": "Parser-recognized keywords are in-progress; the rest need a row-by-row audit.",
     "wvm": "Windows/views/menus are item 18.",
     "dmx": "Serial output, input and per-universe merge are built; Ethernet DMX and device-configuration import/export remain out of scope.",
@@ -508,7 +514,7 @@ CHAPTER_NOTES = {
     "agenda": "Needs a design.",
     "timers": "Needs a design.",
     "timecode": "Item 15 adds tracks, markers and MTC; OSC ingestion and track groups still need designs.",
-    "layouts": "Item 18 GUI; layouts have no design yet.",
+    "layouts": "Item 25 adds the window workspace; saved views and layouts still have no design.",
     "plugins": "Largest undecided chapter: embedded Lua host vs native plugin API; needs a scope decision and design.",
     "quickeys": "Needs a design (GUI/CLI shortcuts).",
     "datapool": "Needs a small design.",
@@ -534,7 +540,7 @@ CROSS_CUTTING = [
     ("Special executors", "Item 20 builds executor pages and page-qualified runs; macros, chases and multi-cue stacks still need a design."),
     ("Timecode depth", "Tracks, markers, MTC and an OSC feed hook landed with item 15; OSC ingestion and track groups remain."),
     ("Macros and CLI ergonomics", "Item 16 adds statement macros, transaction undo and machine-readable status; variables and a command editor remain out of scope."),
-    ("Layouts, Quickeys and windows", "Layouts/Quickeys have no design; the five-pane GUI is item 18."),
+    ("Layouts, Quickeys and windows", "Item 25 builds the blank, user-defined window workspace with Add Window, placement, resize, removal and command history. Saved views/layouts, quickeys, window settings and the deferred grandMA3 window catalogue remain."),
     ("Agenda and timers", "Scheduled events, stopwatch and countdown are unbuilt."),
     ("Plugins/Lua", "164 rows, the largest undecided chapter. Decide between an embedded Lua host and a native plugin API before claiming completeness."),
     ("Show Creator", "Import/export and preset/group creation from fixture types; no design yet."),

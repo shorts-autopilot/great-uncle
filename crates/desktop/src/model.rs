@@ -5,52 +5,15 @@
 
 use openlight_app::{App, CommandError, CommandOutcome, PlaybackRow};
 
-/// The five windows. Function keys F1–F5 select them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Pane {
-    Sheet,
-    Playback,
-    Pools,
-    Timecode,
-    Status,
-}
+use crate::workspace::{WindowId, WindowKind, Workspace};
 
-impl Pane {
-    pub const ALL: [Pane; 5] = [
-        Pane::Sheet,
-        Pane::Playback,
-        Pane::Pools,
-        Pane::Timecode,
-        Pane::Status,
-    ];
-
-    pub fn title(self) -> &'static str {
-        match self {
-            Pane::Sheet => "Sheet",
-            Pane::Playback => "Playback",
-            Pane::Pools => "Pools",
-            Pane::Timecode => "Timecode",
-            Pane::Status => "Status",
-        }
-    }
-
-    pub fn function_key(self) -> &'static str {
-        match self {
-            Pane::Sheet => "F1",
-            Pane::Playback => "F2",
-            Pane::Pools => "F3",
-            Pane::Timecode => "F4",
-            Pane::Status => "F5",
-        }
-    }
-
-    pub fn next(self) -> Pane {
-        let index = Pane::ALL
-            .iter()
-            .position(|pane| *pane == self)
-            .unwrap_or_default();
-        Pane::ALL[(index + 1) % Pane::ALL.len()]
-    }
+/// One command and the result it produced, for the Command Line History
+/// window. This is UI state, not a second execution path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandHistory {
+    pub command: String,
+    pub message: String,
+    pub error: bool,
 }
 
 /// Map a 0..=1 fader position to the whole percent a command carries.
@@ -125,15 +88,18 @@ pub fn delete_command(kind: &str, number: u16, detail: &str) -> String {
 
 #[derive(Debug)]
 pub struct Model {
-    pub pane: Pane,
+    /// The user-defined screen. It starts blank.
+    pub workspace: Workspace,
     pub input: String,
     /// The last outcome's lines, or the last error.
     pub message: String,
     pub error: bool,
     /// Widget actions in order, for the command line's echo.
     pub echo: Vec<String>,
-    /// The sequence whose transport buttons the playback pane shows.
+    /// The sequence whose transport buttons the Sequence Sheet shows.
     pub selected_sequence: Option<u16>,
+    /// Bounded command history for the Command Line History window.
+    pub history: Vec<CommandHistory>,
     /// Set when an action ran; the window rebuilds its snapshot then.
     dirty: bool,
 }
@@ -141,12 +107,13 @@ pub struct Model {
 impl Default for Model {
     fn default() -> Self {
         Self {
-            pane: Pane::Sheet,
+            workspace: Workspace::new(),
             input: String::new(),
-            message: "Ready. Type `Help` for commands.".into(),
+            message: "Ready. Add a window or type `Help` for commands.".into(),
             error: false,
             echo: Vec::new(),
             selected_sequence: None,
+            history: Vec::new(),
             dirty: false,
         }
     }
@@ -157,9 +124,22 @@ impl Model {
         Self::default()
     }
 
-    /// Switching a pane is not an action: it runs nothing.
-    pub fn switch(&mut self, pane: Pane) {
-        self.pane = pane;
+    /// Add a window to the blank screen. Layout is not a show action.
+    pub fn add_window(&mut self, kind: WindowKind) -> Option<WindowId> {
+        self.workspace.add(kind)
+    }
+
+    /// Add a window at a clicked cell, falling back to the first free slot.
+    pub fn add_window_at(
+        &mut self,
+        kind: WindowKind,
+        cell: Option<(u16, u16)>,
+    ) -> Option<WindowId> {
+        self.workspace.add_at(kind, cell)
+    }
+
+    pub fn remove_window(&mut self, id: WindowId) -> bool {
+        self.workspace.remove(id)
     }
 
     pub fn take_dirty(&mut self) -> bool {
@@ -184,15 +164,28 @@ impl Model {
                 } else {
                     self.message = outcome.lines.join(" | ");
                 }
+                self.record_history(command);
                 self.dirty = true;
                 Ok(outcome)
             }
             Err(error) => {
                 self.error = true;
                 self.message = format!("error: {error}");
+                self.record_history(command);
                 self.dirty = true;
                 Err(error)
             }
+        }
+    }
+
+    fn record_history(&mut self, command: &str) {
+        self.history.push(CommandHistory {
+            command: command.to_string(),
+            message: self.message.clone(),
+            error: self.error,
+        });
+        if self.history.len() > 100 {
+            self.history.remove(0);
         }
     }
 
@@ -367,21 +360,36 @@ mod tests {
     }
 
     #[test]
-    fn switching_panes_executes_nothing() {
+    fn adding_and_removing_windows_executes_nothing() {
         let app = app();
         let revision = app.revision();
         let mut model = Model::new();
-        for pane in Pane::ALL {
-            model.switch(pane);
-            assert_eq!(model.pane, pane);
-        }
+        let id = model.add_window(WindowKind::FixtureSheet).unwrap();
+        assert_eq!(model.workspace.windows().len(), 1);
+        assert!(model.remove_window(id));
+        assert!(model.workspace.is_empty());
         assert!(model.echo.is_empty());
         assert_eq!(
             app.revision(),
             revision,
-            "switching must not touch the show"
+            "window layout must not touch the show"
         );
         assert!(!model.take_dirty());
+    }
+
+    #[test]
+    fn command_history_records_successes_and_failures() {
+        let app = app_with_cue();
+        let mut model = Model::new();
+        model.act(&app, "Fixture 1 At 50").unwrap();
+        assert_eq!(model.history.len(), 1);
+        assert_eq!(model.history[0].command, "Fixture 1 At 50");
+        assert!(!model.history[0].error);
+
+        assert!(model.act(&app, "Executor 9 At 50").is_err());
+        assert_eq!(model.history.len(), 2);
+        assert!(model.history[1].error);
+        assert!(model.history[1].message.starts_with("error: "));
     }
 
     #[test]

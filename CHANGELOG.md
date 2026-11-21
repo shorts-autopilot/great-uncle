@@ -8,6 +8,17 @@ All notable changes to OpenLight are recorded here. The format follows
 
 ### Added
 
+- A window workspace for the desktop GUI. The window now opens on a blank
+  screen and the operator adds, moves, resizes and closes 16 window types on a
+  12 × 8 snap grid: Fixture Sheet, Sequence Sheet, Playbacks, Pools, Presets,
+  Groups, Worlds, Filters, Effects, Timecode Viewer, Command Line History, DMX
+  Sheet, Masters, Running Playbacks, Patch and Status. The Add Window picker
+  groups them into Common, Pools, Playback, Tools and All, and the left control
+  rail has ADD, CLEAR and RESET. Windows cannot overlap, layouts are session
+  state rather than show/desk data, and every widget action still writes command
+  text through `App::execute`. Command history is bounded at 100 entries and
+  can be recalled into the input. No format change; the hardware/display proof
+  remains the release gate.
 - File management, backups and templates: saving over an existing show now
   leaves a timestamped show-only backup in a `backups/` folder (ten retained),
   and `Backup ["path"]` takes one explicitly. `Files ["folder"]` lists shows

@@ -6,5 +6,7 @@
 //! this model.
 
 pub mod model;
+pub mod workspace;
 
-pub use model::{Model, Pane};
+pub use model::{CommandHistory, Model};
+pub use workspace::{GridRect, Window, WindowId, WindowKind, WindowTab, Workspace, COLUMNS, ROWS};

@@ -10257,7 +10257,7 @@
    "module": "ui/shell",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "ws_ui_user_defined_area",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/ws_ui_user_defined_area.html",
@@ -10569,7 +10569,7 @@
    "module": "ui/shell",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "ws_ui_control_bar",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/ws_ui_control_bar.html",
@@ -45258,7 +45258,7 @@
    "module": "ui/windows",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "wvm",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/wvm.html",
@@ -45279,7 +45279,7 @@
    "module": "ui/windows",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "wvm_add_window",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/wvm_add_window.html",
@@ -45492,7 +45492,7 @@
    "module": "ui/windows",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "wvm_rearrange",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/wvm_rearrange.html",
@@ -45768,7 +45768,7 @@
    "module": "ui/windows",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "wvm_remove_windows",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/wvm_remove_windows.html",
@@ -46203,7 +46203,7 @@
    "module": "ui/windows",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "wvm_pool",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/wvm_pool.html",

@@ -1,18 +1,22 @@
-//! The eframe window: five panes, a command line and ten faders.
+//! The eframe window: a user-defined screen of movable windows, a command
+//! line and a dark console-style chrome.
 //!
-//! Drawing reads [`Snapshot`] only. Every button and drag goes through
-//! [`Model`] as command text, so the window cannot mutate the show directly.
+//! Drawing reads [`Snapshot`] only. Every action still becomes command text
+//! and goes through [`Model`], so the window cannot mutate the show directly.
 
 use std::time::{Duration, Instant};
 
 use eframe::egui;
 use openlight_app::{format_cue_number, App, PlaybackRow, Snapshot, TimecodeRowKind};
 use openlight_desktop::model::step_percent;
-use openlight_desktop::{Model, Pane};
+use openlight_desktop::workspace::{
+    GridRect, Window, WindowId, WindowKind, WindowTab, COLUMNS, ROWS,
+};
+use openlight_desktop::Model;
 
 use eframe::egui::{
-    Align, Color32, FontId, Key, Layout, RichText, ScrollArea, Sense, TextEdit, TextStyle, Ui,
-    ViewportCommand,
+    Align, Align2, Button, Color32, FontId, Key, Label, Layout, Margin, Pos2, Rect, RichText,
+    ScrollArea, Sense, Stroke, TextEdit, TextStyle, Ui, UiBuilder, Vec2, ViewportCommand,
 };
 
 /// One repaint's data at most every 16 ms; a snapshot at least every 250 ms
@@ -20,11 +24,21 @@ use eframe::egui::{
 const SNAPSHOT_FLOOR: Duration = Duration::from_millis(250);
 const FADER_INTERVAL: Duration = Duration::from_millis(33);
 
+const SCREEN: Color32 = Color32::from_rgb(9, 11, 15);
+const PANEL: Color32 = Color32::from_rgb(18, 21, 27);
+const WINDOW: Color32 = Color32::from_rgb(24, 28, 35);
+const WINDOW_HEADER: Color32 = Color32::from_rgb(32, 37, 46);
+const GRID_DOT: Color32 = Color32::from_rgb(38, 43, 52);
+const ACCENT: Color32 = Color32::from_rgb(225, 165, 72);
+const MUTED: Color32 = Color32::from_rgb(150, 157, 168);
+const DANGER: Color32 = Color32::from_rgb(229, 94, 94);
+const OK: Color32 = Color32::from_rgb(111, 190, 139);
+
 pub fn run(app: App) -> Result<(), String> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("OpenLight")
-            .with_inner_size([1280.0, 800.0])
+            .with_inner_size([1440.0, 900.0])
             .with_min_inner_size([960.0, 600.0]),
         ..Default::default()
     };
@@ -34,6 +48,20 @@ pub fn run(app: App) -> Result<(), String> {
         Box::new(|cc| Ok(Box::new(Desktop::new(app, cc)))),
     )
     .map_err(|error| error.to_string())
+}
+
+#[derive(Clone, Copy)]
+struct DragState {
+    id: WindowId,
+    start_pointer: Pos2,
+    start: GridRect,
+}
+
+#[derive(Clone, Copy)]
+struct ResizeState {
+    id: WindowId,
+    start_pointer: Pos2,
+    start: GridRect,
 }
 
 struct Desktop {
@@ -59,19 +87,17 @@ struct Desktop {
     /// Code for the top bar's `UNLOCK` button when the desk is locked.
     unlock_code: String,
     focus_command: bool,
+    show_add_picker: bool,
+    picker_tab: WindowTab,
+    /// A clicked empty grid cell, so the picker can place the new window there.
+    pending_cell: Option<(u16, u16)>,
+    drag: Option<DragState>,
+    resize: Option<ResizeState>,
 }
 
 impl Desktop {
     fn new(app: App, cc: &eframe::CreationContext<'_>) -> Self {
-        let mut style = (*cc.egui_ctx.style()).clone();
-        // The panes are tables: monospace by default keeps the columns honest.
-        style
-            .text_styles
-            .insert(TextStyle::Body, FontId::monospace(13.0));
-        style
-            .text_styles
-            .insert(TextStyle::Monospace, FontId::monospace(13.0));
-        cc.egui_ctx.set_style(style);
+        apply_theme(&cc.egui_ctx);
 
         let snapshot = app.snapshot();
         let mut faders = [100.0; 9];
@@ -97,11 +123,21 @@ impl Desktop {
             timecode_event: String::new(),
             unlock_code: String::new(),
             focus_command: true,
+            show_add_picker: false,
+            picker_tab: WindowTab::Common,
+            pending_cell: None,
+            drag: None,
+            resize: None,
         }
     }
 
     fn act(&mut self, command: &str) {
         let _ = self.model.act(&self.app, command);
+    }
+
+    fn open_picker(&mut self, cell: Option<(u16, u16)>) {
+        self.show_add_picker = true;
+        self.pending_cell = cell;
     }
 
     fn sync_faders(&mut self) {
@@ -130,29 +166,35 @@ impl Desktop {
     }
 
     fn keys(&mut self, ctx: &egui::Context) {
-        let mut pane = None;
+        let mut add = false;
         let mut quit = false;
+        let mut escape = false;
         ctx.input(|input| {
-            for (key, candidate) in [
-                (Key::F1, Pane::Sheet),
-                (Key::F2, Pane::Playback),
-                (Key::F3, Pane::Pools),
-                (Key::F4, Pane::Timecode),
-                (Key::F5, Pane::Status),
-            ] {
-                if input.key_pressed(key) {
-                    pane = Some(candidate);
-                }
+            if input.key_pressed(Key::F1) {
+                add = true;
             }
             if input.modifiers.command && input.key_pressed(Key::Q) {
                 quit = true;
             }
             if input.key_pressed(Key::Escape) {
-                self.model.input.clear();
+                escape = true;
             }
         });
-        if let Some(pane) = pane {
-            self.model.switch(pane);
+        if add {
+            if self.show_add_picker {
+                self.show_add_picker = false;
+                self.pending_cell = None;
+            } else {
+                self.open_picker(None);
+            }
+        }
+        if escape {
+            if self.show_add_picker {
+                self.show_add_picker = false;
+                self.pending_cell = None;
+            } else {
+                self.model.input.clear();
+            }
         }
         if quit {
             ctx.send_viewport_cmd(ViewportCommand::Close);
@@ -165,14 +207,19 @@ impl Desktop {
         let blind = self.snapshot.desk.blind;
         let lock = self.snapshot.desk.lock;
         let timecode = self.snapshot.desk.timecode.clone();
+        let running = self.snapshot.playing.len();
         let mut action = None;
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("OpenLight");
-                ui.label(format!("— {show}"));
+                ui.label(RichText::new("OPENLIGHT").strong().color(ACCENT));
+                ui.separator();
+                ui.label(RichText::new(show).monospace());
                 ui.separator();
                 let label = if blackout { "BLACKOUT ON" } else { "BLACKOUT" };
-                if ui.button(label).clicked() {
+                if ui
+                    .button(RichText::new(label).color(if blackout { DANGER } else { MUTED }))
+                    .clicked()
+                {
                     action = Some(if blackout {
                         "Blackout Off".to_string()
                     } else {
@@ -180,10 +227,16 @@ impl Desktop {
                     });
                 }
                 if blind {
-                    ui.colored_label(Color32::from_rgb(230, 190, 60), "BLIND");
+                    ui.colored_label(ACCENT, "BLIND");
+                }
+                if ui
+                    .button(RichText::new("ADD WINDOW").color(ACCENT))
+                    .clicked()
+                {
+                    self.open_picker(None);
                 }
                 if lock {
-                    ui.colored_label(Color32::from_rgb(230, 90, 90), "LOCKED");
+                    ui.colored_label(DANGER, "LOCKED");
                     ui.add(
                         TextEdit::singleline(&mut self.unlock_code)
                             .desired_width(60.0)
@@ -202,6 +255,8 @@ impl Desktop {
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.monospace(timecode);
+                    ui.separator();
+                    ui.label(RichText::new(format!("{running} running")).color(MUTED));
                 });
             });
         });
@@ -210,141 +265,403 @@ impl Desktop {
         }
     }
 
-    fn pane_bar(&mut self, ctx: &egui::Context) {
-        egui::SidePanel::left("panes")
-            .exact_width(126.0)
+    fn control_bar(&mut self, ctx: &egui::Context) {
+        let page = self.snapshot.desk.page;
+        let page_name = self.snapshot.desk.page_name.clone();
+        let selection = self.snapshot.desk.selection.len();
+        let running = self.snapshot.playing.len();
+        egui::SidePanel::left("control")
+            .exact_width(96.0)
+            .resizable(false)
             .show(ctx, |ui| {
-                ui.add_space(6.0);
-                for pane in Pane::ALL {
-                    let selected = self.model.pane == pane;
-                    if ui
-                        .selectable_label(
-                            selected,
-                            RichText::new(format!("{}  {}", pane.function_key(), pane.title()))
-                                .monospace(),
-                        )
-                        .clicked()
-                    {
-                        self.model.switch(pane);
-                    }
+                ui.add_space(8.0);
+                if ui
+                    .add_sized(
+                        [78.0, 32.0],
+                        Button::new(RichText::new("+  ADD").color(ACCENT)),
+                    )
+                    .on_hover_text("Add a window (F1)")
+                    .clicked()
+                {
+                    self.open_picker(None);
+                }
+                if ui
+                    .add_sized([78.0, 28.0], Button::new("CLEAR SCREEN"))
+                    .on_hover_text("Remove every window without touching the show")
+                    .clicked()
+                {
+                    self.model.workspace.clear();
+                    self.drag = None;
+                    self.resize = None;
+                }
+                if ui
+                    .add_sized([78.0, 28.0], Button::new("RESET"))
+                    .on_hover_text("Clear the screen and close the picker")
+                    .clicked()
+                {
+                    self.model.workspace.clear();
+                    self.show_add_picker = false;
+                    self.pending_cell = None;
+                    self.drag = None;
+                    self.resize = None;
                 }
                 ui.separator();
-                ui.monospace(format!("{}", self.snapshot.desk.selection.len()));
-                ui.label(RichText::new("selected").small());
+                ui.label(RichText::new("PAGE").small().color(MUTED));
+                ui.label(RichText::new(format!("{page}")).heading().color(ACCENT));
+                ui.label(RichText::new(page_name).small());
+                ui.separator();
+                ui.label(RichText::new("SELECTED").small().color(MUTED));
+                ui.label(RichText::new(selection.to_string()).heading());
+                ui.separator();
+                ui.label(RichText::new("RUNNING").small().color(MUTED));
+                ui.label(RichText::new(running.to_string()).heading());
+                ui.with_layout(Layout::bottom_up(Align::LEFT), |ui| {
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new("ADD  F1\nCLEAR  —\nRESET  —")
+                            .small()
+                            .color(MUTED),
+                    );
+                });
             });
     }
 
-    fn fader_bar(&mut self, ctx: &egui::Context) {
-        let mut pending = None;
-        let mut flash_action = None;
-        let has_executor: [bool; 9] = std::array::from_fn(|index| {
-            self.snapshot
-                .desk
-                .executors
-                .iter()
-                .any(|view| usize::from(view.number) == index + 1)
+    fn workspace_panel(&mut self, ctx: &egui::Context) {
+        let mut clicked_cell = None;
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let screen = ui.max_rect();
+            let cell = Vec2::new(
+                (screen.width() / f32::from(COLUMNS)).max(1.0),
+                (screen.height() / f32::from(ROWS)).max(1.0),
+            );
+            ui.painter().rect_filled(screen, 0.0, SCREEN);
+            paint_grid(ui, screen, cell);
+
+            if self.model.workspace.is_empty() {
+                ui.painter().text(
+                    screen.center() - Vec2::new(0.0, 26.0),
+                    Align2::CENTER_CENTER,
+                    "SCREEN 1 IS EMPTY",
+                    FontId::monospace(22.0),
+                    MUTED,
+                );
+                ui.painter().text(
+                    screen.center() + Vec2::new(0.0, 2.0),
+                    Align2::CENTER_CENTER,
+                    "Add windows to build a workspace",
+                    FontId::monospace(13.0),
+                    Color32::from_gray(110),
+                );
+                let button_rect = Rect::from_center_size(
+                    screen.center() + Vec2::new(0.0, 44.0),
+                    Vec2::new(190.0, 38.0),
+                );
+                if ui
+                    .put(
+                        button_rect,
+                        Button::new(RichText::new("+  ADD WINDOW").color(ACCENT)),
+                    )
+                    .on_hover_text("Open the Add Window picker")
+                    .clicked()
+                {
+                    self.open_picker(None);
+                }
+            }
+
+            // Read the click directly instead of registering a full-screen
+            // interactive widget: a background widget would compete with the
+            // windows for hit testing. A click inside a window is rejected by
+            // `window_at`; the picker itself owns clicks while it is open.
+            let clicked = ui.input(|input| input.pointer.primary_clicked());
+            if clicked && !self.show_add_picker {
+                if let Some(pointer) = ui.input(|input| input.pointer.interact_pos()) {
+                    if screen.contains(pointer) {
+                        if let Some(cell) = grid_cell(screen, cell, pointer) {
+                            if self.model.workspace.window_at(cell.0, cell.1).is_none() {
+                                clicked_cell = Some(cell);
+                            }
+                        }
+                    }
+                }
+            }
+
+            let windows = self.model.workspace.windows().to_vec();
+            for window in windows {
+                self.draw_window(ui, &window, screen, cell);
+            }
+            self.apply_layout_gestures(ctx, cell);
         });
-        let flash: [bool; 9] = std::array::from_fn(|index| {
-            self.snapshot
-                .desk
-                .executors
-                .iter()
-                .find(|view| usize::from(view.number) == index + 1)
-                .map(|view| view.flash)
-                .unwrap_or(false)
-        });
-        egui::SidePanel::right("faders")
-            .exact_width(330.0)
-            .show(ctx, |ui| {
-                ui.add_space(4.0);
-                ui.monospace(format!(
-                    "FADERS  ·  page {}  {}",
-                    self.snapshot.desk.page, self.snapshot.desk.page_name
-                ));
+        if let Some(cell) = clicked_cell {
+            self.open_picker(Some(cell));
+        }
+        self.add_picker(ctx);
+    }
+
+    fn draw_window(&mut self, ui: &mut Ui, window: &Window, screen: Rect, cell: Vec2) {
+        let window_rect = Rect::from_min_size(
+            screen.min
+                + Vec2::new(
+                    f32::from(window.rect.x) * cell.x,
+                    f32::from(window.rect.y) * cell.y,
+                ),
+            Vec2::new(
+                f32::from(window.rect.width) * cell.x,
+                f32::from(window.rect.height) * cell.y,
+            ),
+        )
+        .shrink(2.0);
+        if window_rect.width() < 8.0 || window_rect.height() < 8.0 {
+            return;
+        }
+
+        let mut child = ui.new_child(UiBuilder::new().max_rect(window_rect));
+        child.set_clip_rect(window_rect);
+        let mut close = false;
+        let mut drag_start = None;
+        let mut resize_start = None;
+
+        egui::Frame::new()
+            .fill(WINDOW)
+            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(52, 59, 70)))
+            .corner_radius(egui::CornerRadius::same(4))
+            .inner_margin(Margin::same(4))
+            .show(&mut child, |ui| {
+                ui.set_clip_rect(window_rect);
+                // The whole title bar is the drag handle; the close button is
+                // created afterwards, so it wins the corner hit test.
+                let header_rect =
+                    Rect::from_min_size(ui.cursor().min, Vec2::new(ui.available_width(), 20.0));
+                ui.painter()
+                    .rect_filled(header_rect, egui::CornerRadius::same(2), WINDOW_HEADER);
+                let header = ui.interact(
+                    header_rect,
+                    ui.id().with(("window-drag", window.id.0)),
+                    Sense::click_and_drag(),
+                );
+                if header.drag_started() {
+                    drag_start = header.interact_pointer_pos();
+                }
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().slider_width = 132.0;
-                    for number in 1..=9 {
-                        ui.vertical(|ui| {
-                            ui.monospace(format!("{number}"));
-                            let enabled = has_executor[number - 1];
-                            let before = self.faders[number - 1];
-                            let response = ui.add_enabled(
-                                enabled,
-                                egui::Slider::new(&mut self.faders[number - 1], 0.0..=100.0)
-                                    .vertical()
-                                    .show_value(true),
-                            );
-                            if response.changed() {
-                                pending = Some((number as u16, self.faders[number - 1] / 100.0));
-                            }
-                            if response.has_focus() {
-                                let step = step_from_keys(ui);
-                                if step != 0.0 {
-                                    self.faders[number - 1] = step_percent(before, step);
-                                    pending =
-                                        Some((number as u16, self.faders[number - 1] / 100.0));
-                                }
-                            }
-                            if enabled
-                                && ui
-                                    .selectable_label(flash[number - 1], RichText::new("F").small())
-                                    .on_hover_text("Flash")
-                                    .clicked()
-                            {
-                                flash_action = Some(if flash[number - 1] {
-                                    format!("Executor {number} Flash Off")
-                                } else {
-                                    format!("Executor {number} Flash")
-                                });
-                            }
-                        });
+                    ui.label(
+                        RichText::new(window.kind.title())
+                            .strong()
+                            .color(Color32::from_rgb(222, 226, 233)),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .small_button(RichText::new("×").color(DANGER))
+                            .on_hover_text("Close window")
+                            .clicked()
+                        {
+                            close = true;
+                        }
+                    });
+                });
+                ui.separator();
+                ui.push_id(window.id, |ui| {
+                    self.window_body(window.kind, ui);
+                });
+
+                // The grip is created after the body so it wins hit testing in
+                // the lower-right corner.
+                let grip =
+                    Rect::from_min_size(window_rect.max - Vec2::splat(14.0), Vec2::splat(14.0));
+                let response = ui.interact(
+                    grip,
+                    ui.id().with(("window-resize", window.id.0)),
+                    Sense::drag(),
+                );
+                ui.painter().line_segment(
+                    [
+                        grip.right_bottom() - Vec2::new(2.0, 10.0),
+                        grip.right_bottom() - Vec2::new(10.0, 2.0),
+                    ],
+                    Stroke::new(1.0_f32, MUTED),
+                );
+                if response.drag_started() {
+                    resize_start = response.interact_pointer_pos();
+                }
+                ui.painter().rect_stroke(
+                    grip,
+                    0.0,
+                    Stroke::new(0.5_f32, Color32::from_rgb(70, 78, 90)),
+                    egui::StrokeKind::Inside,
+                );
+            });
+
+        if let Some(pointer) = drag_start {
+            self.drag = Some(DragState {
+                id: window.id,
+                start_pointer: pointer,
+                start: window.rect,
+            });
+            self.resize = None;
+        }
+        if let Some(pointer) = resize_start {
+            self.resize = Some(ResizeState {
+                id: window.id,
+                start_pointer: pointer,
+                start: window.rect,
+            });
+            self.drag = None;
+        }
+        if close {
+            self.model.remove_window(window.id);
+            if self.drag.is_some_and(|drag| drag.id == window.id) {
+                self.drag = None;
+            }
+            if self.resize.is_some_and(|resize| resize.id == window.id) {
+                self.resize = None;
+            }
+        }
+    }
+
+    fn apply_layout_gestures(&mut self, ctx: &egui::Context, cell: Vec2) {
+        let pointer = ctx.pointer_interact_pos();
+        let down = ctx.input(|input| input.pointer.primary_down());
+
+        if let Some(drag) = self.drag {
+            if let Some(pointer) = pointer {
+                let dx = ((pointer.x - drag.start_pointer.x) / cell.x).round() as i32;
+                let dy = ((pointer.y - drag.start_pointer.y) / cell.y).round() as i32;
+                let max_x = i32::from(COLUMNS).saturating_sub(i32::from(drag.start.width));
+                let max_y = i32::from(ROWS).saturating_sub(i32::from(drag.start.height));
+                let x = (i32::from(drag.start.x) + dx).clamp(0, max_x.max(0)) as u16;
+                let y = (i32::from(drag.start.y) + dy).clamp(0, max_y.max(0)) as u16;
+                let _ = self.model.workspace.move_to(drag.id, x, y);
+            }
+            if !down {
+                self.drag = None;
+            }
+        }
+
+        if let Some(resize) = self.resize {
+            if let Some(pointer) = pointer {
+                let dx = ((pointer.x - resize.start_pointer.x) / cell.x).round() as i32;
+                let dy = ((pointer.y - resize.start_pointer.y) / cell.y).round() as i32;
+                let width = (i32::from(resize.start.width) + dx).max(1) as u16;
+                let height = (i32::from(resize.start.height) + dy).max(1) as u16;
+                let _ = self.model.workspace.resize(resize.id, width, height);
+            }
+            if !down {
+                self.resize = None;
+            }
+        }
+    }
+
+    fn add_picker(&mut self, ctx: &egui::Context) {
+        if !self.show_add_picker {
+            return;
+        }
+        let mut open = true;
+        let mut close_picker = false;
+        let mut selected_tab = self.picker_tab;
+        let mut add = None;
+        egui::Window::new("Add Window")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+            .default_width(560.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new("Choose a window for this screen. It snaps to the grid.")
+                        .color(MUTED),
+                );
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    for tab in WindowTab::ALL {
+                        if ui
+                            .selectable_label(selected_tab == tab, tab.title())
+                            .clicked()
+                        {
+                            selected_tab = tab;
+                        }
                     }
                 });
                 ui.separator();
-                ui.monospace("GRAND");
-                let before = self.grand;
-                let response = ui.add(
-                    egui::Slider::new(&mut self.grand, 0.0..=100.0)
-                        .text("grand master")
-                        .show_value(true),
-                );
-                if response.changed() {
-                    pending = Some((0, self.grand / 100.0));
-                }
-                if response.has_focus() {
-                    let step = step_from_keys(ui);
-                    if step != 0.0 {
-                        self.grand = step_percent(before, step);
-                        pending = Some((0, self.grand / 100.0));
-                    }
-                }
-                ui.add_space(6.0);
-                let running = self.snapshot.playing.len();
-                ui.monospace(format!("{running} playback(s) running"));
+                let kinds = selected_tab.kinds();
+                egui::Grid::new("add-window-grid")
+                    .num_columns(2)
+                    .spacing([8.0, 6.0])
+                    .show(ui, |ui| {
+                        for (index, kind) in kinds.iter().enumerate() {
+                            let (width, height) = kind.default_size();
+                            let label = format!("{}   {}×{}", kind.title(), width, height);
+                            if ui
+                                .add_sized([252.0, 34.0], Button::new(label))
+                                .on_hover_text(kind.description())
+                                .clicked()
+                            {
+                                add = Some(*kind);
+                            }
+                            if index % 2 == 1 {
+                                ui.end_row();
+                            }
+                        }
+                        if kinds.len() % 2 == 1 {
+                            ui.end_row();
+                        }
+                    });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("The screen is session state; it starts blank.")
+                            .small()
+                            .color(MUTED),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.button("Close").clicked() {
+                            close_picker = true;
+                        }
+                    });
+                });
             });
-        if pending.is_some() {
-            self.pending_fader = pending;
+        self.picker_tab = selected_tab;
+        if close_picker {
+            open = false;
         }
-        if let Some(action) = flash_action {
-            self.act(&action);
+        if let Some(kind) = add {
+            if self.model.add_window_at(kind, self.pending_cell).is_none() {
+                self.model.message =
+                    "No free grid space for that window. Close or resize one first.".into();
+                self.model.error = false;
+            } else {
+                self.show_add_picker = false;
+                self.pending_cell = None;
+            }
+        }
+        if !open {
+            self.show_add_picker = false;
+            self.pending_cell = None;
         }
     }
 
-    fn central(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default().show(ctx, |ui| match self.model.pane {
-            Pane::Sheet => self.sheet(ui),
-            Pane::Playback => self.playback(ui),
-            Pane::Pools => self.pools(ui),
-            Pane::Timecode => self.timecode(ui),
-            Pane::Status => self.status(ui),
-        });
+    fn window_body(&mut self, kind: WindowKind, ui: &mut Ui) {
+        match kind {
+            WindowKind::FixtureSheet => self.sheet(ui),
+            WindowKind::SequenceSheet => self.playback(ui),
+            WindowKind::Playbacks => self.playbacks(ui),
+            WindowKind::Pools => self.pools(ui, None),
+            WindowKind::Presets => self.pools(ui, Some("Palette")),
+            WindowKind::Groups => self.pools(ui, Some("Group")),
+            WindowKind::Worlds => self.pools(ui, Some("World")),
+            WindowKind::Filters => self.pools(ui, Some("Filter")),
+            WindowKind::Effects => self.pools(ui, Some("Effect")),
+            WindowKind::Timecode => self.timecode(ui),
+            WindowKind::CommandLineHistory => self.command_history(ui),
+            WindowKind::DmxSheet => self.dmx_sheet(ui),
+            WindowKind::Masters => self.masters(ui),
+            WindowKind::RunningPlaybacks => self.running_playbacks(ui),
+            WindowKind::Patch => self.patch(ui),
+            WindowKind::Status => self.status(ui),
+        }
     }
 
     fn sheet(&mut self, ui: &mut Ui) {
-        ui.heading("Sheet");
         let rows = &self.snapshot.listings.sheet;
         let mut action = None;
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Selection:");
             ui.add(egui::Slider::new(&mut self.at_level, 0.0..=100.0).text("%"));
             if ui.button("At").clicked() {
@@ -435,7 +752,6 @@ impl Desktop {
     }
 
     fn playback(&mut self, ui: &mut Ui) {
-        ui.heading("Playback");
         let rows = &self.snapshot.listings.playback;
         if rows.is_empty() {
             ui.label("No cues stored.");
@@ -445,7 +761,7 @@ impl Desktop {
         let mut select = None;
         let mut transport = None;
         if let Some(sequence) = selected {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.monospace(format!("Sequence {sequence}"));
                 for action in ["Go", "Back", "Pause", "Release"] {
                     if ui.button(action).clicked() {
@@ -504,11 +820,20 @@ impl Desktop {
         }
     }
 
-    fn pools(&mut self, ui: &mut Ui) {
-        ui.heading("Pools");
-        let rows = &self.snapshot.listings.pools;
+    fn pools(&mut self, ui: &mut Ui, filter: Option<&str>) {
+        let rows: Vec<_> = self
+            .snapshot
+            .listings
+            .pools
+            .iter()
+            .filter(|row| filter.is_none_or(|kind| row.kind == kind))
+            .collect();
         if rows.is_empty() {
-            ui.label("No palettes, groups, worlds, filters or effects stored.");
+            ui.label(if let Some(kind) = filter {
+                format!("No {kind} entries stored.")
+            } else {
+                "No palettes, groups, worlds, filters or effects stored.".to_string()
+            });
             return;
         }
         let mut action = None;
@@ -557,13 +882,12 @@ impl Desktop {
     }
 
     fn timecode(&mut self, ui: &mut Ui) {
-        ui.heading("Timecode");
         let rows = &self.snapshot.listings.timecode;
         if rows.is_empty() {
             ui.label("No timecode shows stored.");
             return;
         }
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Locate:");
             ui.add(
                 TextEdit::singleline(&mut self.timecode_at)
@@ -639,8 +963,280 @@ impl Desktop {
         }
     }
 
+    fn playbacks(&mut self, ui: &mut Ui) {
+        let mut pending = None;
+        let mut flash_action = None;
+        let has_executor: [bool; 9] = std::array::from_fn(|index| {
+            self.snapshot
+                .desk
+                .executors
+                .iter()
+                .any(|view| usize::from(view.number) == index + 1)
+        });
+        let flash: [bool; 9] = std::array::from_fn(|index| {
+            self.snapshot
+                .desk
+                .executors
+                .iter()
+                .find(|view| usize::from(view.number) == index + 1)
+                .map(|view| view.flash)
+                .unwrap_or(false)
+        });
+        ui.monospace(format!(
+            "FADERS  ·  page {}  {}",
+            self.snapshot.desk.page, self.snapshot.desk.page_name
+        ));
+        ScrollArea::horizontal()
+            .id_salt("playback-faders")
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.spacing_mut().slider_width = 48.0;
+                ui.spacing_mut().item_spacing.x = 2.0;
+                ui.horizontal(|ui| {
+                    for number in 1..=9 {
+                        ui.vertical(|ui| {
+                            ui.monospace(format!("{number}"));
+                            let enabled = has_executor[number - 1];
+                            let before = self.faders[number - 1];
+                            let response = ui.add_enabled(
+                                enabled,
+                                egui::Slider::new(&mut self.faders[number - 1], 0.0..=100.0)
+                                    .vertical()
+                                    .show_value(true),
+                            );
+                            if response.changed() {
+                                pending = Some((number as u16, self.faders[number - 1] / 100.0));
+                            }
+                            if response.has_focus() {
+                                let step = step_from_keys(ui);
+                                if step != 0.0 {
+                                    self.faders[number - 1] = step_percent(before, step);
+                                    pending =
+                                        Some((number as u16, self.faders[number - 1] / 100.0));
+                                }
+                            }
+                            if enabled
+                                && ui
+                                    .selectable_label(flash[number - 1], RichText::new("F").small())
+                                    .on_hover_text("Flash")
+                                    .clicked()
+                            {
+                                flash_action = Some(if flash[number - 1] {
+                                    format!("Executor {number} Flash Off")
+                                } else {
+                                    format!("Executor {number} Flash")
+                                });
+                            }
+                        });
+                    }
+                });
+            });
+        ui.separator();
+        ui.monospace("GRAND");
+        let before = self.grand;
+        let response = ui.add(
+            egui::Slider::new(&mut self.grand, 0.0..=100.0)
+                .text("grand master")
+                .show_value(true),
+        );
+        if response.changed() {
+            pending = Some((0, self.grand / 100.0));
+        }
+        if response.has_focus() {
+            let step = step_from_keys(ui);
+            if step != 0.0 {
+                self.grand = step_percent(before, step);
+                pending = Some((0, self.grand / 100.0));
+            }
+        }
+        ui.add_space(4.0);
+        let running = self.snapshot.playing.len();
+        ui.monospace(format!("{running} playback(s) running"));
+        if pending.is_some() {
+            self.pending_fader = pending;
+        }
+        if let Some(action) = flash_action {
+            self.act(&action);
+        }
+    }
+
+    fn masters(&mut self, ui: &mut Ui) {
+        let mut action = None;
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Page Prev").clicked() {
+                action = Some("Page Prev".to_string());
+            }
+            if ui.button("Page Next").clicked() {
+                action = Some("Page Next".to_string());
+            }
+        });
+        ui.separator();
+        ui.monospace(format!(
+            "Page      {}  {}",
+            self.snapshot.desk.page, self.snapshot.desk.page_name
+        ));
+        ui.monospace(format!(
+            "Grand     {:.0}%",
+            self.snapshot.desk.grand * 100.0
+        ));
+        ui.monospace(format!("Rate      {:.0}%", self.snapshot.desk.rate * 100.0));
+        ui.monospace(format!("Tempo     {:.1} BPM", self.snapshot.desk.tempo));
+        ui.monospace(format!("Selected  {}", self.snapshot.desk.selection.len()));
+        ui.monospace(format!("Blind     {}", yes_no(self.snapshot.desk.blind)));
+        ui.monospace(format!("Blackout  {}", yes_no(self.snapshot.desk.blackout)));
+        if let Some(action) = action {
+            self.act(&action);
+        }
+    }
+
+    fn running_playbacks(&mut self, ui: &mut Ui) {
+        if self.snapshot.playing.is_empty() {
+            ui.label("No playback is running.");
+            return;
+        }
+        ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for playback in &self.snapshot.playing {
+                    ui.horizontal(|ui| {
+                        ui.monospace(format!("{:<18}", playback.target));
+                        ui.monospace(format!("{:<10}", playback.cue));
+                        ui.monospace(format!("{:>4.0}%", playback.progress * 100.0));
+                        let state = if playback.done {
+                            "complete".to_string()
+                        } else if playback.paused {
+                            "paused".to_string()
+                        } else {
+                            "running".to_string()
+                        };
+                        ui.label(if playback.done || playback.paused {
+                            RichText::new(state).color(MUTED)
+                        } else {
+                            RichText::new(state).color(OK)
+                        });
+                    });
+                }
+            });
+    }
+
+    fn dmx_sheet(&mut self, ui: &mut Ui) {
+        let universes: Vec<(u16, Vec<u8>)> = self
+            .snapshot
+            .frame
+            .universes()
+            .map(|(number, slots)| (number, slots.to_vec()))
+            .collect();
+        if universes.is_empty() {
+            ui.label("No rendered universes yet.");
+            return;
+        }
+        ScrollArea::both()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for (universe, slots) in universes {
+                    ui.monospace(
+                        RichText::new(format!("Universe {universe}"))
+                            .strong()
+                            .color(ACCENT),
+                    );
+                    egui::Grid::new(format!("dmx-{universe}"))
+                        .num_columns(16)
+                        .striped(true)
+                        .spacing([5.0, 1.0])
+                        .show(ui, |ui| {
+                            for address in 1..=slots.len() {
+                                let value = slots[address - 1];
+                                ui.monospace(
+                                    RichText::new(format!("{address:03}:{value:03}"))
+                                        .small()
+                                        .color(if value == 0 {
+                                            MUTED
+                                        } else {
+                                            Color32::from_gray(220)
+                                        }),
+                                );
+                                if address % 16 == 0 {
+                                    ui.end_row();
+                                }
+                            }
+                        });
+                    ui.add_space(6.0);
+                }
+            });
+    }
+
+    fn patch(&mut self, ui: &mut Ui) {
+        let rows = &self.snapshot.listings.sheet;
+        if rows.is_empty() {
+            ui.label("No fixtures patched.");
+            return;
+        }
+        ScrollArea::both()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new("patch")
+                    .num_columns(5)
+                    .striped(true)
+                    .spacing([12.0, 3.0])
+                    .show(ui, |ui| {
+                        for header in ["No.", "Name", "Type", "Mode", "Patch"] {
+                            ui.monospace(RichText::new(header).strong());
+                        }
+                        ui.end_row();
+                        for row in rows {
+                            ui.monospace(row.number.to_string());
+                            ui.monospace(&row.name);
+                            ui.monospace(&row.type_key);
+                            ui.monospace(&row.mode);
+                            ui.monospace(row.patch());
+                            ui.end_row();
+                        }
+                    });
+            });
+    }
+
+    fn command_history(&mut self, ui: &mut Ui) {
+        if self.model.history.is_empty() {
+            ui.label("No commands run yet.");
+            return;
+        }
+        let history = self.model.history.clone();
+        let mut recall = None;
+        ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for entry in &history {
+                    let command = ui.add(
+                        Label::new(
+                            RichText::new(format!("> {}", entry.command))
+                                .monospace()
+                                .color(if entry.error {
+                                    DANGER
+                                } else {
+                                    Color32::from_gray(220)
+                                }),
+                        )
+                        .sense(Sense::click()),
+                    );
+                    if command.clicked() {
+                        recall = Some(entry.command.clone());
+                    }
+                    command.on_hover_text("Click to recall this command");
+                    ui.label(RichText::new(&entry.message).small().color(if entry.error {
+                        DANGER
+                    } else {
+                        MUTED
+                    }));
+                    ui.separator();
+                }
+            });
+        if let Some(command) = recall {
+            self.model.input = command;
+            self.focus_command = true;
+        }
+    }
+
     fn status(&mut self, ui: &mut Ui) {
-        ui.heading("Status");
         ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -657,7 +1253,7 @@ impl Desktop {
             }
             let mut submit = false;
             ui.horizontal(|ui| {
-                ui.monospace("openlight>");
+                ui.monospace(RichText::new("openlight>").color(ACCENT));
                 let response = ui.add(
                     TextEdit::singleline(&mut self.model.input)
                         .desired_width(f32::INFINITY)
@@ -674,15 +1270,12 @@ impl Desktop {
                 let _ = self.model.submit(&self.app);
                 self.focus_command = true;
             }
-            let colour = if self.model.error {
-                Color32::from_rgb(230, 90, 90)
-            } else {
-                Color32::from_gray(170)
-            };
+            let colour = if self.model.error { DANGER } else { MUTED };
             ui.monospace(RichText::new(&self.model.message).color(colour));
             ui.label(
-                RichText::new("F1–F5 panes · Enter run · drag a fader · Esc clear · Ctrl-Q quit")
-                    .small(),
+                RichText::new("F1 add window · click empty screen · drag title / corner · Enter run · Ctrl-Q quit")
+                    .small()
+                    .color(MUTED),
             );
         });
     }
@@ -706,9 +1299,8 @@ impl eframe::App for Desktop {
 
         self.top_bar(ctx);
         self.command_bar(ctx);
-        self.pane_bar(ctx);
-        self.fader_bar(ctx);
-        self.central(ctx);
+        self.control_bar(ctx);
+        self.workspace_panel(ctx);
         self.flush_fader(ctx);
         ctx.request_repaint_after(Duration::from_millis(16));
     }
@@ -716,6 +1308,46 @@ impl eframe::App for Desktop {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.app.stop();
     }
+}
+
+fn apply_theme(ctx: &egui::Context) {
+    let mut visuals = egui::Visuals::dark();
+    visuals.panel_fill = PANEL;
+    visuals.window_fill = WINDOW;
+    visuals.extreme_bg_color = SCREEN;
+    visuals.faint_bg_color = WINDOW_HEADER;
+    visuals.selection.bg_fill = Color32::from_rgb(55, 79, 98);
+    visuals.selection.stroke = Stroke::new(1.0_f32, ACCENT);
+    ctx.set_visuals(visuals);
+
+    let mut style = (*ctx.style()).clone();
+    style
+        .text_styles
+        .insert(TextStyle::Body, FontId::monospace(13.0));
+    style
+        .text_styles
+        .insert(TextStyle::Monospace, FontId::monospace(13.0));
+    style.spacing.item_spacing = Vec2::new(6.0, 4.0);
+    ctx.set_style(style);
+}
+
+fn paint_grid(ui: &Ui, screen: Rect, cell: Vec2) {
+    for y in 0..ROWS {
+        for x in 0..COLUMNS {
+            let point = screen.min
+                + Vec2::new((f32::from(x) + 0.5) * cell.x, (f32::from(y) + 0.5) * cell.y);
+            ui.painter().circle_filled(point, 1.0, GRID_DOT);
+        }
+    }
+}
+
+fn grid_cell(screen: Rect, cell: Vec2, pointer: Pos2) -> Option<(u16, u16)> {
+    let x = ((pointer.x - screen.left()) / cell.x).floor();
+    let y = ((pointer.y - screen.top()) / cell.y).floor();
+    if x < 0.0 || y < 0.0 || x >= f32::from(COLUMNS) || y >= f32::from(ROWS) {
+        return None;
+    }
+    Some((x as u16, y as u16))
 }
 
 /// A 5% keyboard nudge when a fader has focus.
@@ -737,5 +1369,13 @@ fn state(row: &PlaybackRow) -> String {
         Some(run) if run.paused => "paused".to_string(),
         Some(run) if run.done => "complete".to_string(),
         Some(run) => format!("{:.0}%", run.progress * 100.0),
+    }
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value {
+        "yes"
+    } else {
+        "no"
     }
 }

@@ -19,7 +19,7 @@ profiles that you supply.
 | 2 | Palettes, cues, sequences, executor faders | done — see [`docs/PHASE2.md`](docs/PHASE2.md) |
 | 3 | Groups, worlds, filters, masters, effects | done — see [`docs/PHASE3.md`](docs/PHASE3.md) |
 | 4 | Timecode, move-in-black, undo, first UI shell | done — see [`docs/PHASE4.md`](docs/PHASE4.md) |
-| 5+ | desk state, output, journal, blackout/lock, cues, timing, home, cue editing, viewing, 16-bit, patch tools, effects, external timecode, remote, MVR, fixture builder, macros/CLI, release readiness, desktop GUI | done — all eighteen roadmap designs built; see [`docs/PHASE5.md`](docs/PHASE5.md) |
+| 5+ | desk state, output, journal, blackout/lock, cues, timing, home, cue editing, viewing, 16-bit, patch tools, effects, external timecode, remote, MVR, fixture builder, macros/CLI, release readiness, desktop GUI, window workspace | done — all eighteen roadmap designs and the follow-up window workspace built; see [`docs/PHASE5.md`](docs/PHASE5.md) |
 
 It is a console with a command line, a full-screen terminal shell, a script
 runner and four output transports. You can program, store palettes and cues, run
@@ -77,14 +77,17 @@ gaps and footprint overflow, and `Patch Import` / `Report Patch` round-trip the
 patch through a spreadsheet. `Report Cues`, `Report Palettes`, `Report Status`
 and `Report Show` write the listings as files, and `--check` runs the patch
 check for CI. A native window (`cargo run -p openlight-desktop --features gui`)
-draws the same five panes and command line, with draggable executor faders and
-a blackout button; the terminal shell stays the default for headless boxes, and
-the window build is feature-gated so tests and the MSRV job need no display.
+opens on a blank screen: add, move and resize Fixture Sheet, Sequence Sheet,
+Playbacks, Pools, Presets, Groups, Worlds, Filters, Effects, Timecode, Command
+Line History, DMX Sheet, Masters, Running Playbacks, Patch and Status windows,
+with draggable executor faders and a blackout button. The terminal shell stays
+the default for headless boxes, and the window build is feature-gated so tests
+and the MSRV job need no display.
 
 ## Quick start
 
 ```bash
-cargo test --workspace            # 612 tests on Linux, no hardware needed
+cargo test --workspace            # 636 tests on Linux, no hardware needed
 cargo run -p openlight-console    # interactive console
 cargo run -p openlight-console -- --ui   # full-screen terminal shell
 cargo run -p openlight-desktop --features gui   # native window

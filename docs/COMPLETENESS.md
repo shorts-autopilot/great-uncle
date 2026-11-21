@@ -10,9 +10,9 @@ This ledger records scope and implementation evidence; it does not claim that a 
 
 | Status | Rows | Meaning |
 |---|---|---|
-| implemented | 62 | Works and is covered by tests. |
-| in-progress | 97 | Part of the feature exists; the rest is deferred. |
-| not-started | 672 | Not built, or not designed yet. |
+| implemented | 66 | Works and is covered by tests. |
+| in-progress | 100 | Part of the feature exists; the rest is deferred. |
+| not-started | 665 | Not built, or not designed yet. |
 | out-of-scope | 392 | Not a feature of this product; reason recorded below. |
 | verified | 0 | Implemented and proven on hardware. |
 
@@ -30,9 +30,9 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 0 | First Steps | hardware | 20 | 20 out-of-scope | Vendor onboarding for consoles; the project's quick start is in README.md. |
 | 1 | grandMA3 onPC | platform | 8 | 1 in-progress, 7 out-of-scope | The headless `openlight` binary is the onPC equivalent; vendor installer/OS rows are out of scope. |
 | 1 | Show File Handling | showfile | 6 | 2 in-progress, 4 implemented | Item 24 adds backups, templates, save-as and show-file operations; demo shows, history, description, automatic numbering, media export and the converter remain deferred. |
-| 1 | Workspace | ui/shell | 30 | 19 not-started, 5 in-progress, 2 implemented, 4 out-of-scope | Terminal shell exists; windows, panels and themes are item 18. |
+| 1 | Workspace | ui/shell | 30 | 17 not-started, 5 in-progress, 4 implemented, 4 out-of-scope | Item 25 adds the user-defined window area and control rail; encoder, calculator and theme windows remain. |
 | 2 | Command Syntax and Keywords | cmd | 427 | 368 not-started, 56 in-progress, 3 implemented | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
-| 1 | Windows, Views, and Menus | ui/windows | 16 | 14 not-started, 2 in-progress | Windows/views/menus are item 18. |
+| 1 | Windows, Views, and Menus | ui/windows | 16 | 9 not-started, 5 in-progress, 2 implemented | Windows/views/menus are item 18. |
 | 5 | Networking | session | 16 | 16 out-of-scope | Networked sessions and multi-user collaboration are outside the single-operator design. |
 | 1 | DMX In and Out | output | 6 | 1 in-progress, 1 implemented, 4 out-of-scope | Serial output, input and per-universe merge are built; Ethernet DMX and device-configuration import/export remain out of scope. |
 | 5 | Single User and Multi User Systems | users | 5 | 5 out-of-scope | User accounts, ownership and screen configuration are outside the single-operator design. |
@@ -66,7 +66,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 3 | Agenda | timecode | 5 | 5 not-started | Needs a design. |
 | 3 | Timers | timecode | 3 | 3 not-started | Needs a design. |
 | 3 | Timecode Show | timecode | 11 | 2 not-started, 7 in-progress, 2 implemented | Item 15 adds tracks, markers and MTC; OSC ingestion and track groups still need designs. |
-| 4 | Layouts | ui/layout | 8 | 8 not-started | Item 18 GUI; layouts have no design yet. |
+| 4 | Layouts | ui/layout | 8 | 8 not-started | Item 25 adds the window workspace; saved views and layouts still have no design. |
 | 6 | Plugins | script | 164 | 164 not-started | Largest undecided chapter: embedded Lua host vs native plugin API; needs a scope decision and design. |
 | 4 | Quickeys | ui/pools | 4 | 4 not-started | Needs a design (GUI/CLI shortcuts). |
 | 2 | Data Pools | pools | 1 | 1 not-started | Needs a small design. |
@@ -151,9 +151,9 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 |---|---|---|---|---|
 | 1 | grandMA3 onPC | 0 | 1 | The headless `openlight` binary is the onPC equivalent; vendor installer/OS rows are out of scope. |
 | 1 | Show File Handling | 0 | 2 | Item 24 adds backups, templates, save-as and show-file operations; demo shows, history, description, automatic numbering, media export and the converter remain deferred. |
-| 1 | Workspace | 19 | 5 | Terminal shell exists; windows, panels and themes are item 18. |
+| 1 | Workspace | 17 | 5 | Item 25 adds the user-defined window area and control rail; encoder, calculator and theme windows remain. |
 | 2 | Command Syntax and Keywords | 368 | 56 | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
-| 1 | Windows, Views, and Menus | 14 | 2 | Windows/views/menus are item 18. |
+| 1 | Windows, Views, and Menus | 9 | 5 | Windows/views/menus are item 18. |
 | 1 | DMX In and Out | 0 | 1 | Serial output, input and per-universe merge are built; Ethernet DMX and device-configuration import/export remain out of scope. |
 | 1 | Patch and Fixture Setup | 5 | 4 | Item 11 adds patch tools; item 13 adds MVR; 3D rows are out of scope. |
 | 2 | Operate Fixtures | 20 | 2 | Selection/programmer exist; Align and MAtricks cells are built. The sheet is partial; a colour picker and a gel library still need designs. |
@@ -176,7 +176,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 3 | Agenda | 5 | 0 | Needs a design. |
 | 3 | Timers | 3 | 0 | Needs a design. |
 | 3 | Timecode Show | 2 | 7 | Item 15 adds tracks, markers and MTC; OSC ingestion and track groups still need designs. |
-| 4 | Layouts | 8 | 0 | Item 18 GUI; layouts have no design yet. |
+| 4 | Layouts | 8 | 0 | Item 25 adds the window workspace; saved views and layouts still have no design. |
 | 6 | Plugins | 164 | 0 | Largest undecided chapter: embedded Lua host vs native plugin API; needs a scope decision and design. |
 | 4 | Quickeys | 4 | 0 | Needs a design (GUI/CLI shortcuts). |
 | 2 | Data Pools | 1 | 0 | Needs a small design. |
@@ -200,7 +200,7 @@ These are the gaps that a chapter-by-chapter audit would otherwise hide. Ranked 
 6. **Special executors** — Item 20 builds executor pages and page-qualified runs; macros, chases and multi-cue stacks still need a design.
 7. **Timecode depth** — Tracks, markers, MTC and an OSC feed hook landed with item 15; OSC ingestion and track groups remain.
 8. **Macros and CLI ergonomics** — Item 16 adds statement macros, transaction undo and machine-readable status; variables and a command editor remain out of scope.
-9. **Layouts, Quickeys and windows** — Layouts/Quickeys have no design; the five-pane GUI is item 18.
+9. **Layouts, Quickeys and windows** — Item 25 builds the blank, user-defined window workspace with Add Window, placement, resize, removal and command history. Saved views/layouts, quickeys, window settings and the deferred grandMA3 window catalogue remain.
 10. **Agenda and timers** — Scheduled events, stopwatch and countdown are unbuilt.
 11. **Plugins/Lua** — 164 rows, the largest undecided chapter. Decide between an embedded Lua host and a native plugin API before claiming completeness.
 12. **Show Creator** — Import/export and preset/group creation from fixture types; no design yet.
