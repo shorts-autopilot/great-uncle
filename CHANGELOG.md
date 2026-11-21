@@ -8,6 +8,13 @@ All notable changes to OpenLight are recorded here. The format follows
 
 ### Added
 
+- Executor pages: `Store Page 2 "Specials"`, `Page 2`, `Page Next`/`Page
+  Prev`, `Delete Page 2` and `Assign Page 2 Executor 1 Sequence 3` bank
+  executors without stopping playback. Executor numbers and runs are
+  page-qualified, so the same number on two pages is two independent cue lists;
+  fader, flash and solo handles are per page and the active page is shown by
+  `Page`, `Status`, the GUI fader pane and the web remote. Show format v13 adds
+  pages and upgrades every older show onto page 1; the desk file stays v1.
 - A colour model: `Color` takes a name, hex, RGB, CMY, HSB or kelvin value and
   writes the selection's own system — additive RGB (with RGBW white
   extraction), subtractive CMY, or the nearest named set on a colour wheel.

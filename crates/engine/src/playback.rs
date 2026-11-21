@@ -239,6 +239,10 @@ impl ExecutorMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Executor {
+    /// The page this executor lives on. Page one is implicit, so a show with
+    /// no pages reads exactly like a v12 document.
+    #[serde(default = "page_one", skip_serializing_if = "is_page_one")]
+    pub page: u16,
     pub number: u16,
     pub sequence: u16,
     #[serde(default)]
@@ -373,18 +377,34 @@ fn cue_state(cue: &Cue, inherited: &Levels) -> Levels {
     absolute
 }
 
+fn page_one() -> u16 {
+    1
+}
+
+fn is_page_one(page: &u16) -> bool {
+    *page == 1
+}
+
 /// A playback can be started from a sequence directly or through an executor.
+///
+/// An executor target names its page as well as its number: the same number on
+/// two pages is two different playbacks, and a page switch must not steal one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Target {
     Sequence(u16),
-    Executor(u16),
+    Executor { page: u16, number: u16 },
 }
 
 impl Target {
+    pub fn executor(page: u16, number: u16) -> Self {
+        Target::Executor { page, number }
+    }
+
     pub fn label(self) -> String {
         match self {
             Target::Sequence(number) => format!("Sequence {number}"),
-            Target::Executor(number) => format!("Executor {number}"),
+            Target::Executor { page: 1, number } => format!("Executor {number}"),
+            Target::Executor { page, number } => format!("Page {page} Executor {number}"),
         }
     }
 }
@@ -804,7 +824,7 @@ impl Playback {
     pub fn prune(&mut self, show: &Show) {
         self.runs.retain(|target, _| match target {
             Target::Sequence(number) => show.sequence(*number).is_some(),
-            Target::Executor(number) => show.executor(*number).is_some(),
+            Target::Executor { page, number } => show.executor(*page, *number).is_some(),
         });
     }
 
@@ -843,7 +863,7 @@ impl Playback {
         for (target, run) in &self.runs {
             let fader = match target {
                 Target::Sequence(_) => desk.sequence_master(),
-                Target::Executor(number) => desk.executor_master(*number),
+                Target::Executor { page, number } => desk.executor_master(*page, *number),
             };
             output.merge_htp(&run.levels_at(now).scale_intensity(fader));
         }
@@ -944,7 +964,9 @@ fn snap_non_intensity(from: &mut Levels, to: &Levels) {
 fn sequence_for(show: &Show, target: Target) -> Option<u16> {
     match target {
         Target::Sequence(number) => Some(number),
-        Target::Executor(number) => show.executor(number).map(|executor| executor.sequence),
+        Target::Executor { page, number } => show
+            .executor(page, number)
+            .map(|executor| executor.sequence),
     }
 }
 
@@ -1244,6 +1266,7 @@ mod tests {
     fn executor_fader_scales_intensity_only() {
         let mut show = demo_show();
         show.executors.push(Executor {
+            page: 1,
             number: 1,
             sequence: 1,
             name: "Main".into(),
@@ -1262,14 +1285,16 @@ mod tests {
 
         let now = Instant::now();
         let mut desk = Desk::new();
-        desk.set_executor_fader(1, 0.5);
+        desk.set_executor_fader(1, 1, 0.5);
         let mut playback = Playback::new();
-        playback.go(&show, Target::Executor(1), 1, 0, now).unwrap();
+        playback
+            .go(&show, Target::executor(1, 1), 1, 0, now)
+            .unwrap();
         playback.refresh(&desk, now);
         assert_eq!(playback.output().get(1, "Dimmer"), Some(0.5));
         assert_eq!(playback.output().get(1, "ColorAdd_R"), Some(1.0));
 
-        desk.set_executor_fader(1, 1.0);
+        desk.set_executor_fader(1, 1, 1.0);
         assert!(playback.refresh(&desk, now), "fader change alters output");
         assert_eq!(playback.output().get(1, "Dimmer"), Some(1.0));
     }
@@ -2085,6 +2110,74 @@ mod tests {
             sequence.state_at(1).get(1, "ColorAdd_R"),
             Some(0.7),
             "unblocked, the cue tracks the upstream colour again"
+        );
+    }
+
+    #[test]
+    fn the_same_number_on_two_pages_is_two_playbacks() {
+        let mut show = demo_show();
+        show.pages.push(crate::show::Page::new(2));
+        show.sequences.push(Sequence {
+            number: 1,
+            name: String::new(),
+            cues: vec![cue(1.0, 0.0, levels(&[(1, "Dimmer", 0.25)]))],
+        });
+        show.sequences.push(Sequence {
+            number: 2,
+            name: String::new(),
+            cues: vec![cue(1.0, 0.0, levels(&[(1, "Dimmer", 0.75)]))],
+        });
+        show.executors.push(Executor {
+            page: 1,
+            number: 1,
+            sequence: 1,
+            name: String::new(),
+            mode: ExecutorMode::Go,
+        });
+        show.executors.push(Executor {
+            page: 2,
+            number: 1,
+            sequence: 2,
+            name: String::new(),
+            mode: ExecutorMode::Go,
+        });
+
+        let now = Instant::now();
+        let mut desk = Desk::new();
+        desk.set_executor_fader(1, 1, 0.5);
+        desk.set_executor_fader(2, 1, 0.5);
+        let mut playback = Playback::new();
+        playback
+            .go(&show, Target::executor(1, 1), 1, 0, now)
+            .unwrap();
+        playback
+            .go(&show, Target::executor(2, 1), 2, 0, now)
+            .unwrap();
+        playback.refresh(&desk, now);
+
+        assert_eq!(playback.runs().count(), 2, "one run per page");
+        assert_eq!(
+            playback.run(Target::executor(1, 1)).unwrap().cue_number,
+            1.0
+        );
+        assert_eq!(
+            playback.run(Target::executor(2, 1)).unwrap().cue_number,
+            1.0
+        );
+        assert_eq!(
+            playback.output().get(1, "Dimmer"),
+            Some(0.375),
+            "HTP of 12.5% and 37.5%"
+        );
+        assert_eq!(Target::executor(1, 1).label(), "Executor 1");
+        assert_eq!(Target::executor(2, 1).label(), "Page 2 Executor 1");
+
+        assert!(playback.release(Target::executor(2, 1)));
+        playback.refresh(&desk, now);
+        assert_eq!(playback.output().get(1, "Dimmer"), Some(0.125));
+        assert!(
+            playback.run(Target::executor(1, 1)).is_some(),
+            "releasing page 2 leaves page 1 running"
         );
     }
 }

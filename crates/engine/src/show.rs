@@ -17,9 +17,10 @@
 //! Version 11 gives effects several targets with per-target phase and size, and
 //! an optional musical rate evaluated against the desk tempo. Version 12 turns
 //! each timecode's flat event list into tracks, adds effect actions, markers and
-//! an external source. Older files still
-//! load: new sections default to empty, a missing fine offset means 8-bit, the
-//! v5 upgrade hands the
+//! an external source. Version 13 puts executors on pages, so the same number
+//! can address a different cue list on each bank. Older files still
+//! load: new sections default to empty, a missing fine offset means 8-bit, a
+//! missing page means page one, the v5 upgrade hands the
 //! values it finds in an old file to the desk through a [`LoadReport`], and the
 //! v8 upgrade reports any fixture whose profile default is not zero.
 
@@ -44,9 +45,9 @@ use crate::timecode::{
 };
 
 pub const SHOW_FORMAT: &str = "openlight-show";
-pub const SHOW_VERSION: u32 = 12;
+pub const SHOW_VERSION: u32 = 13;
 /// Older documents that still load, oldest first.
-pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+pub const READABLE_VERSIONS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
 /// Fastest rate master accepted, as a factor (400%).
 pub const MAX_RATE_MASTER: f64 = 4.0;
 pub const MAX_UNIVERSE_SIZE: u16 = 512;
@@ -56,6 +57,7 @@ pub const MAX_PALETTES: usize = 100_000;
 pub const MAX_SEQUENCES: usize = 4096;
 pub const MAX_CUES: usize = 65_536;
 pub const MAX_EXECUTORS: usize = 4096;
+pub const MAX_PAGES: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -73,6 +75,10 @@ pub struct Show {
     pub palettes: Vec<Palette>,
     #[serde(default)]
     pub sequences: Vec<Sequence>,
+    /// Named executor banks. Every show has at least one; page one is "Main"
+    /// unless renamed.
+    #[serde(default)]
+    pub pages: Vec<Page>,
     #[serde(default)]
     pub executors: Vec<Executor>,
     #[serde(default)]
@@ -95,6 +101,29 @@ pub struct Universe {
     pub label: String,
     #[serde(default = "default_universe_size")]
     pub size: u16,
+}
+
+/// One named bank of executor assignments. Pages are labels and selections;
+/// the executors themselves stay in one validated list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Page {
+    pub number: u16,
+    #[serde(default)]
+    pub name: String,
+}
+
+impl Page {
+    pub fn new(number: u16) -> Self {
+        Self {
+            number,
+            name: if number == 1 {
+                "Main".to_string()
+            } else {
+                format!("Page {number}")
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -138,6 +167,7 @@ impl Show {
             fixtures: Vec::new(),
             palettes: Vec::new(),
             sequences: Vec::new(),
+            pages: vec![Page::new(1)],
             executors: Vec::new(),
             groups: Vec::new(),
             worlds: Vec::new(),
@@ -182,10 +212,35 @@ impl Show {
             .position(|sequence| sequence.number == number)
     }
 
-    pub fn executor(&self, number: u16) -> Option<&Executor> {
+    pub fn executor(&self, page: u16, number: u16) -> Option<&Executor> {
         self.executors
             .iter()
-            .find(|executor| executor.number == number)
+            .find(|executor| executor.page == page && executor.number == number)
+    }
+
+    /// Every executor on one page, in document order. The engine keeps the
+    /// list sorted by page and number; a hand-written document may not be.
+    pub fn executors_on(&self, page: u16) -> impl Iterator<Item = &Executor> {
+        self.executors
+            .iter()
+            .filter(move |executor| executor.page == page)
+    }
+
+    pub fn page(&self, number: u16) -> Option<&Page> {
+        self.pages.iter().find(|page| page.number == number)
+    }
+
+    pub fn page_mut(&mut self, number: u16) -> Option<&mut Page> {
+        self.pages.iter_mut().find(|page| page.number == number)
+    }
+
+    /// The page with this number, creating it with its default name if needed.
+    pub fn page_or_insert(&mut self, number: u16) -> &mut Page {
+        if self.page(number).is_none() {
+            self.pages.push(Page::new(number));
+            self.pages.sort_by_key(|page| page.number);
+        }
+        self.page_mut(number).expect("the page was just inserted")
     }
 
     pub fn group(&self, number: u16) -> Option<&Group> {
@@ -500,6 +555,7 @@ impl Show {
 
         self.validate_palettes(&mut problems);
         self.validate_sequences(&mut problems);
+        self.validate_pages(&mut problems);
         self.validate_executors(&mut problems);
         self.validate_groups(&mut problems);
         self.validate_worlds(&mut problems);
@@ -751,6 +807,30 @@ impl Show {
         }
     }
 
+    fn validate_pages(&self, problems: &mut Vec<String>) {
+        if self.pages.is_empty() {
+            problems.push("the show has no executor pages".into());
+        }
+        if self.pages.len() > MAX_PAGES {
+            problems.push(format!(
+                "{} executor pages, the limit is {MAX_PAGES}",
+                self.pages.len()
+            ));
+        }
+        let mut numbers = BTreeSet::new();
+        for page in &self.pages {
+            if page.number == 0 {
+                problems.push("page number 0 is not allowed".into());
+            }
+            if page.name.trim().is_empty() {
+                problems.push(format!("page {}: name is empty", page.number));
+            }
+            if !numbers.insert(page.number) {
+                problems.push(format!("page {}: number used twice", page.number));
+            }
+        }
+    }
+
     fn validate_executors(&self, problems: &mut Vec<String>) {
         if self.executors.len() > MAX_EXECUTORS {
             problems.push(format!(
@@ -763,8 +843,17 @@ impl Show {
             if executor.number == 0 {
                 problems.push("executor number 0 is not allowed".into());
             }
-            if !numbers.insert(executor.number) {
-                problems.push(format!("executor {}: number used twice", executor.number));
+            if self.page(executor.page).is_none() {
+                problems.push(format!(
+                    "executor {}: page {} is not in the show",
+                    executor.number, executor.page
+                ));
+            }
+            if !numbers.insert((executor.page, executor.number)) {
+                problems.push(format!(
+                    "executor {} on page {}: number used twice",
+                    executor.number, executor.page
+                ));
             }
             if self.sequence(executor.sequence).is_none() {
                 problems.push(format!(
@@ -1376,6 +1465,28 @@ fn upgrade(
         }
     }
 
+    if let Some(object) = value.as_object_mut() {
+        let had_executors = object
+            .get("executors")
+            .and_then(|value| value.as_array())
+            .is_some_and(|executors| !executors.is_empty());
+        let has_pages = object
+            .get("pages")
+            .and_then(|value| value.as_array())
+            .is_some_and(|pages| !pages.is_empty());
+        if !has_pages {
+            object.insert(
+                "pages".into(),
+                serde_json::json!([{"number": 1, "name": "Main"}]),
+            );
+        }
+        if version < 13 && had_executors {
+            report.warnings.push(format!(
+                "Upgraded from show v{version}: executors are on page 1"
+            ));
+        }
+    }
+
     if !report.desk_seed.is_empty() {
         report.warnings.push(format!(
             "Upgraded from show v{version}: programmer and master positions moved to the desk"
@@ -1461,7 +1572,7 @@ mod tests {
             .read_to_string(&mut text)
             .unwrap();
         assert!(text.contains("\"format\": \"openlight-show\""));
-        assert!(text.contains("\"version\": 12"));
+        assert!(text.contains("\"version\": 13"));
         assert!(text.contains("OpenLight Demo Wash"), "types are embedded");
         let _ = fs::remove_file(&path);
     }
@@ -1512,13 +1623,13 @@ mod tests {
         let path = temp_path("future");
         fs::write(
             &path,
-            r#"{"format":"openlight-show","version":13,"name":"x","fixture_types":[],"universes":[],"fixtures":[]}"#,
+            r#"{"format":"openlight-show","version":14,"name":"x","fixture_types":[],"universes":[],"fixtures":[]}"#,
         )
         .unwrap();
         let error = Show::load(&path).unwrap_err();
         assert!(matches!(
             error,
-            ShowError::UnsupportedVersion { found: 13, .. }
+            ShowError::UnsupportedVersion { found: 14, .. }
         ));
         let _ = fs::remove_file(&path);
     }
@@ -1973,11 +2084,18 @@ mod tests {
         )
         .unwrap();
         let (show, report) = Show::load_with_report(&path).unwrap();
-        assert!(report.warnings.is_empty(), "{report:#?}");
+        assert!(
+            report
+                .warnings
+                .iter()
+                .all(|warning| warning.contains("page 1")),
+            "{report:#?}"
+        );
         assert_eq!(show.version, SHOW_VERSION);
         assert_eq!(show.sequences[0].cues[0].trigger, Trigger::Go);
         assert_eq!(show.sequences[0].cues[0].trigger_time, 0.0);
         assert_eq!(show.executors[0].mode, ExecutorMode::Go);
+        assert_eq!(show.executors[0].page, 1);
 
         // The upgraded file validates and writes as the current version.
         show.save(&path).unwrap();
@@ -2380,6 +2498,7 @@ mod tests {
             ],
         });
         show.executors.push(Executor {
+            page: 1,
             number: 1,
             sequence: 9,
             name: String::new(),
@@ -2402,5 +2521,89 @@ mod tests {
         let path = temp_path("invalid");
         assert!(show.save(&path).is_err());
         assert!(!path.exists(), "nothing is written for an invalid show");
+    }
+
+    #[test]
+    fn version_twelve_executors_upgrade_to_page_one() {
+        let path = temp_path("v12-pages");
+        fs::write(
+            &path,
+            r#"{
+                "format": "openlight-show",
+                "version": 12,
+                "name": "Old",
+                "sequences": [{"number": 1, "cues": [{"number": 1}]}],
+                "executors": [{"number": 2, "sequence": 1}]
+            }"#,
+        )
+        .unwrap();
+        let (show, report) = Show::load_with_report(&path).unwrap();
+        assert_eq!(show.version, SHOW_VERSION);
+        assert_eq!(show.pages, vec![Page::new(1)]);
+        assert_eq!(show.executors[0].page, 1);
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("page 1")),
+            "{report:#?}"
+        );
+
+        show.save(&path).unwrap();
+        let mut text = String::new();
+        fs::File::open(&path)
+            .unwrap()
+            .read_to_string(&mut text)
+            .unwrap();
+        assert!(text.contains("\"version\": 13"), "{text}");
+        assert!(text.contains("\"pages\""), "{text}");
+        assert!(
+            !text.contains("\"page\": 1"),
+            "page one stays implicit on disk: {text}"
+        );
+        let loaded = Show::load(&path).unwrap();
+        assert_eq!(loaded, show);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn executor_numbers_are_unique_per_page_and_pages_must_exist() {
+        let mut show = demo_show();
+        show.sequences.push(Sequence::new(1));
+        show.pages.push(Page {
+            number: 2,
+            name: "Specials".into(),
+        });
+        let executor = |page: u16, number: u16| Executor {
+            page,
+            number,
+            sequence: 1,
+            name: String::new(),
+            mode: crate::playback::ExecutorMode::Go,
+        };
+        show.executors.push(executor(1, 1));
+        show.executors.push(executor(2, 1));
+        let problems = show.validate();
+        assert!(
+            !problems.iter().any(|problem| problem.contains("twice")),
+            "the same number on two pages is legal: {problems:?}"
+        );
+
+        show.executors.push(executor(1, 1));
+        assert!(
+            show.validate()
+                .iter()
+                .any(|problem| problem.contains("number used twice")),
+            "a duplicate on one page is not"
+        );
+        show.executors.pop();
+
+        show.executors.push(executor(9, 2));
+        assert!(
+            show.validate()
+                .iter()
+                .any(|problem| problem.contains("page 9 is not in the show")),
+            "every executor names a stored page"
+        );
     }
 }

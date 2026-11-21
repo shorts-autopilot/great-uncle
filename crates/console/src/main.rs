@@ -936,7 +936,7 @@ mod tests {
         let line = version_line();
         assert!(line.starts_with("openlight "), "{line}");
         assert!(line.contains(env!("CARGO_PKG_VERSION")), "{line}");
-        assert!(line.contains("show format v12"), "{line}");
+        assert!(line.contains("show format v13"), "{line}");
         if !env!("OPENLIGHT_GIT_HASH").is_empty() {
             assert!(line.contains(env!("OPENLIGHT_GIT_HASH")), "{line}");
         }

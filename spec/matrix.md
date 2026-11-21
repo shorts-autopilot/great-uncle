@@ -500,7 +500,7 @@ Scope reasons and chapter dispositions: [`docs/COMPLETENESS.md`](../docs/COMPLET
 | `CX-COMMAND_SYNTAX_KEYWORDS-0230` | OSC | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0231` | Oops | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0232` | OutputLayer | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0233` | Page | 5 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0233` | Page | 5 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0234` | Part | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0235` | Park | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0236` | Paste | 5 | 2 | not-started |

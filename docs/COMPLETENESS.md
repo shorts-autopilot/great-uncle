@@ -11,8 +11,8 @@ This ledger records scope and implementation evidence; it does not claim that a 
 | Status | Rows | Meaning |
 |---|---|---|
 | implemented | 56 | Works and is covered by tests. |
-| in-progress | 87 | Part of the feature exists; the rest is deferred. |
-| not-started | 688 | Not built, or not designed yet. |
+| in-progress | 88 | Part of the feature exists; the rest is deferred. |
+| not-started | 687 | Not built, or not designed yet. |
 | out-of-scope | 392 | Not a feature of this product; reason recorded below. |
 | verified | 0 | Implemented and proven on hardware. |
 
@@ -31,7 +31,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 1 | grandMA3 onPC | platform | 8 | 1 in-progress, 7 out-of-scope | The headless `openlight` binary is the onPC equivalent; vendor installer/OS rows are out of scope. |
 | 1 | Show File Handling | showfile | 6 | 2 not-started, 4 implemented | Backup/template shows and file organisation need a small design. |
 | 1 | Workspace | ui/shell | 30 | 19 not-started, 5 in-progress, 2 implemented, 4 out-of-scope | Terminal shell exists; windows, panels and themes are item 18. |
-| 2 | Command Syntax and Keywords | cmd | 427 | 374 not-started, 50 in-progress, 3 implemented | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
+| 2 | Command Syntax and Keywords | cmd | 427 | 373 not-started, 51 in-progress, 3 implemented | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
 | 1 | Windows, Views, and Menus | ui/windows | 16 | 14 not-started, 2 in-progress | Windows/views/menus are item 18. |
 | 5 | Networking | session | 16 | 16 out-of-scope | Networked sessions and multi-user collaboration are outside the single-operator design. |
 | 1 | DMX In and Out | output | 6 | 1 in-progress, 1 implemented, 4 out-of-scope | Output exists; DMX In and merge need a bidirectional transport design. |
@@ -54,7 +54,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 2 | Worlds and Filters | filter | 4 | 1 not-started, 3 implemented | At Filter window is a GUI feature. |
 | 3 | MAtricks and Shuffle | matrix | 7 | 7 not-started | Needs a design (blocks, groups, wings, widths, shuffle, transform). |
 | 2 | Cues and Sequences | playback | 19 | 10 not-started, 1 in-progress, 8 implemented | Item 10 covers blocking/shield/replace/move; content sheet, settings and cue recipes need designs. |
-| 2 | Executors | playback/exec | 5 | 1 not-started, 2 in-progress, 2 implemented | Special executors and executor pages need designs. |
+| 2 | Executors | playback/exec | 5 | 1 not-started, 2 in-progress, 2 implemented | Executor pages and their assignments are built; special executors need a design. |
 | 2 | Masters | playback/masters | 7 | 3 not-started, 1 in-progress, 3 implemented | Selected, time and timing masters need designs. |
 | 3 | Recipes | playback/recipes | 1 | 1 not-started | Needs a design. |
 | 3 | Phasers | phaser | 6 | 3 not-started, 1 in-progress, 2 implemented | Item 14 supplies multi-attribute/phase effects; the phaser editor and circle/rainbow presets still need a design. |
@@ -152,7 +152,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 1 | grandMA3 onPC | 0 | 1 | The headless `openlight` binary is the onPC equivalent; vendor installer/OS rows are out of scope. |
 | 1 | Show File Handling | 2 | 0 | Backup/template shows and file organisation need a small design. |
 | 1 | Workspace | 19 | 5 | Terminal shell exists; windows, panels and themes are item 18. |
-| 2 | Command Syntax and Keywords | 374 | 50 | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
+| 2 | Command Syntax and Keywords | 373 | 51 | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
 | 1 | Windows, Views, and Menus | 14 | 2 | Windows/views/menus are item 18. |
 | 1 | DMX In and Out | 0 | 1 | Output exists; DMX In and merge need a bidirectional transport design. |
 | 1 | Patch and Fixture Setup | 5 | 4 | Item 11 adds patch tools; item 13 adds MVR; 3D rows are out of scope. |
@@ -165,7 +165,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 2 | Worlds and Filters | 1 | 0 | At Filter window is a GUI feature. |
 | 3 | MAtricks and Shuffle | 7 | 0 | Needs a design (blocks, groups, wings, widths, shuffle, transform). |
 | 2 | Cues and Sequences | 10 | 1 | Item 10 covers blocking/shield/replace/move; content sheet, settings and cue recipes need designs. |
-| 2 | Executors | 1 | 2 | Special executors and executor pages need designs. |
+| 2 | Executors | 1 | 2 | Executor pages and their assignments are built; special executors need a design. |
 | 2 | Masters | 3 | 1 | Selected, time and timing masters need designs. |
 | 3 | Recipes | 1 | 0 | Needs a design. |
 | 3 | Phasers | 3 | 1 | Item 14 supplies multi-attribute/phase effects; the phaser editor and circle/rainbow presets still need a design. |
@@ -197,7 +197,7 @@ These are the gaps that a chapter-by-chapter audit would otherwise hide. Ranked 
 3. **RDM** — Discovery and remote patching; shares the bidirectional transport work with DMX In.
 4. **MAtricks, Shuffle and Align** — Programming speed for multi-fixture edits; the whole `matricks` chapter and `Align` are unbuilt.
 5. **Recipes and Generator** — Look generation beyond a single waveform; `recipes`, `generator` and recipe presets are unbuilt.
-6. **Executor pages and special executors** — The executor list is flat; pages, assignments and special executors are missing.
+6. **Special executors** — Item 20 builds executor pages and page-qualified runs; macros, chases and multi-cue stacks still need a design.
 7. **Timecode depth** — Tracks, markers, MTC and an OSC feed hook landed with item 15; OSC ingestion and track groups remain.
 8. **Macros and CLI ergonomics** — Item 16 adds statement macros, transaction undo and machine-readable status; variables and a command editor remain out of scope.
 9. **Layouts, Quickeys and windows** — Layouts/Quickeys have no design; the five-pane GUI is item 18.

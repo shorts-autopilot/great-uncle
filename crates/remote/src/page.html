@@ -37,7 +37,7 @@
     <div id="tokenbox"><input id="token" type="password" autocomplete="off" placeholder="paste the token from remote.token"><button id="connect">Connect</button></div>
     <p><small>Kept in session storage only. The token file is printed by the console at start.</small></p>
   </section>
-  <section><h2>Executors</h2><div id="executors">Connect to see the desk.</div></section>
+  <section><h2>Executors</h2><p id="page"></p><div id="executors">Connect to see the desk.</div></section>
   <section>
     <h2>Masters</h2>
     <div id="controls">
@@ -56,6 +56,7 @@
 const tokenInput = document.getElementById('token');
 const connectButton = document.getElementById('connect');
 const executors = document.getElementById('executors');
+const pageLabel = document.getElementById('page');
 const log = document.getElementById('log');
 const badges = document.getElementById('badges');
 const grand = document.getElementById('grand');
@@ -92,7 +93,8 @@ async function run(line) {
 function render(next) {
   state = next;
   executors.replaceChildren();
-  if (!next.executors.length) executors.textContent = 'No executors stored.';
+  pageLabel.textContent = 'Page ' + next.page + ' · ' + next.page_name;
+  if (!next.executors.length) executors.textContent = 'No executors stored on this page.';
   for (const executor of next.executors) {
     const box = document.createElement('div');
     box.className = 'executor';

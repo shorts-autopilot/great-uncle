@@ -430,6 +430,32 @@ set with no colour word is still addressed with `Fixture 1 ColorWheel1 <set>`.
 RGBW extraction uses `W = min(r, g, b)` without power normalisation, so white
 is one emitter at full rather than four.
 
+## Executor pages (20)
+
+Executors now live on named pages. `Store Page 2 "Specials"` creates or renames
+a page, `Page 2` and `Page Next`/`Page Prev` switch the desk's page, and
+`Assign Page 2 Executor 1 Sequence 3` assigns elsewhere without leaving the
+current page. `Assign Executor 1 Sequence 3` addresses the active page, as do
+`Executor 1`, `Go Executor 1` and the flash, solo and fader commands. `Page`
+lists every bank with its executor count and any solo, `Executor` lists only the
+active page, and `Status` names the page.
+
+A page is a bank of handles, not a second owner of programming: the show keeps
+one validated executor list and each executor carries its page. A run's target
+is `(page, executor)`, so page 1's executor 1 can keep running while page 2's
+executor 1 is started, faded and released. Fader, flash and solo handles are
+kept per page; a solo stays a global merge rule, which is why the page listing
+marks where it is held. Deleting a page releases its runs and drops its
+assignments in one undo step; undo brings the programming back but not the
+released position. The last page cannot be deleted.
+
+Show format v13 adds `pages` and each executor's page; page one is implicit on
+disk and every older show loads with its executors on page 1 "Main". The desk
+file stays v1: its flat v1 handle map is read as page 1, the active page is a
+new field, and new handles are written under `page_executors`. `DeskView`,
+the GUI fader pane and the web remote all follow the active page, and saved run
+positions remember the page they came from.
+
 ## Known limitations
 
 - **No DMX hardware in the test environment.** Timing is exercised against a

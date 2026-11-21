@@ -29784,7 +29784,7 @@
    "module": "cmd",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "keyword_page",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/keyword_page.html",

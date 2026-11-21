@@ -8,7 +8,9 @@ draggable faders and a blackout button.
 
 A 1280×800 window with five panes — Sheet, Playback, Pools, Timecode, Status —
 selected by F1–F5. The command line is always visible at the bottom and has
-focus at start. Nine executor faders and a grand master sit on the right. Every
+focus at start. Nine executor faders for the active page and a grand master sit
+on the right; the fader pane names the page, and `Page 2` switches the bank
+without disturbing a running cue. Every
 widget action is echoed above the prompt as command text, so a mouse user learns
 the grammar and a keyboard user is never blocked by a missing control.
 
@@ -28,7 +30,7 @@ driver; release packaging enables the feature.
 | Pools | palettes, groups, worlds, filters, effects and active/running state | `Use` / `Off` and `Del` |
 | Timecode | shows, tracks, events and markers | `Start` / `Pause` / `Stop`, `Locate` from the time field, and `Add` with the event field |
 | Status | the same lines `Status` prints | `BLACKOUT`, `LOCK` and `UNLOCK` in the top bar |
-| Faders | nine executor faders, `F` (flash) under each, grand master | drag or use the arrow keys in 5% steps; flash on/off; grand drag |
+| Faders | the active page's nine executor faders, `F` (flash) under each, grand master | drag or use the arrow keys in 5% steps; flash on/off; grand drag |
 
 Every control above writes the command the terminal would receive. The event
 field accepts the command's own action text (`Sequence 1 Cue 1`, `Effect 1 On`),

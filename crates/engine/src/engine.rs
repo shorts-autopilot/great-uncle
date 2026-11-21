@@ -688,13 +688,20 @@ impl Engine {
             Command::SetExecutorSolo { executor, on } => self.set_executor_solo(executor, on),
             Command::DeleteCue { sequence, number } => self.delete_cue(sequence, number),
             Command::ListSequences { only } => Ok(self.sequence_list(only)),
-            Command::AssignExecutor { executor, sequence } => {
-                self.assign_executor(executor, sequence)
-            }
+            Command::AssignExecutor {
+                page,
+                executor,
+                sequence,
+            } => self.assign_executor(page, executor, sequence),
             Command::SetExecutorLevel { executor, level } => {
                 self.set_executor_level(executor, level)
             }
             Command::ListExecutors { only } => Ok(self.executor_list(only)),
+            Command::ListPages => Ok(self.page_list()),
+            Command::SetPage { number } => self.set_page(number),
+            Command::StepPage { next } => self.step_page(next),
+            Command::StorePage { number, name } => self.store_page(number, name),
+            Command::DeletePage { number } => self.delete_page(number),
             Command::SelectGroup(number) => self.select_group(number),
             Command::SetLevelGroup {
                 group,
@@ -2143,7 +2150,7 @@ impl Engine {
             self.desk.masters.set_group(number, level);
         }
         for (number, level) in seed.executors {
-            self.desk.set_executor_fader(number, level);
+            self.desk.set_executor_fader(1, number, level);
         }
         self.desk.programmer = seed.programmer;
     }
@@ -2155,11 +2162,12 @@ impl Engine {
             .states()
             .into_iter()
             .map(|(target, cue, paused)| {
-                let (sequence, executor) = match target {
-                    Target::Sequence(number) => (Some(number), None),
-                    Target::Executor(number) => (None, Some(number)),
+                let (page, sequence, executor) = match target {
+                    Target::Sequence(number) => (1, Some(number), None),
+                    Target::Executor { page, number } => (page, None, Some(number)),
                 };
                 RunState {
+                    page,
                     sequence,
                     executor,
                     cue,
@@ -2177,7 +2185,7 @@ impl Engine {
         let runs = std::mem::take(&mut self.desk.runs);
         for run in &runs {
             let target = match (run.executor, run.sequence) {
-                (Some(executor), _) => Target::Executor(executor),
+                (Some(executor), _) => Target::executor(run.page, executor),
                 (None, Some(sequence)) => Target::Sequence(sequence),
                 (None, None) => continue,
             };
@@ -2302,7 +2310,7 @@ impl Engine {
                     .executors
                     .iter()
                     .filter(|executor| executor.sequence == sequence.number)
-                    .map(|executor| Target::Executor(executor.number)),
+                    .map(|executor| Target::executor(executor.page, executor.number)),
             );
             for cue in &sequence.cues {
                 let mut running = None;
@@ -2472,12 +2480,17 @@ impl Engine {
     /// Compact state for the web remote. Built here, beside `Status`, so the
     /// remote cannot grow a second interpretation of the desk.
     pub fn remote_state_json(&self) -> String {
+        let page = self.desk.page;
+        let page_name = self
+            .show
+            .page(page)
+            .map(|page| page.name.clone())
+            .unwrap_or_default();
         let executors: Vec<serde_json::Value> = self
             .show
-            .executors
-            .iter()
+            .executors_on(page)
             .map(|executor| {
-                let state = match self.playback.run(Target::Executor(executor.number)) {
+                let state = match self.playback.run(Target::executor(page, executor.number)) {
                     None => "idle".to_string(),
                     Some(run) if run.is_paused() => {
                         format!("paused cue {}", format_cue_number(run.cue_number))
@@ -2491,6 +2504,8 @@ impl Engine {
             })
             .collect();
         serde_json::json!({
+            "page": page,
+            "page_name": page_name,
             "executors": executors,
             "blackout": self.desk.is_blacked_out(self.clock),
             "blind": self.desk.blind,
@@ -2589,6 +2604,16 @@ impl Engine {
             "Programmer: {}",
             count(self.desk.programmer.len(), "value")
         ));
+        let page_name = self
+            .show
+            .page(self.desk.page)
+            .map(|page| page.name.clone())
+            .unwrap_or_default();
+        lines.push(format!(
+            "Page: {} \"{page_name}\" | Pages: {}",
+            self.desk.page,
+            self.show.pages.len()
+        ));
         lines.push(format!(
             "Palettes: {} | Sequences: {} | Executors: {}",
             self.show.palettes.len(),
@@ -2634,7 +2659,13 @@ impl Engine {
             "Solo: {}",
             self.desk
                 .soloed()
-                .map(|number| format!("executor {number}"))
+                .map(|(page, number)| {
+                    if page == 1 {
+                        format!("executor {number}")
+                    } else {
+                        format!("page {page} executor {number}")
+                    }
+                })
                 .unwrap_or_else(|| "off".to_string())
         ));
         let autosave = match &self.autosave {
@@ -3439,8 +3470,10 @@ impl Engine {
         self.playback.runs().find_map(|(target, run)| {
             let matches = match target {
                 Target::Sequence(number) => number == sequence_number,
-                Target::Executor(number) => {
-                    self.show.executor(number).map(|executor| executor.sequence)
+                Target::Executor { page, number } => {
+                    self.show
+                        .executor(page, number)
+                        .map(|executor| executor.sequence)
                         == Some(sequence_number)
                 }
             };
@@ -4274,38 +4307,52 @@ impl Engine {
 
     fn assign_executor(
         &mut self,
+        page: Option<u16>,
         number: u16,
         sequence: u16,
     ) -> Result<CommandOutcome, CommandError> {
+        let page = page.unwrap_or(self.desk.page);
+        if page == 0 {
+            return Err(CommandError::new("page number 0 is not allowed"));
+        }
         if self.show.sequence(sequence).is_none() {
             return Err(CommandError::with_hint(
                 format!("sequence {sequence} does not exist"),
                 "store a cue first: `Store Cue 1`",
             ));
         }
-        let existed = self.show.executor(number).is_some();
+        if self.show.page(page).is_none() && self.show.pages.len() >= crate::show::MAX_PAGES {
+            return Err(CommandError::new(format!(
+                "{} pages is the limit",
+                crate::show::MAX_PAGES
+            )));
+        }
+        let existed = self.show.executor(page, number).is_some();
         let message = self.mutate(|show| {
+            show.page_or_insert(page);
             match show
                 .executors
                 .iter_mut()
-                .find(|executor| executor.number == number)
+                .find(|executor| executor.page == page && executor.number == number)
             {
                 Some(executor) => executor.sequence = sequence,
                 None => show.executors.push(Executor {
+                    page,
                     number,
                     sequence,
                     name: format!("Executor {number}"),
                     mode: ExecutorMode::Go,
                 }),
             }
-            show.executors.sort_by_key(|executor| executor.number);
+            show.executors
+                .sort_by_key(|executor| (executor.page, executor.number));
             Ok(format!(
-                "{} executor {number} to sequence {sequence}",
+                "{} executor {number} on page {page} to sequence {sequence}",
                 if existed { "Reassigned" } else { "Assigned" }
             ))
         })?;
         // A reassigned executor must not keep running its old sequence.
-        if self.playback.release(Target::Executor(number)) {
+        if self.playback.release(Target::executor(page, number)) {
             self.refresh_playback();
         }
         Ok(CommandOutcome::message(message))
@@ -4316,6 +4363,7 @@ impl Engine {
         number: u16,
         level: Level,
     ) -> Result<CommandOutcome, CommandError> {
+        let page = self.desk.page;
         let value = match level {
             Level::Percent(percent) => {
                 if !(0.0..=100.0).contains(&percent) {
@@ -4327,22 +4375,26 @@ impl Engine {
             }
             Level::Full => 1.0,
         };
-        let Some(mode) = self.show.executor(number).map(|executor| executor.mode) else {
+        let Some(mode) = self
+            .show
+            .executor(page, number)
+            .map(|executor| executor.mode)
+        else {
             return Err(CommandError::with_hint(
-                format!("executor {number} does not exist"),
+                format!("executor {number} does not exist on page {page}"),
                 "assign one first: `Assign Executor 1 Sequence 1`",
             ));
         };
         let percent = (value * 100.0).round() as i64;
-        self.desk.set_executor_fader(number, value);
+        self.desk.set_executor_fader(page, number, value);
         if mode == ExecutorMode::Fader {
             // A hand on the fader crossfades the cue: at 0 it holds the state
             // before the cue, at 100 the state of the cue. An idle list starts
             // cue 1 so the fader has something to move.
-            if self.playback.run(Target::Executor(number)).is_none() {
-                self.start_first_cue(number);
+            if self.playback.run(Target::executor(page, number)).is_none() {
+                self.start_first_cue(page, number);
             }
-            self.playback.scrub(Target::Executor(number), value);
+            self.playback.scrub(Target::executor(page, number), value);
         }
         self.refresh_playback();
         Ok(CommandOutcome::message(format!(
@@ -4355,9 +4407,10 @@ impl Engine {
         number: u16,
         mode: ExecutorMode,
     ) -> Result<CommandOutcome, CommandError> {
-        if self.show.executor(number).is_none() {
+        let page = self.desk.page;
+        if self.show.executor(page, number).is_none() {
             return Err(CommandError::with_hint(
-                format!("executor {number} does not exist"),
+                format!("executor {number} does not exist on page {page}"),
                 "assign one first: `Assign Executor 1 Sequence 1`",
             ));
         }
@@ -4366,7 +4419,7 @@ impl Engine {
             if let Some(executor) = show
                 .executors
                 .iter_mut()
-                .find(|executor| executor.number == number)
+                .find(|executor| executor.page == page && executor.number == number)
             {
                 executor.mode = mode;
             }
@@ -4382,17 +4435,18 @@ impl Engine {
         number: u16,
         on: bool,
     ) -> Result<CommandOutcome, CommandError> {
-        if self.show.executor(number).is_none() {
+        let page = self.desk.page;
+        if self.show.executor(page, number).is_none() {
             return Err(CommandError::with_hint(
-                format!("executor {number} does not exist"),
+                format!("executor {number} does not exist on page {page}"),
                 "assign one first: `Assign Executor 1 Sequence 1`",
             ));
         }
-        self.desk.set_executor_flash(number, on);
+        self.desk.set_executor_flash(page, number, on);
         // Flash on an unstarted list starts its first cue; releasing restores
         // the fader but leaves the cue where it is.
-        if on && self.playback.run(Target::Executor(number)).is_none() {
-            self.start_first_cue(number);
+        if on && self.playback.run(Target::executor(page, number)).is_none() {
+            self.start_first_cue(page, number);
         }
         self.refresh_playback();
         Ok(CommandOutcome::message(format!(
@@ -4403,13 +4457,14 @@ impl Engine {
 
     /// Hold or release solo. Solo is a merge-time flag, so it alters no run.
     fn set_executor_solo(&mut self, number: u16, on: bool) -> Result<CommandOutcome, CommandError> {
-        if self.show.executor(number).is_none() {
+        let page = self.desk.page;
+        if self.show.executor(page, number).is_none() {
             return Err(CommandError::with_hint(
-                format!("executor {number} does not exist"),
+                format!("executor {number} does not exist on page {page}"),
                 "assign one first: `Assign Executor 1 Sequence 1`",
             ));
         }
-        self.desk.set_executor_solo(number, on);
+        self.desk.set_executor_solo(page, number, on);
         self.refresh_playback();
         Ok(CommandOutcome::message(format!(
             "Executor {number} solo {}",
@@ -4418,8 +4473,8 @@ impl Engine {
     }
 
     /// Start the first cue of an executor's list, if it has one.
-    fn start_first_cue(&mut self, executor: u16) {
-        let Some(sequence) = self.show.executor(executor).map(|e| e.sequence) else {
+    fn start_first_cue(&mut self, page: u16, executor: u16) {
+        let Some(sequence) = self.show.executor(page, executor).map(|e| e.sequence) else {
             return;
         };
         if self
@@ -4431,19 +4486,19 @@ impl Engine {
             return;
         }
         let now = self.clock;
-        self.start_cue(Target::Executor(executor), sequence, 0, now);
+        self.start_cue(Target::executor(page, executor), sequence, 0, now);
     }
 
     /// `idle`, `flash`, `solo` or which cue is running.
-    fn executor_state_label(&self, number: u16) -> String {
-        let state = self.desk.executor_state(number);
+    fn executor_state_label(&self, page: u16, number: u16) -> String {
+        let state = self.desk.executor_state(page, number);
         if state.flash {
             return "flash".to_string();
         }
         if state.solo {
             return "solo".to_string();
         }
-        match self.playback.run(Target::Executor(number)) {
+        match self.playback.run(Target::executor(page, number)) {
             Some(run) => format!(
                 "cue {} {}",
                 format_cue_number(run.cue_number),
@@ -4460,29 +4515,35 @@ impl Engine {
     }
 
     fn executor_list(&self, only: Option<u16>) -> CommandOutcome {
+        let page = self.desk.page;
+        let Some(name) = self.show.page(page).map(|page| page.name.clone()) else {
+            return CommandOutcome::message(format!("Page {page} does not exist."));
+        };
         let executors: Vec<&Executor> = match only {
-            Some(number) => match self.show.executor(number) {
+            Some(number) => match self.show.executor(page, number) {
                 Some(executor) => vec![executor],
                 None => {
-                    return CommandOutcome::message(format!("Executor {number} does not exist."))
+                    return CommandOutcome::message(format!(
+                        "Executor {number} does not exist on page {page}."
+                    ))
                 }
             },
-            None => self.show.executors.iter().collect(),
+            None => self.show.executors_on(page).collect(),
         };
+        let mut lines = vec![format!("Page {page} \"{name}\"")];
         if executors.is_empty() {
-            return CommandOutcome::message(
-                "No executors. Assign one: `Assign Executor 1 Sequence 1`.",
-            );
+            lines.push("No executors. Assign one: `Assign Executor 1 Sequence 1`.".into());
+            return CommandOutcome::with_lines(lines);
         }
 
-        let mut lines = vec![format!(
+        lines.push(format!(
             "{:<4} {:<12} {:<6} {:<7} {:<14} {}",
             "No.", "Sequence", "Mode", "Fader", "State", "Cue"
-        )];
+        ));
         for executor in executors {
             let cue = self
                 .playback
-                .run(Target::Executor(executor.number))
+                .run(Target::executor(page, executor.number))
                 .map(|run| format_cue_number(run.cue_number))
                 .unwrap_or_else(|| "-".to_string());
             lines.push(format!(
@@ -4492,25 +4553,172 @@ impl Engine {
                 executor.mode.label(),
                 format!(
                     "{:.0}%",
-                    self.desk.executor_state(executor.number).fader * 100.0
+                    self.desk.executor_state(page, executor.number).fader * 100.0
                 ),
-                self.executor_state_label(executor.number),
+                self.executor_state_label(page, executor.number),
                 cue
             ));
         }
         CommandOutcome::with_lines(lines)
     }
 
+    /// `Page`: every stored bank, its executor count and whether it holds a
+    /// solo, so an inactive page cannot silence the stage invisibly.
+    fn page_list(&self) -> CommandOutcome {
+        let active = self.desk.page;
+        let active_name = self
+            .show
+            .page(active)
+            .map(|page| page.name.clone())
+            .unwrap_or_default();
+        let mut lines = vec![format!("Pages (active {active} \"{active_name}\")")];
+        if self.show.pages.is_empty() {
+            lines.push("No pages. `Store Page 1` creates one.".into());
+            return CommandOutcome::with_lines(lines);
+        }
+        for page in &self.show.pages {
+            let count = self.show.executors_on(page.number).count();
+            let solo = self
+                .desk
+                .soloed()
+                .filter(|(solo_page, _)| *solo_page == page.number)
+                .map(|(_, number)| format!("  solo executor {number}"))
+                .unwrap_or_default();
+            lines.push(format!(
+                "{:<4} {:<20} {:>2} {}  {}{solo}",
+                page.number,
+                truncate(&page.name, 20),
+                count,
+                if count == 1 { "executor " } else { "executors" },
+                if page.number == active { "active" } else { "" }
+            ));
+        }
+        CommandOutcome::with_lines(lines)
+    }
+
+    fn set_page(&mut self, number: u16) -> Result<CommandOutcome, CommandError> {
+        let Some(page) = self.show.page(number) else {
+            return Err(CommandError::with_hint(
+                format!("page {number} does not exist"),
+                "`Page` lists the pages; `Store Page 2` creates one",
+            ));
+        };
+        let name = page.name.clone();
+        self.desk.page = number;
+        self.refresh_playback();
+        Ok(CommandOutcome::message(format!("Page {number} \"{name}\"")))
+    }
+
+    fn step_page(&mut self, next: bool) -> Result<CommandOutcome, CommandError> {
+        let mut numbers: Vec<u16> = self.show.pages.iter().map(|page| page.number).collect();
+        numbers.sort_unstable();
+        let Some(first) = numbers.first() else {
+            return Err(CommandError::with_hint(
+                "no pages to switch to",
+                "`Store Page 1` creates one",
+            ));
+        };
+        let index = numbers.iter().position(|number| *number == self.desk.page);
+        let target = match index {
+            Some(index) if next => numbers[(index + 1) % numbers.len()],
+            Some(index) => numbers[(index + numbers.len() - 1) % numbers.len()],
+            None => *first,
+        };
+        self.set_page(target)
+    }
+
+    fn store_page(
+        &mut self,
+        number: u16,
+        name: Option<String>,
+    ) -> Result<CommandOutcome, CommandError> {
+        if number == 0 {
+            return Err(CommandError::new("page number 0 is not allowed"));
+        }
+        if let Some(name) = &name {
+            if name.trim().is_empty() {
+                return Err(CommandError::new("page name is empty"));
+            }
+        }
+        if self.show.page(number).is_none() && self.show.pages.len() >= crate::show::MAX_PAGES {
+            return Err(CommandError::new(format!(
+                "{} pages is the limit",
+                crate::show::MAX_PAGES
+            )));
+        }
+        let existed = self.show.page(number).is_some();
+        let message = self.mutate(|show| {
+            let page = show.page_or_insert(number);
+            if let Some(name) = &name {
+                page.name = name.clone();
+            }
+            Ok(format!(
+                "{} page {number} \"{}\"",
+                if existed { "Updated" } else { "Stored" },
+                page.name
+            ))
+        })?;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn delete_page(&mut self, number: u16) -> Result<CommandOutcome, CommandError> {
+        if self.show.page(number).is_none() {
+            return Err(CommandError::with_hint(
+                format!("page {number} does not exist"),
+                "`Page` lists the pages",
+            ));
+        }
+        if self.show.pages.len() <= 1 {
+            return Err(CommandError::with_hint(
+                "the desk needs a page",
+                "store another page before deleting this one",
+            ));
+        }
+        let targets: Vec<Target> = self
+            .playback
+            .runs()
+            .filter_map(|(target, _)| match target {
+                Target::Executor { page, .. } if page == number => Some(target),
+                _ => None,
+            })
+            .collect();
+        let released = targets.len();
+        let message = self.mutate(|show| {
+            show.pages.retain(|page| page.number != number);
+            show.executors.retain(|executor| executor.page != number);
+            Ok(format!(
+                "Deleted page {number}; {released} playback{} released",
+                if released == 1 { "" } else { "s" }
+            ))
+        })?;
+        for target in targets {
+            self.playback.release(target);
+        }
+        self.desk.executors.remove(&number);
+        if self.desk.page == number {
+            self.desk.page = self
+                .show
+                .pages
+                .iter()
+                .map(|page| page.number)
+                .min()
+                .unwrap_or(1);
+        }
+        self.refresh_playback();
+        Ok(CommandOutcome::message(message))
+    }
+
     fn resolve_target(&self, reference: Option<PlaybackRef>) -> Result<Target, CommandError> {
         match reference {
             Some(PlaybackRef::Executor(number)) => {
-                if self.show.executor(number).is_none() {
+                let page = self.desk.page;
+                if self.show.executor(page, number).is_none() {
                     return Err(CommandError::with_hint(
-                        format!("executor {number} does not exist"),
+                        format!("executor {number} does not exist on page {page}"),
                         "assign one: `Assign Executor 1 Sequence 1`",
                     ));
                 }
-                Ok(Target::Executor(number))
+                Ok(Target::executor(page, number))
             }
             Some(PlaybackRef::Sequence(number)) => {
                 if self.show.sequence(number).is_none() {
@@ -4522,8 +4730,8 @@ impl Engine {
                 Ok(Target::Sequence(number))
             }
             None => {
-                if let Some(executor) = self.show.executors.first() {
-                    Ok(Target::Executor(executor.number))
+                if let Some(executor) = self.show.executors_on(self.desk.page).next() {
+                    Ok(Target::executor(self.desk.page, executor.number))
                 } else if let Some(sequence) = self.show.sequences.first() {
                     Ok(Target::Sequence(sequence.number))
                 } else {
@@ -4539,11 +4747,13 @@ impl Engine {
     fn sequence_number_for(&self, target: Target) -> Result<u16, CommandError> {
         match target {
             Target::Sequence(number) => Ok(number),
-            Target::Executor(number) => self
+            Target::Executor { page, number } => self
                 .show
-                .executor(number)
+                .executor(page, number)
                 .map(|executor| executor.sequence)
-                .ok_or_else(|| CommandError::new(format!("executor {number} does not exist"))),
+                .ok_or_else(|| {
+                    CommandError::new(format!("executor {number} does not exist on page {page}"))
+                }),
         }
     }
 
@@ -7657,6 +7867,9 @@ pub const HELP: &[&str] = &[
     "Timecode 1 Start / Pause / Stop / At 00:00:10:00",
     "Timecode [1] / Delete Timecode 1       list or delete timecode shows",
     "Assign Executor 1 Sequence 1            bind a cue list to a fader",
+    "Assign Page 2 Executor 1 Sequence 1      assign on another page",
+    "Page / Page 2 / Page Next | Prev         list or switch executor pages",
+    "Store Page 2 \"Specials\" / Delete Page 2",
     "Executor 1 At 75 | Full | Off           executor master fader",
     "Executor 1 Mode Go | Fader | Flash | Solo",
     "Executor 1 Flash [Off] | Solo [Off]     hold or release a button",
@@ -10400,10 +10613,13 @@ mod tests {
         engine.execute("Store Cue 1 Fade 0").unwrap();
         engine.execute("Assign Executor 1 Sequence 1").unwrap();
         engine.execute("Executor 1 Mode Fader").unwrap();
-        assert_eq!(engine.show.executor(1).unwrap().mode, ExecutorMode::Fader);
+        assert_eq!(
+            engine.show.executor(1, 1).unwrap().mode,
+            ExecutorMode::Fader
+        );
 
         engine.execute("Executor 1 At 60").unwrap();
-        let run = engine.playback.run(Target::Executor(1)).unwrap();
+        let run = engine.playback.run(Target::executor(1, 1)).unwrap();
         assert_eq!(run.cue_number, 1.0, "a fader on an idle list starts cue 1");
         assert!(run.is_paused(), "the fader holds the crossfade");
         assert_eq!(
@@ -11545,6 +11761,164 @@ mod tests {
         assert!(
             !values.contains_key("ColorAdd_R"),
             "a CMY palette stores CMY, not inverted RGB names"
+        );
+    }
+
+    #[test]
+    fn pages_keep_the_same_executor_number_independent() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 20").unwrap();
+        engine.execute("Store Cue 1 Fade 0").unwrap();
+        engine.execute("Assign Executor 1 Sequence 1").unwrap();
+        engine.execute("Go Executor 1").unwrap();
+
+        engine.execute("Fixture 1 At 80").unwrap();
+        engine.execute("Store Cue 1 Sequence 2 Fade 0").unwrap();
+        engine
+            .execute("Assign Page 2 Executor 1 Sequence 2")
+            .unwrap();
+        assert_eq!(engine.desk.page, 1, "assigning does not switch pages");
+        assert_eq!(engine.show.executor(2, 1).unwrap().sequence, 2);
+        assert!(
+            engine.playback.run(Target::executor(1, 1)).is_some(),
+            "page 1's run survives the assignment"
+        );
+
+        engine.execute("Page 2").unwrap();
+        assert_eq!(engine.desk.page, 2);
+        assert!(
+            engine.playback.run(Target::executor(1, 1)).is_some(),
+            "switching the display does not stop page 1"
+        );
+
+        engine.execute("Go Executor 1").unwrap();
+        assert!(engine.playback.run(Target::executor(2, 1)).is_some());
+        engine.execute("Executor 1 At 50").unwrap();
+        let level = engine.playback.output().get(1, "Dimmer").unwrap();
+        assert!(
+            (level - 0.4).abs() < 1e-9,
+            "HTP of page 1 at 20% and page 2 at 80% through a 50% fader, got {level}"
+        );
+
+        engine.execute("Release Executor 1").unwrap();
+        assert!(engine.playback.run(Target::executor(2, 1)).is_none());
+        assert!(
+            engine.playback.run(Target::executor(1, 1)).is_some(),
+            "releasing page 2 leaves page 1 running"
+        );
+    }
+
+    #[test]
+    fn pages_list_store_delete_and_undo() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 40").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+
+        let listing = engine.execute("Page").unwrap().lines.join("\n");
+        assert!(listing.contains("active 1 \"Main\""), "{listing}");
+        assert!(
+            listing
+                .lines()
+                .any(|line| line.starts_with('1') && line.contains("Main")),
+            "{listing}"
+        );
+
+        engine.execute("Store Page 2 \"Specials\"").unwrap();
+        let listing = engine.execute("Page").unwrap().lines.join("\n");
+        assert!(listing.contains("Specials"), "{listing}");
+
+        engine.execute("Page 2").unwrap();
+        let header = engine.execute("Executor").unwrap().lines[0].clone();
+        assert!(header.contains("Page 2 \"Specials\""), "{header}");
+        let status = engine.execute("Status").unwrap().lines.join("\n");
+        assert!(status.contains("Page: 2 \"Specials\""), "{status}");
+
+        let error = engine.execute("Page 9").unwrap_err();
+        assert!(error.message.contains("page 9 does not exist"), "{error}");
+        assert!(
+            error
+                .hint
+                .as_deref()
+                .is_some_and(|hint| hint.contains("`Page` lists")),
+            "{error}"
+        );
+
+        engine.execute("Page 1").unwrap();
+        engine
+            .execute("Assign Page 2 Executor 1 Sequence 1")
+            .unwrap();
+        assert_eq!(engine.desk.page, 1, "assigning elsewhere stays put");
+
+        engine.execute("Page 2").unwrap();
+        engine.execute("Go Executor 1").unwrap();
+        engine.execute("Executor 1 At 50").unwrap();
+        engine.execute("Delete Page 2").unwrap();
+        assert_eq!(engine.desk.page, 1, "deleting the active page falls back");
+        assert!(engine.show.page(2).is_none());
+        assert!(engine.show.executor(2, 1).is_none());
+        assert!(engine.playback.run(Target::executor(2, 1)).is_none());
+        assert_eq!(
+            engine.desk.executor_state(2, 1),
+            crate::desk::ExecutorDesk::default(),
+            "the page's handles are dropped with it"
+        );
+
+        engine.execute("Undo").unwrap();
+        assert!(engine.show.page(2).is_some());
+        assert!(engine.show.executor(2, 1).is_some());
+        assert!(
+            engine.playback.run(Target::executor(2, 1)).is_none(),
+            "undo restores the programming, not the released run"
+        );
+    }
+
+    #[test]
+    fn the_last_page_cannot_be_deleted_and_pages_can_be_renamed() {
+        let mut engine = engine();
+        let error = engine.execute("Delete Page 1").unwrap_err();
+        assert!(error.message.contains("needs a page"), "{error}");
+
+        engine.execute("Store Page 1 \"Front\"").unwrap();
+        assert_eq!(engine.show.page(1).unwrap().name, "Front");
+        let listing = engine.execute("Page").unwrap().lines.join("\n");
+        assert!(listing.contains("Front"), "{listing}");
+    }
+
+    #[test]
+    fn page_next_and_prev_cycle_the_stored_pages() {
+        let mut engine = engine();
+        engine.execute("Store Page 2").unwrap();
+        engine.execute("Store Page 3").unwrap();
+
+        engine.execute("Page Next").unwrap();
+        assert_eq!(engine.desk.page, 2);
+        engine.execute("Page Next").unwrap();
+        assert_eq!(engine.desk.page, 3);
+        engine.execute("Page Next").unwrap();
+        assert_eq!(engine.desk.page, 1, "the cycle wraps");
+        engine.execute("Page Prev").unwrap();
+        assert_eq!(engine.desk.page, 3);
+    }
+
+    #[test]
+    fn remote_state_mirrors_the_active_page() {
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 60").unwrap();
+        engine.execute("Store Cue 1").unwrap();
+        engine.execute("Assign Executor 1 Sequence 1").unwrap();
+        engine.execute("Store Page 2 \"Specials\"").unwrap();
+        engine
+            .execute("Assign Page 2 Executor 2 Sequence 1")
+            .unwrap();
+        engine.execute("Page 2").unwrap();
+
+        let state = engine.remote_state_json();
+        assert!(state.contains("\"page\":2"), "{state}");
+        assert!(state.contains("Specials"), "{state}");
+        assert!(state.contains("\"number\":2"), "{state}");
+        assert!(
+            !state.contains("\"number\":1"),
+            "page 1's executor is not in page 2's state: {state}"
         );
     }
 }

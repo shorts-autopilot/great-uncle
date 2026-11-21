@@ -257,7 +257,10 @@ impl Desktop {
             .exact_width(330.0)
             .show(ctx, |ui| {
                 ui.add_space(4.0);
-                ui.monospace("FADERS");
+                ui.monospace(format!(
+                    "FADERS  ·  page {}  {}",
+                    self.snapshot.desk.page, self.snapshot.desk.page_name
+                ));
                 ui.horizontal(|ui| {
                     ui.spacing_mut().slider_width = 132.0;
                     for number in 1..=9 {

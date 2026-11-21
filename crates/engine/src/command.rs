@@ -437,6 +437,8 @@ pub enum Command {
         only: Option<u16>,
     },
     AssignExecutor {
+        /// `Assign Page 2 Executor 1 …`; `None` is the active page.
+        page: Option<u16>,
         executor: u16,
         sequence: u16,
     },
@@ -446,6 +448,20 @@ pub enum Command {
     },
     ListExecutors {
         only: Option<u16>,
+    },
+    ListPages,
+    SetPage {
+        number: u16,
+    },
+    StepPage {
+        next: bool,
+    },
+    StorePage {
+        number: u16,
+        name: Option<String>,
+    },
+    DeletePage {
+        number: u16,
     },
     SelectGroup(u16),
     SetLevelGroup {
@@ -670,6 +686,9 @@ impl Command {
             | Command::ListPalettes
             | Command::ListSequences { .. }
             | Command::ListExecutors { .. }
+            | Command::ListPages
+            | Command::SetPage { .. }
+            | Command::StepPage { .. }
             | Command::ListGroups
             | Command::ListWorlds
             | Command::ListFilters
@@ -1029,6 +1048,8 @@ const RESERVED: &[&str] = &[
     "off",
     "palette",
     "executor",
+    "page",
+    "pages",
     "fixture",
     "type",
     "mode",
@@ -1309,6 +1330,9 @@ impl Parser<'_> {
         }
         if word.eq_ignore_ascii_case("executor") || word.eq_ignore_ascii_case("executors") {
             return self.executor();
+        }
+        if word.eq_ignore_ascii_case("page") || word.eq_ignore_ascii_case("pages") {
+            return self.page_command();
         }
         if word.eq_ignore_ascii_case("group") || word.eq_ignore_ascii_case("groups") {
             return self.group_command();
@@ -2453,6 +2477,12 @@ impl Parser<'_> {
     }
 
     fn store(&mut self) -> Result<Command, CommandError> {
+        if self.eat_word("page") {
+            let number = self.whole_number("page number")?;
+            let name = self.optional_name()?;
+            self.expect_end()?;
+            return Ok(Command::StorePage { number, name });
+        }
         if self.eat_word("timecode") {
             let number = self.whole_number("timecode number")?;
             let name = self.optional_name()?;
@@ -2636,6 +2666,11 @@ impl Parser<'_> {
     }
 
     fn delete(&mut self) -> Result<Command, CommandError> {
+        if self.eat_word("page") {
+            let number = self.whole_number("page number")?;
+            self.expect_end()?;
+            return Ok(Command::DeletePage { number });
+        }
         if self.eat_word("group") {
             let number = self.whole_number("group number")?;
             self.expect_end()?;
@@ -2686,10 +2721,15 @@ impl Parser<'_> {
     }
 
     fn assign(&mut self) -> Result<Command, CommandError> {
+        let page = if self.eat_word("page") {
+            Some(self.whole_number("page number")?)
+        } else {
+            None
+        };
         if !self.eat_word("executor") {
             return Err(CommandError::with_hint(
                 "`Assign` needs an executor",
-                "`Assign Executor 1 Sequence 1`",
+                "`Assign Executor 1 Sequence 1` or `Assign Page 2 Executor 1 Sequence 1`",
             ));
         }
         let executor = self.whole_number("executor number")?;
@@ -2702,7 +2742,28 @@ impl Parser<'_> {
         }
         let sequence = self.whole_number("sequence number")?;
         self.expect_end()?;
-        Ok(Command::AssignExecutor { executor, sequence })
+        Ok(Command::AssignExecutor {
+            page,
+            executor,
+            sequence,
+        })
+    }
+
+    fn page_command(&mut self) -> Result<Command, CommandError> {
+        if self.at_end() {
+            return Ok(Command::ListPages);
+        }
+        if self.eat_word("next") {
+            self.expect_end()?;
+            return Ok(Command::StepPage { next: true });
+        }
+        if self.eat_word("prev") || self.eat_word("previous") {
+            self.expect_end()?;
+            return Ok(Command::StepPage { next: false });
+        }
+        let number = self.whole_number("page number")?;
+        self.expect_end()?;
+        Ok(Command::SetPage { number })
     }
 
     fn executor(&mut self) -> Result<Command, CommandError> {
@@ -3714,10 +3775,67 @@ mod tests {
     }
 
     #[test]
+    fn parses_pages_and_page_assignments() {
+        assert_eq!(command("Page"), Command::ListPages);
+        assert_eq!(command("Page 2"), Command::SetPage { number: 2 });
+        assert_eq!(command("Page Next"), Command::StepPage { next: true });
+        assert_eq!(command("Page Prev"), Command::StepPage { next: false });
+        assert_eq!(
+            command("Store Page 2 \"Specials\""),
+            Command::StorePage {
+                number: 2,
+                name: Some("Specials".into())
+            }
+        );
+        assert_eq!(
+            command("Store Page 3"),
+            Command::StorePage {
+                number: 3,
+                name: None
+            }
+        );
+        assert_eq!(command("Delete Page 2"), Command::DeletePage { number: 2 });
+        assert_eq!(
+            command("Assign Page 2 Executor 1 Sequence 3"),
+            Command::AssignExecutor {
+                page: Some(2),
+                executor: 1,
+                sequence: 3
+            }
+        );
+        assert_eq!(
+            command("Assign Executor 1 Sequence 3"),
+            Command::AssignExecutor {
+                page: None,
+                executor: 1,
+                sequence: 3
+            }
+        );
+        assert!(!Command::ListPages.mutates());
+        assert!(!Command::SetPage { number: 2 }.mutates());
+        assert!(!Command::StepPage { next: true }.mutates());
+        assert!(Command::StorePage {
+            number: 2,
+            name: None
+        }
+        .mutates());
+        assert!(Command::DeletePage { number: 2 }.mutates());
+        assert!(Command::AssignExecutor {
+            page: Some(2),
+            executor: 1,
+            sequence: 1
+        }
+        .mutates());
+        assert!(error("Page next 2").message.contains("unexpected"));
+        assert!(error("Store Page").message.contains("page number"));
+    }
+
+    #[test]
     fn parses_executors_and_playback_commands() {
         assert_eq!(
             command("Assign Executor 2 Sequence 1"),
             Command::AssignExecutor {
+                page: None,
                 executor: 2,
                 sequence: 1
             }

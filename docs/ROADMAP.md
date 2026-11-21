@@ -70,12 +70,13 @@ a preference: item 3 must land before anything that reads a desk file.
 
 A follow-up review ranked the work outside these eighteen. The hardware and
 display proof it put first remains the release gate: no row is `verified`
-until it has run on real DMX hardware and a real display. The first buildable
-item from that review is designed and built:
+until it has run on real DMX hardware and a real display. The first two
+buildable items from that review are designed and built:
 
 | Item | State |
 |---|---|
 | [19 the colour model](design/19-colour-model.md) | **built** — `Color` by name, hex, RGB, CMY, HSB or kelvin; additive, CMY and wheel assignment; RGBW extraction; sheet swatches for every system; no format change |
+| [20 executor pages](design/20-executor-pages.md) | **built** — named pages, page-qualified executor numbers and runs, `Page`/`Store Page`/`Delete Page`, per-page handles, show v13 with the v12 upgrade, active-page GUI and remote views |
 
 ## Why this order
 
@@ -162,11 +163,13 @@ for every older version. This is the schedule the designs assume.
 | show v10 | channel `fine_offset`, named channel sets | 08 |
 | show v11 | effect `targets`, `tempo` | 14 |
 | show v12 | timecode `source`, `tracks`, markers | 15 |
+| show v13 | `pages`, executor `page`; page one is implicit | 20 |
 | desk v1 | programmer, selection, world/filter, masters, run positions | 03 |
 
 The desk file is additive: later items add `#[serde(default)]` fields without a
 version bump (executors in 01, blackout/lock in 06, highlights in 09, tempo in
-14, macros in 16). Its version only moves when a field is removed or renamed,
+14, macros in 16, pages and per-page handles in 20). Its version only moves
+when a field is removed or renamed,
 because a desk file is disposable and a reader that ignores an unknown field is
 safer than a migration for every addition.
 

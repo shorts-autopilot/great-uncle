@@ -94,6 +94,9 @@ pub struct ExecutorView {
 /// Desk handles and transient state, copied out of the engine.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeskView {
+    /// The active executor page and its name.
+    pub page: u16,
+    pub page_name: String,
     pub selection: Vec<u16>,
     pub blind: bool,
     pub highlight: bool,
@@ -399,15 +402,20 @@ impl App {
 
 fn desk_view(engine: &Engine) -> DeskView {
     let desk = &engine.desk;
+    let page = desk.page;
+    let page_name = engine
+        .show()
+        .page(page)
+        .map(|page| page.name.clone())
+        .unwrap_or_default();
     let executors = engine
         .show()
-        .executors
-        .iter()
+        .executors_on(page)
         .map(|executor| {
-            let state = desk.executor_state(executor.number);
+            let state = desk.executor_state(page, executor.number);
             let run = engine
                 .playback
-                .run(engine::Target::Executor(executor.number));
+                .run(engine::Target::executor(page, executor.number));
             ExecutorView {
                 number: executor.number,
                 sequence: executor.sequence,
@@ -421,6 +429,8 @@ fn desk_view(engine: &Engine) -> DeskView {
         })
         .collect();
     DeskView {
+        page,
+        page_name,
         selection: desk.selection.clone(),
         blind: desk.blind,
         highlight: desk.highlight,
@@ -644,5 +654,23 @@ mod tests {
             "{outcome:?}"
         );
         assert!(app.snapshot().listings.pools.is_empty());
+    }
+
+    #[test]
+    fn the_desk_view_shows_only_the_active_page() {
+        let app = app();
+        app.execute("Store Page 2 \"Specials\"").unwrap();
+        app.execute("Page 2").unwrap();
+
+        let snapshot = app.snapshot();
+        assert_eq!(snapshot.desk.page, 2);
+        assert_eq!(snapshot.desk.page_name, "Specials");
+        assert!(
+            snapshot.desk.executors.is_empty(),
+            "an empty page shows no page-one executors"
+        );
+
+        app.execute("Page 1").unwrap();
+        assert_eq!(app.snapshot().desk.page, 1);
     }
 }
