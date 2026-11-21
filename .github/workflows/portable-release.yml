@@ -13,13 +13,6 @@ on:
         required: false
         default: true
         type: boolean
-  # Temporary trigger used to validate this workflow; removed after the first
-  # release build succeeds.
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/portable-release.yml"
-
 permissions:
   contents: read
 
