@@ -13,6 +13,12 @@ on:
         required: false
         default: true
         type: boolean
+  # Temporary trigger used to validate this workflow; removed after the first
+  # release build succeeds.
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/portable-release.yml"
 
 permissions:
   contents: read
@@ -74,6 +80,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="${RELEASE_TAG:-portable-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}}"
+          prerelease="${PRERELEASE:-true}"
           if ! git check-ref-format "refs/tags/$tag"; then
             echo "invalid release tag: $tag" >&2
             exit 1
@@ -81,9 +88,9 @@ jobs:
 
           shopt -s nullglob
           assets=(dist/*.tar.gz dist/*.zip dist/SHA256SUMS-*.txt)
-          prerelease=()
-          if [ "$PRERELEASE" = "true" ]; then
-            prerelease+=(--prerelease)
+          prerelease_args=()
+          if [ "$prerelease" = "true" ]; then
+            prerelease_args+=(--prerelease)
           fi
 
           gh release create "$tag" "${assets[@]}" \
@@ -91,7 +98,7 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "Portable build $tag" \
             --notes "Portable Linux and Windows archives built from ${GITHUB_SHA} by workflow run ${GITHUB_RUN_ID}." \
-            "${prerelease[@]}"
+            "${prerelease_args[@]}"
 
           url="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url)"
           {
