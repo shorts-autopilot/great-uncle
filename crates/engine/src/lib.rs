@@ -15,6 +15,7 @@
 //! * [`fixture_type`] — GDTF-derived fixture types, modes and channel functions.
 //! * [`gdtf`] — `.gdtf` archive import.
 //! * [`command`] — lexer and parser for the command line.
+//! * [`color`] — colour names, spaces and the three fixture colour systems.
 //! * [`levels`] — normalised level maps shared by every layer.
 //! * [`palette`] — typed preset pools.
 //! * [`playback`] — cues, sequences, executors and running fades.
@@ -28,6 +29,7 @@
 //! * [`output`] — 60 Hz engine tick + 30 Hz frame output thread.
 
 pub mod builder;
+pub mod color;
 pub mod command;
 pub mod csv;
 pub mod desk;

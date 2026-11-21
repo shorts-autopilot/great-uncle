@@ -128,3 +128,142 @@ pub fn demo_show() -> Show {
     });
     show
 }
+
+/// A synthetic subtractive wash: Dimmer and CMY. Not derived from any vendor
+/// fixture profile.
+pub fn demo_cmy_type() -> FixtureType {
+    let attribute = |name: &str, pretty: &str| AttributeDef {
+        name: name.to_string(),
+        pretty: pretty.to_string(),
+        feature: "Color.CMY".into(),
+        unit: "Percent".into(),
+    };
+    let channel = |offset: u16, name: &str| Channel {
+        offset,
+        fine_offset: None,
+        attribute: name.to_string(),
+        default_raw: 0,
+        functions: vec![ChannelFunction {
+            name: name.to_string(),
+            dmx_from: 0,
+            dmx_to: 255,
+            physical_from: 0.0,
+            physical_to: 100.0,
+        }],
+    };
+
+    FixtureType {
+        manufacturer: "OpenLight".into(),
+        name: "Demo CMY".into(),
+        description: "Synthetic subtractive wash used by colour tests.".into(),
+        attributes: vec![
+            AttributeDef {
+                name: "Dimmer".into(),
+                pretty: "Dimmer".into(),
+                feature: "Dimmer".into(),
+                unit: "Percent".into(),
+            },
+            attribute("ColorSub_C", "Cyan"),
+            attribute("ColorSub_M", "Magenta"),
+            attribute("ColorSub_Y", "Yellow"),
+        ],
+        modes: vec![Mode {
+            name: "4ch".into(),
+            channels: vec![
+                channel(1, "Dimmer"),
+                channel(2, "ColorSub_C"),
+                channel(3, "ColorSub_M"),
+                channel(4, "ColorSub_Y"),
+            ],
+        }],
+        home: Default::default(),
+    }
+}
+
+pub fn demo_cmy_show() -> Show {
+    let mut show = Show::new();
+    show.fixture_types.push(demo_cmy_type());
+    show.fixtures.push(Fixture {
+        number: 1,
+        name: "Demo CMY".into(),
+        type_key: "OpenLight Demo CMY".into(),
+        mode: "4ch".into(),
+        universe: 1,
+        address: 1,
+        home: Default::default(),
+    });
+    show
+}
+
+/// A synthetic profile with a five-set colour wheel. Not derived from any
+/// vendor fixture profile.
+pub fn demo_wheel_type() -> FixtureType {
+    let function = |name: &str, dmx_from: u8, dmx_to: u8, from: f64, to: f64| ChannelFunction {
+        name: name.to_string(),
+        dmx_from,
+        dmx_to,
+        physical_from: from,
+        physical_to: to,
+    };
+
+    FixtureType {
+        manufacturer: "OpenLight".into(),
+        name: "Demo Wheel".into(),
+        description: "Synthetic colour wheel used by colour tests.".into(),
+        attributes: vec![
+            AttributeDef {
+                name: "Dimmer".into(),
+                pretty: "Dimmer".into(),
+                feature: "Dimmer".into(),
+                unit: "Percent".into(),
+            },
+            AttributeDef {
+                name: "ColorWheel1".into(),
+                pretty: "Colour".into(),
+                feature: "Color.Color".into(),
+                unit: "Percent".into(),
+            },
+        ],
+        modes: vec![Mode {
+            name: "2ch".into(),
+            channels: vec![
+                Channel {
+                    offset: 1,
+                    fine_offset: None,
+                    attribute: "Dimmer".into(),
+                    default_raw: 0,
+                    functions: Vec::new(),
+                },
+                Channel {
+                    offset: 2,
+                    fine_offset: None,
+                    attribute: "ColorWheel1".into(),
+                    default_raw: 0,
+                    functions: vec![
+                        function("Open", 0, 31, 0.0, 20.0),
+                        function("Red", 32, 63, 20.0, 40.0),
+                        function("Green", 64, 95, 40.0, 60.0),
+                        function("Blue", 96, 127, 60.0, 80.0),
+                        function("CTO 3200K", 128, 159, 80.0, 100.0),
+                    ],
+                },
+            ],
+        }],
+        home: Default::default(),
+    }
+}
+
+pub fn demo_wheel_show() -> Show {
+    let mut show = Show::new();
+    show.fixture_types.push(demo_wheel_type());
+    show.fixtures.push(Fixture {
+        number: 1,
+        name: "Demo Wheel".into(),
+        type_key: "OpenLight Demo Wheel".into(),
+        mode: "2ch".into(),
+        universe: 1,
+        address: 1,
+        home: Default::default(),
+    });
+    show
+}

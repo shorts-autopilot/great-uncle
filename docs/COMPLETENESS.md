@@ -11,8 +11,8 @@ This ledger records scope and implementation evidence; it does not claim that a 
 | Status | Rows | Meaning |
 |---|---|---|
 | implemented | 56 | Works and is covered by tests. |
-| in-progress | 86 | Part of the feature exists; the rest is deferred. |
-| not-started | 689 | Not built, or not designed yet. |
+| in-progress | 87 | Part of the feature exists; the rest is deferred. |
+| not-started | 688 | Not built, or not designed yet. |
 | out-of-scope | 392 | Not a feature of this product; reason recorded below. |
 | verified | 0 | Implemented and proven on hardware. |
 
@@ -31,13 +31,13 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 1 | grandMA3 onPC | platform | 8 | 1 in-progress, 7 out-of-scope | The headless `openlight` binary is the onPC equivalent; vendor installer/OS rows are out of scope. |
 | 1 | Show File Handling | showfile | 6 | 2 not-started, 4 implemented | Backup/template shows and file organisation need a small design. |
 | 1 | Workspace | ui/shell | 30 | 19 not-started, 5 in-progress, 2 implemented, 4 out-of-scope | Terminal shell exists; windows, panels and themes are item 18. |
-| 2 | Command Syntax and Keywords | cmd | 427 | 375 not-started, 49 in-progress, 3 implemented | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
+| 2 | Command Syntax and Keywords | cmd | 427 | 374 not-started, 50 in-progress, 3 implemented | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
 | 1 | Windows, Views, and Menus | ui/windows | 16 | 14 not-started, 2 in-progress | Windows/views/menus are item 18. |
 | 5 | Networking | session | 16 | 16 out-of-scope | Networked sessions and multi-user collaboration are outside the single-operator design. |
 | 1 | DMX In and Out | output | 6 | 1 in-progress, 1 implemented, 4 out-of-scope | Output exists; DMX In and merge need a bidirectional transport design. |
 | 5 | Single User and Multi User Systems | users | 5 | 5 out-of-scope | User accounts, ownership and screen configuration are outside the single-operator design. |
 | 1 | Patch and Fixture Setup | patch | 21 | 5 not-started, 4 in-progress, 6 implemented, 6 out-of-scope | Item 11 adds patch tools; item 13 adds MVR; 3D rows are out of scope. |
-| 2 | Operate Fixtures | programmer | 24 | 20 not-started, 2 in-progress, 2 implemented | Selection/programmer exist; the sheet is partial; colour picker, gels and Align need designs. |
+| 2 | Operate Fixtures | programmer | 24 | 20 not-started, 2 in-progress, 2 implemented | Selection/programmer exist; the sheet is partial; a colour picker, a gel library and Align need designs. |
 | 4 | Scribbles | ui/assets | 5 | 5 out-of-scope | Bitmap scribble editor is outside the design set; text labels are supported. |
 | 7 | Images | media | 1 | 1 out-of-scope | Image assets are outside a serial-DMX desk. |
 | 5 | Screenshots | system | 1 | 1 out-of-scope | OS screenshot capture is not a desk feature. |
@@ -152,11 +152,11 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 1 | grandMA3 onPC | 0 | 1 | The headless `openlight` binary is the onPC equivalent; vendor installer/OS rows are out of scope. |
 | 1 | Show File Handling | 2 | 0 | Backup/template shows and file organisation need a small design. |
 | 1 | Workspace | 19 | 5 | Terminal shell exists; windows, panels and themes are item 18. |
-| 2 | Command Syntax and Keywords | 375 | 49 | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
+| 2 | Command Syntax and Keywords | 374 | 50 | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
 | 1 | Windows, Views, and Menus | 14 | 2 | Windows/views/menus are item 18. |
 | 1 | DMX In and Out | 0 | 1 | Output exists; DMX In and merge need a bidirectional transport design. |
 | 1 | Patch and Fixture Setup | 5 | 4 | Item 11 adds patch tools; item 13 adds MVR; 3D rows are out of scope. |
-| 2 | Operate Fixtures | 20 | 2 | Selection/programmer exist; the sheet is partial; colour picker, gels and Align need designs. |
+| 2 | Operate Fixtures | 20 | 2 | Selection/programmer exist; the sheet is partial; a colour picker, a gel library and Align need designs. |
 | 4 | Appearances | 4 | 0 | Pool appearance metadata needs a small design. |
 | 4 | Notes | 3 | 0 | Notes on objects and cues need a small design. |
 | 1 | Label Objects | 0 | 1 | Pool labels are partial; editing labels needs a command/UI. |
@@ -192,8 +192,8 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 
 These are the gaps that a chapter-by-chapter audit would otherwise hide. Ranked by value to a working desk.
 
-1. **Colour model** — `ColorSub_*`/CMY, HSB, colour wheels, CTO and gels. Additive RGB only is wrong for a large class of real profiles; affects palettes, cues, effects and the GUI swatch.
-2. **DMX In and merge** — The `dmx` chapter's first row is only half built: the transport is write-only, so there is no backup desk, house console or DMX-triggered snapshot.
+1. **DMX In and merge** — The `dmx` chapter's first row is only half built: the transport is write-only, so there is no backup desk, house console or DMX-triggered snapshot.
+2. **Colour depth: gels and a picker** — Item 19 covers CMY, HSB, named and hex colours, wheel matching and kelvin whites. A gel/swatch-book library and a colour picker UI remain unbuilt.
 3. **RDM** — Discovery and remote patching; shares the bidirectional transport work with DMX In.
 4. **MAtricks, Shuffle and Align** — Programming speed for multi-fixture edits; the whole `matricks` chapter and `Align` are unbuilt.
 5. **Recipes and Generator** — Look generation beyond a single waveform; `recipes`, `generator` and recipe presets are unbuilt.

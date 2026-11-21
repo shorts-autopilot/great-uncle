@@ -66,6 +66,17 @@ the desk file, which needs no version bump (see the ladder below). Show versions
 are allocated by implementation order, so the numbers above are a schedule, not
 a preference: item 3 must land before anything that reads a desk file.
 
+### After the set
+
+A follow-up review ranked the work outside these eighteen. The hardware and
+display proof it put first remains the release gate: no row is `verified`
+until it has run on real DMX hardware and a real display. The first buildable
+item from that review is designed and built:
+
+| Item | State |
+|---|---|
+| [19 the colour model](design/19-colour-model.md) | **built** — `Color` by name, hex, RGB, CMY, HSB or kelvin; additive, CMY and wheel assignment; RGBW extraction; sheet swatches for every system; no format change |
+
 ## Why this order
 
 The first four steps make the desk safe to leave running before it gets more

@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::builder::FixtureTypeFile;
+use crate::color::{self, ColorSpec};
 use crate::command::{
     self, Command, CommandError, EffectRate, Level, LevelSource, PlaybackRef, ReportKind,
     SetTarget, StoreMode, TimecodeAction, TriggerArg,
@@ -677,6 +678,11 @@ impl Engine {
                 off,
             } => self.set_home(fixtures, group, attribute, level, off),
             Command::Home { fixtures, group } => self.home(fixtures, group),
+            Command::SetColor {
+                fixtures,
+                group,
+                spec,
+            } => self.set_color(fixtures, group, spec),
             Command::SetExecutorMode { executor, mode } => self.set_executor_mode(executor, mode),
             Command::SetExecutorFlash { executor, on } => self.set_executor_flash(executor, on),
             Command::SetExecutorSolo { executor, on } => self.set_executor_solo(executor, on),
@@ -2263,16 +2269,10 @@ impl Engine {
                     }
                 };
                 let mut seen = BTreeSet::new();
-                let mut rgb = [0u8; 3];
-                let mut has_colour = false;
                 for channel in &mode.channels {
                     let key = channel.attribute.to_ascii_lowercase();
                     let level = stage.level(fixture, &channel.attribute);
                     let percent = (level * 100.0).round().clamp(0.0, 100.0) as u8;
-                    if let Some(slot) = colour_slot(&key) {
-                        rgb[slot] = (level.clamp(0.0, 1.0) * 255.0).round() as u8;
-                        has_colour = true;
-                    }
                     if !seen.insert(key) {
                         continue;
                     }
@@ -2282,8 +2282,10 @@ impl Engine {
                         level: percent,
                     });
                 }
-                if has_colour {
-                    row.colour = Some(rgb);
+                if let Some(colour) =
+                    color::swatch(mode, |attribute| stage.level(fixture, attribute))
+                {
+                    row.colour = Some(colour.bytes());
                 }
                 row
             })
@@ -4917,6 +4919,113 @@ impl Engine {
         Ok(CommandOutcome::message(message))
     }
 
+    /// `Color …`: write one colour intent into each fixture's own system, or
+    /// list the rendered colour. Every target is resolved before anything is
+    /// written, so a mixed selection either colours completely or not at all.
+    fn set_color(
+        &mut self,
+        fixtures: Option<Vec<u16>>,
+        group: Option<u16>,
+        spec: Option<ColorSpec>,
+    ) -> Result<CommandOutcome, CommandError> {
+        let targets = match group {
+            Some(number) => self.group_targets(number)?,
+            None => self.targets(fixtures)?,
+        };
+        let Some(spec) = spec else {
+            return Ok(self.color_listing(&targets));
+        };
+        let rgb = spec.resolve().map_err(CommandError::new)?;
+
+        let mut plans: Vec<(u16, color::Plan)> = Vec::with_capacity(targets.len());
+        for number in &targets {
+            let fixture = self
+                .show
+                .fixture(*number)
+                .ok_or_else(|| CommandError::new(format!("fixture {number} is not patched")))?;
+            let (_, mode) = self.show.mode_for(fixture).map_err(CommandError::new)?;
+            let plan = color::assignments(mode, &spec).map_err(|error| {
+                CommandError::with_hint(
+                    format!(
+                        "fixture {number} ({}) cannot show a colour: {error}",
+                        fixture.name
+                    ),
+                    "`Sheet` lists the attributes each fixture has; patch an RGB, CMY or colour-wheel mode",
+                )
+            })?;
+            for (attribute, _) in &plan.assignments {
+                self.check_attribute_allowed(std::slice::from_ref(number), attribute)?;
+            }
+            plans.push((*number, plan));
+        }
+
+        let label = format_fixture_list(&targets);
+        let mut message = if spec.is_hex() {
+            format!("{label} color {}", spec.label())
+        } else {
+            format!("{label} color {} ({})", spec.label(), rgb.hex())
+        };
+        let wheel_notes: Vec<String> = plans
+            .iter()
+            .filter_map(|(number, plan)| {
+                plan.wheel
+                    .as_ref()
+                    .map(|(index, name)| format!("fixture {number} set {index} \"{name}\""))
+            })
+            .collect();
+        if !wheel_notes.is_empty() {
+            message.push_str(&format!(" ({})", wheel_notes.join(", ")));
+        }
+
+        let message = self.edit_programmer(|programmer| {
+            for (number, plan) in &plans {
+                for (attribute, level) in &plan.assignments {
+                    programmer.set(*number, attribute, *level);
+                }
+            }
+            message
+        });
+        self.desk.selection = targets;
+        Ok(CommandOutcome::message(message))
+    }
+
+    /// `Color`: the rendered colour of each selected fixture, through the same
+    /// stage `Sheet` reads, so the two listings can never disagree.
+    fn color_listing(&self, targets: &[u16]) -> CommandOutcome {
+        let playback = self.playback.output();
+        let effects = self.effects.output(
+            &self.show,
+            self.desk.masters.rate,
+            self.desk.tempo,
+            self.clock,
+        );
+        let stage = Stage::new(
+            &self.show,
+            &self.desk.programmer,
+            playback,
+            &effects,
+            &self.desk.masters,
+            self.desk.blackout_master(self.clock),
+        );
+        let mut lines = Vec::new();
+        for number in targets {
+            let Some(fixture) = self.show.fixture(*number) else {
+                continue;
+            };
+            let line = match self.show.mode_for(fixture) {
+                Ok((_, mode)) => {
+                    match color::describe(mode, |attribute| stage.level(fixture, attribute)) {
+                        Ok(description) => format!("Fixture {number}  {description}"),
+                        Err(error) => format!("Fixture {number}  unsupported: {error}"),
+                    }
+                }
+                Err(error) => format!("Fixture {number}  {error}"),
+            };
+            lines.push(line);
+        }
+        CommandOutcome::with_lines(lines)
+    }
+
     fn store_group(
         &mut self,
         number: u16,
@@ -7500,6 +7609,10 @@ pub const HELP: &[&str] = &[
     "Fixture 1 Thru 5                       select fixtures",
     "Fixture 1 Thru 5 At 50                 set Dimmer (0 to 100)",
     "Fixture 1 At ColorAdd_R 40             set any attribute of the mode",
+    "Color Red / Color \"#FF8000\"            set the selection's colour",
+    "Color Rgb 255 128 0 / Cmy 0 60 100 / Hsb 30 100 50 / 3200K",
+    "Fixture 1 Color Red / Group 1 Color Red  colour one fixture or a group",
+    "Color                                  list each fixture's colour system",
     "Fixture 1 Gobo 2 / Gobo \"Rotate CW\"     choose a channel set",
     "Fixture 1 Gobo / Group 1 Gobo          list the sets and the current one",
     "At Palette Color 3                     apply a stored palette",
@@ -7748,16 +7861,6 @@ fn channel_set_error(
     }
 }
 
-/// Which RGB component an attribute name feeds, if any.
-fn colour_slot(attribute: &str) -> Option<usize> {
-    match attribute {
-        "coloradd_r" | "color_r" | "red" => Some(0),
-        "coloradd_g" | "color_g" | "green" => Some(1),
-        "coloradd_b" | "color_b" | "blue" => Some(2),
-        _ => None,
-    }
-}
-
 fn truncate(text: &str, width: usize) -> String {
     if text.chars().count() <= width {
         return text.to_string();
@@ -7770,7 +7873,10 @@ fn truncate(text: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{demo_fixture_type, demo_moving_show, demo_show};
+    use crate::test_support::{
+        demo_cmy_show, demo_fixture_type, demo_moving_show, demo_moving_type, demo_show,
+        demo_wheel_show,
+    };
     use std::time::Duration;
 
     fn engine() -> Engine {
@@ -7787,6 +7893,23 @@ mod tests {
             .execute("Patch Fixture 2 At 1.005")
             .expect("demo type covers 4 channels at 1.001");
         engine
+    }
+
+    fn mixed_colour_engine() -> Engine {
+        let mut show = demo_show();
+        let moving = demo_moving_type();
+        let type_key = moving.key();
+        show.fixture_types.push(moving);
+        show.fixtures.push(Fixture {
+            number: 2,
+            name: "Demo Moving".into(),
+            type_key,
+            mode: "3ch".into(),
+            universe: 1,
+            address: 5,
+            home: Default::default(),
+        });
+        Engine::new(show)
     }
 
     fn dimmer(engine: &Engine, fixture: u16) -> f64 {
@@ -11295,5 +11418,133 @@ mod tests {
             .find(|row| row.kind == crate::listing::TimecodeRowKind::Marker)
             .expect("a marker row");
         assert_eq!(marker.action, "Red");
+    }
+
+    #[test]
+    fn colour_red_writes_the_additive_system() {
+        let mut engine = engine();
+        engine.execute("Fixture 1").unwrap();
+        let outcome = engine.execute("Color Red").unwrap();
+        assert!(
+            outcome.lines[0].contains("color Red (#FF0000)"),
+            "{outcome:?}"
+        );
+        assert_eq!(engine.desk.programmer.get(1, "ColorAdd_R"), Some(1.0));
+        assert_eq!(engine.desk.programmer.get(1, "ColorAdd_G"), Some(0.0));
+        assert_eq!(engine.desk.programmer.get(1, "ColorAdd_B"), Some(0.0));
+        assert_eq!(engine.desk.selection, vec![1]);
+        assert_eq!(engine.sheet_rows()[0].colour, Some([255, 0, 0]));
+    }
+
+    #[test]
+    fn colour_red_inverts_into_cmy() {
+        let mut engine = Engine::new(demo_cmy_show());
+        engine.execute("Fixture 1").unwrap();
+        engine.execute("Color Red").unwrap();
+        assert_eq!(engine.desk.programmer.get(1, "ColorSub_C"), Some(0.0));
+        assert_eq!(engine.desk.programmer.get(1, "ColorSub_M"), Some(1.0));
+        assert_eq!(engine.desk.programmer.get(1, "ColorSub_Y"), Some(1.0));
+        assert_eq!(engine.sheet_rows()[0].colour, Some([255, 0, 0]));
+
+        let listing = engine.execute("Color").unwrap();
+        assert!(listing.lines[0].contains("subtractive"), "{listing:?}");
+        assert!(listing.lines[0].contains("#FF0000"), "{listing:?}");
+    }
+
+    #[test]
+    fn colour_picks_and_names_a_wheel_set() {
+        let mut engine = Engine::new(demo_wheel_show());
+        engine.execute("Fixture 1").unwrap();
+        let outcome = engine.execute("Color Blue").unwrap();
+        assert!(outcome.lines[0].contains("set 4 \"Blue\""), "{outcome:?}");
+        let level = engine.desk.programmer.get(1, "ColorWheel1").unwrap();
+        assert!((level - 0.7).abs() < 1e-9, "the set midpoint, got {level}");
+        assert_eq!(engine.sheet_rows()[0].colour, Some([0, 0, 255]));
+
+        let listing = engine.execute("Color").unwrap();
+        assert!(
+            listing.lines[0].contains("wheel  set 4 \"Blue\"  #0000FF"),
+            "{listing:?}"
+        );
+    }
+
+    #[test]
+    fn colour_group_form_reaches_every_member() {
+        let mut engine = two_fixture_engine();
+        engine.execute("Fixture 1 Thru 2").unwrap();
+        engine.execute("Store Group 1").unwrap();
+        engine.execute("Color Hsb 240 100 100").unwrap();
+        for fixture in [1, 2] {
+            assert_eq!(
+                engine.desk.programmer.get(fixture, "ColorAdd_B"),
+                Some(1.0),
+                "fixture {fixture} is blue"
+            );
+        }
+
+        engine.execute("Clear Values").unwrap();
+        let outcome = engine.execute("Group 1 Color Red").unwrap();
+        assert!(outcome.lines[0].contains("1 + 2 color Red"), "{outcome:?}");
+        for fixture in [1, 2] {
+            assert_eq!(
+                engine.desk.programmer.get(fixture, "ColorAdd_R"),
+                Some(1.0),
+                "fixture {fixture} is red"
+            );
+        }
+    }
+
+    #[test]
+    fn colour_rejects_a_mixed_selection_atomically() {
+        let mut engine = mixed_colour_engine();
+        engine.execute("Fixture 1 + 2").unwrap();
+        let error = engine.execute("Color Red").unwrap_err();
+        assert!(error.message.contains("fixture 2"), "{error}");
+        assert!(error.message.contains("no additive"), "{error}");
+        assert!(
+            engine.desk.programmer.is_empty(),
+            "nothing is written when one target cannot colour"
+        );
+    }
+
+    #[test]
+    fn colour_listing_is_a_query() {
+        let mut engine = engine();
+        engine.execute("Fixture 1").unwrap();
+        let outcome = engine.execute("Color").unwrap();
+        assert!(outcome.lines[0].contains("additive"), "{outcome:?}");
+        assert!(outcome.lines[0].contains("#000000"), "{outcome:?}");
+        assert!(engine.desk.programmer.is_empty());
+    }
+
+    #[test]
+    fn colour_respects_an_intensity_filter() {
+        let mut engine = engine();
+        engine.execute("Fixture 1").unwrap();
+        engine
+            .execute("Store Filter 1 \"Intensity\" Dimmer")
+            .unwrap();
+        engine.execute("Filter 1").unwrap();
+        let error = engine.execute("Color Red").unwrap_err();
+        assert!(error.message.contains("ColorAdd_R"), "{error}");
+        assert!(error.message.contains("Filter 1"), "{error}");
+        assert!(engine.desk.programmer.is_empty());
+    }
+
+    #[test]
+    fn colour_palette_keeps_the_fixture_system() {
+        let mut engine = Engine::new(demo_cmy_show());
+        engine.execute("Fixture 1").unwrap();
+        engine.execute("Color Red").unwrap();
+        engine.execute("Store Palette Color 1 \"Red\"").unwrap();
+        let palette = engine.show.palette("color", 1).unwrap();
+        let values = palette.values_for("OpenLight Demo CMY").unwrap();
+        assert_eq!(values.get("ColorSub_C"), Some(&0.0));
+        assert_eq!(values.get("ColorSub_M"), Some(&1.0));
+        assert_eq!(values.get("ColorSub_Y"), Some(&1.0));
+        assert!(
+            !values.contains_key("ColorAdd_R"),
+            "a CMY palette stores CMY, not inverted RGB names"
+        );
     }
 }

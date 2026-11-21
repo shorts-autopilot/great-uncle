@@ -10,6 +10,11 @@
 //! Fixture 1 Gobo 2 | Gobo "Rotate CW"     choose a channel set by index or name
 //! Fixture 1 Gobo                          list the sets and the current one
 //! Group 1 Gobo "Open"                     the same through a group
+//! Color Red | Color "#FF8000"             set a colour by name or hex
+//! Color Rgb 255 128 0 | Cmy 0 60 100      set a colour by components
+//! Color Hsb 30 100 50 | Color 3200K       set a colour by HSB or temperature
+//! Fixture 1 Color Red | Group 1 Color Red one fixture or a group
+//! Color                                   list the selection's colours
 //! At Palette Color 3                      apply a palette to the selection
 //! Full | Off                              apply to the current selection
 //! Clear | Clear Values | Clear All
@@ -85,6 +90,7 @@
 
 use std::fmt;
 
+use crate::color::{self, ColorSpec};
 use crate::playback::{Curve, ExecutorMode, Trigger};
 use crate::timecode::TimecodeSource;
 
@@ -404,6 +410,13 @@ pub enum Command {
         fixtures: Option<Vec<u16>>,
         group: Option<u16>,
     },
+    /// `Color <spec>`: set a colour through the fixture's own system, or list
+    /// the selection's rendered colour when no spec is given.
+    SetColor {
+        fixtures: Option<Vec<u16>>,
+        group: Option<u16>,
+        spec: Option<ColorSpec>,
+    },
     SetExecutorMode {
         executor: u16,
         mode: ExecutorMode,
@@ -691,6 +704,8 @@ impl Command {
             Command::SetHome {
                 attribute: None, ..
             } => false,
+            // Listing a fixture's colour changes nothing.
+            Command::SetColor { spec: None, .. } => false,
             // Lifting a blackout is always allowed: refusing it is a hazard.
             Command::Blackout { off: true, .. } => false,
             // A preview is a view, never an output or a saved intent.
@@ -971,6 +986,30 @@ fn is_word_char(character: char) -> bool {
     !character.is_whitespace() && !matches!(character, '+' | '"' | '\'' | ';')
 }
 
+/// `3200K` / `3200k` — a whole number directly followed by K.
+fn kelvin_word(word: &str) -> Option<u32> {
+    let digits = word.strip_suffix('k').or_else(|| word.strip_suffix('K'))?;
+    if digits.is_empty() || !digits.chars().all(|character| character.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+fn hex_error(text: &str) -> CommandError {
+    CommandError::with_hint(
+        format!("`{text}` is not a colour"),
+        "use exactly six hex digits: `#FF8000`",
+    )
+}
+
+fn unknown_colour(name: &str) -> CommandError {
+    let names: Vec<&str> = color::NAMED_COLOURS.iter().map(|(name, _)| *name).collect();
+    CommandError::with_hint(
+        format!("unknown colour `{name}`"),
+        format!("named colours: {}", names.join(", ")),
+    )
+}
+
 pub fn parse(tokens: &[Token]) -> Result<Command, CommandError> {
     let mut parser = Parser {
         tokens,
@@ -1048,6 +1087,7 @@ const RESERVED: &[&str] = &[
     "blind",
     "preview",
     "highlight",
+    "color",
 ];
 
 struct Parser<'a> {
@@ -1151,6 +1191,9 @@ impl Parser<'_> {
                 fixtures,
                 group: None,
             });
+        }
+        if word.eq_ignore_ascii_case("color") {
+            return self.color_action(None, None);
         }
         if word.eq_ignore_ascii_case("clear") {
             let mut all = false;
@@ -1450,6 +1493,9 @@ impl Parser<'_> {
                 group: None,
             });
         }
+        if self.eat_word("color") {
+            return self.color_action(Some(fixtures), None);
+        }
         if self.eat_word("default") {
             return self.default_action(Some(fixtures), None);
         }
@@ -1461,7 +1507,7 @@ impl Parser<'_> {
                 "unexpected {}",
                 self.peek().cloned().unwrap_or(Token::Word(String::new()))
             ),
-            "after a fixture list use `At <level>`, `Full`, `Off`, `Home`, `Default` or `Gobo 2`",
+            "after a fixture list use `At <level>`, `Full`, `Off`, `Home`, `Color`, `Default` or `Gobo 2`",
         ))
     }
 
@@ -1520,6 +1566,146 @@ impl Parser<'_> {
             attribute,
             target: Some(target),
         })
+    }
+
+    /// `Color [<spec>]`: a colour intent, or the listing when nothing follows.
+    fn color_action(
+        &mut self,
+        fixtures: Option<Vec<u16>>,
+        group: Option<u16>,
+    ) -> Result<Command, CommandError> {
+        if self.at_end() {
+            return Ok(Command::SetColor {
+                fixtures,
+                group,
+                spec: None,
+            });
+        }
+        let spec = self.color_spec()?;
+        self.expect_end()?;
+        Ok(Command::SetColor {
+            fixtures,
+            group,
+            spec: Some(spec),
+        })
+    }
+
+    /// One colour: a name, a hex value, `Rgb`/`Cmy`/`Hsb` components or a
+    /// kelvin temperature. Everything is validated here so the engine only
+    /// sees values it can write.
+    fn color_spec(&mut self) -> Result<ColorSpec, CommandError> {
+        let Some(token) = self.bump() else {
+            return Err(CommandError::with_hint(
+                "expected a colour",
+                "use a name, `#RRGGBB`, `Rgb 255 128 0`, `Cmy 0 60 100`, `Hsb 30 100 50` or `3200K`",
+            ));
+        };
+        match token {
+            Token::Word(word) => {
+                if word.eq_ignore_ascii_case("rgb") {
+                    let red = self.byte_component("red")?;
+                    let green = self.byte_component("green")?;
+                    let blue = self.byte_component("blue")?;
+                    return Ok(ColorSpec::Rgb(red, green, blue));
+                }
+                if word.eq_ignore_ascii_case("cmy") {
+                    let cyan = self.number_component("cyan", 0.0, 100.0)?;
+                    let magenta = self.number_component("magenta", 0.0, 100.0)?;
+                    let yellow = self.number_component("yellow", 0.0, 100.0)?;
+                    return Ok(ColorSpec::Cmy(cyan, magenta, yellow));
+                }
+                if word.eq_ignore_ascii_case("hsb") {
+                    let hue = self.number_component("hue", 0.0, 360.0)?;
+                    let saturation = self.number_component("saturation", 0.0, 100.0)?;
+                    let brightness = self.number_component("brightness", 0.0, 100.0)?;
+                    return Ok(ColorSpec::Hsb(hue, saturation, brightness));
+                }
+                if word.starts_with('#') {
+                    if color::parse_hex(&word).is_none() {
+                        return Err(hex_error(&word));
+                    }
+                    return Ok(ColorSpec::Hex(word));
+                }
+                if let Some(kelvin) = kelvin_word(&word) {
+                    if !(u32::from(color::MIN_KELVIN)..=u32::from(color::MAX_KELVIN))
+                        .contains(&kelvin)
+                    {
+                        return Err(CommandError::new(format!(
+                            "colour temperature {kelvin}K is outside {}..{}K",
+                            color::MIN_KELVIN,
+                            color::MAX_KELVIN
+                        )));
+                    }
+                    return Ok(ColorSpec::Kelvin(kelvin as u16));
+                }
+                // A name may be several words: `Color Warm White`. Join the
+                // rest, so a typo is reported as one unknown colour rather
+                // than as an unexpected token.
+                let mut name = word;
+                while let Some(Token::Word(next)) = self.peek().cloned() {
+                    self.position += 1;
+                    name.push(' ');
+                    name.push_str(&next);
+                }
+                if color::named(&name).is_none() {
+                    return Err(unknown_colour(&name));
+                }
+                Ok(ColorSpec::Named(name))
+            }
+            Token::Quoted(text) => {
+                if text.trim().starts_with('#') {
+                    if color::parse_hex(&text).is_none() {
+                        return Err(hex_error(&text));
+                    }
+                    Ok(ColorSpec::Hex(text))
+                } else if color::named(&text).is_some() {
+                    Ok(ColorSpec::Named(text))
+                } else {
+                    Err(unknown_colour(&text))
+                }
+            }
+            Token::Number(raw) => Err(CommandError::with_hint(
+                format!("`{raw}` is not a colour"),
+                "a kelvin value needs a K: `3200K`; otherwise use a name or a component form",
+            )),
+            other => Err(CommandError::with_hint(
+                format!("unexpected {other} after `Color`"),
+                "use a name, `#RRGGBB`, `Rgb 255 128 0`, `Cmy 0 60 100`, `Hsb 30 100 50` or `3200K`",
+            )),
+        }
+    }
+
+    fn number_component(&mut self, what: &str, min: f64, max: f64) -> Result<f64, CommandError> {
+        match self.bump() {
+            Some(Token::Number(raw)) => {
+                let value: f64 = raw
+                    .parse()
+                    .map_err(|_| CommandError::new(format!("`{raw}` is not a {what}")))?;
+                if !value.is_finite() || value < min || value > max {
+                    return Err(CommandError::new(format!(
+                        "{what} {raw} is outside {min}..{max}"
+                    )));
+                }
+                Ok(value)
+            }
+            Some(other) => Err(CommandError::new(format!(
+                "expected a {what}, got {other}"
+            ))),
+            None => Err(CommandError::with_hint(
+                format!("expected a {what}"),
+                "`Rgb` takes three 0..255 bytes; `Cmy` and `Hsb` take three 0..100 values (hue 0..360)",
+            )),
+        }
+    }
+
+    fn byte_component(&mut self, what: &str) -> Result<u8, CommandError> {
+        let value = self.number_component(what, 0.0, 255.0)?;
+        if (value - value.round()).abs() > 1e-9 {
+            return Err(CommandError::new(format!(
+                "{what} {value} must be a whole number"
+            )));
+        }
+        Ok(value.round() as u8)
     }
 
     /// `Default [<attribute> <level> | <attribute> Off]`: a home override, or
@@ -1918,6 +2104,9 @@ impl Parser<'_> {
                 group: Some(number),
             });
         }
+        if self.eat_word("color") {
+            return self.color_action(None, Some(number));
+        }
         if self.eat_word("default") {
             return self.default_action(None, Some(number));
         }
@@ -1929,7 +2118,7 @@ impl Parser<'_> {
                 "unexpected {}",
                 self.peek().cloned().unwrap_or(Token::Word(String::new()))
             ),
-            "after a group use `At <level>`, `Full`, `Off`, `Home`, `Default` or `Gobo 2`",
+            "after a group use `At <level>`, `Full`, `Off`, `Home`, `Color`, `Default` or `Gobo 2`",
         ))
     }
 
@@ -4531,5 +4720,127 @@ mod tests {
         assert!(lex("Preview Cue")
             .and_then(|tokens| parse(&tokens))
             .is_err());
+    }
+
+    #[test]
+    fn parses_every_colour_form() {
+        assert_eq!(
+            command("Color Red"),
+            Command::SetColor {
+                fixtures: None,
+                group: None,
+                spec: Some(ColorSpec::Named("Red".into())),
+            }
+        );
+        assert_eq!(
+            command("Color Warm White"),
+            Command::SetColor {
+                fixtures: None,
+                group: None,
+                spec: Some(ColorSpec::Named("Warm White".into())),
+            },
+            "an unquoted name joins its words"
+        );
+        assert_eq!(
+            command(r#"Fixture 2 Color "Warm White""#),
+            Command::SetColor {
+                fixtures: Some(vec![2]),
+                group: None,
+                spec: Some(ColorSpec::Named("Warm White".into())),
+            }
+        );
+        assert_eq!(
+            command(r##"Color "#ff8000""##),
+            Command::SetColor {
+                fixtures: None,
+                group: None,
+                spec: Some(ColorSpec::Hex("#ff8000".into())),
+            }
+        );
+        assert_eq!(
+            command("Color #FF8000"),
+            Command::SetColor {
+                fixtures: None,
+                group: None,
+                spec: Some(ColorSpec::Hex("#FF8000".into())),
+            }
+        );
+        assert_eq!(
+            command("Group 3 Color Rgb 255 128 0"),
+            Command::SetColor {
+                fixtures: None,
+                group: Some(3),
+                spec: Some(ColorSpec::Rgb(255, 128, 0)),
+            }
+        );
+        assert_eq!(
+            command("Fixture 1 Color Cmy 0 60 100"),
+            Command::SetColor {
+                fixtures: Some(vec![1]),
+                group: None,
+                spec: Some(ColorSpec::Cmy(0.0, 60.0, 100.0)),
+            }
+        );
+        assert_eq!(
+            command("Color Hsb 30 100 50.5"),
+            Command::SetColor {
+                fixtures: None,
+                group: None,
+                spec: Some(ColorSpec::Hsb(30.0, 100.0, 50.5)),
+            }
+        );
+        assert_eq!(
+            command("Color 3200K"),
+            Command::SetColor {
+                fixtures: None,
+                group: None,
+                spec: Some(ColorSpec::Kelvin(3200)),
+            }
+        );
+        assert_eq!(
+            command("Color"),
+            Command::SetColor {
+                fixtures: None,
+                group: None,
+                spec: None,
+            }
+        );
+        assert_eq!(
+            command("Fixture 1 Color"),
+            Command::SetColor {
+                fixtures: Some(vec![1]),
+                group: None,
+                spec: None,
+            }
+        );
+        assert!(command("Color Red").mutates());
+        assert!(!command("Color").mutates(), "the listing is a view");
+        assert!(!command("Fixture 1 Color").mutates());
+    }
+
+    #[test]
+    fn rejects_bad_colours_by_name() {
+        for (line, needle) in [
+            (r##"Color "#FF80""##, "#FF80"),
+            ("Color #GG8000", "#GG8000"),
+            ("Color Chartreuse", "Chartreuse"),
+            ("Color Rgb 300 0 0", "red 300"),
+            ("Color Rgb 10.5 0 0", "whole number"),
+            ("Color Rgb 10 20", "blue"),
+            ("Color Cmy 0 101 0", "magenta 101"),
+            ("Color Hsb 400 0 0", "hue 400"),
+            ("Color 3200", "`3200` is not a colour"),
+            ("Color 900K", "900K"),
+        ] {
+            let error = error(line);
+            assert!(
+                error.to_string().contains(needle),
+                "`{line}` should name `{needle}`: {error}"
+            );
+        }
+        assert!(
+            error("Color Red 5").to_string().contains("unexpected"),
+            "trailing tokens are not part of a name"
+        );
     }
 }

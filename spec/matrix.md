@@ -322,7 +322,7 @@ Scope reasons and chapter dispositions: [`docs/COMPLETENESS.md`](../docs/COMPLET
 | `CX-COMMAND_SYNTAX_KEYWORDS-0052` | CommandDelay | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0053` | Collect | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0054` | Collection | 3 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0055` | Color | 3 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0055` | Color | 3 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0056` | ColorDefinition | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0057` | ColorTheme | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0058` | Configuration | 4 | 2 | not-started |

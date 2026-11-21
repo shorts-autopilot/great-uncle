@@ -317,7 +317,7 @@ STATUS = {
 # row from "not-started" to "in-progress" so the remaining audit is visible.
 COMMAND_KEYWORDS = {
     "add", "all", "assign", "at", "attribute", "back", "black", "blackout",
-    "clear", "cue", "curve", "default", "delay", "delete", "desk", "effect",
+    "clear", "color", "cue", "curve", "default", "delay", "delete", "desk", "effect",
     "effects", "executor", "executors", "fade", "filter", "filters", "fixture",
     "fixtures", "flash", "follow", "fps", "full", "gdtf", "go", "grand", "group",
     "groups", "help", "home", "import", "in", "load", "lock", "master", "masters",
@@ -467,7 +467,7 @@ CHAPTER_NOTES = {
     "wvm": "Windows/views/menus are item 18.",
     "dmx": "Output exists; DMX In and merge need a bidirectional transport design.",
     "patch": "Item 11 adds patch tools; item 13 adds MVR; 3D rows are out of scope.",
-    "operate_fixtures": "Selection/programmer exist; the sheet is partial; colour picker, gels and Align need designs.",
+    "operate_fixtures": "Selection/programmer exist; the sheet is partial; a colour picker, a gel library and Align need designs.",
     "wvm_pool_label": "Pool labels are partial; editing labels needs a command/UI.",
     "group": "Add/remove member editing needs a command.",
     "presets": "Recipe presets need a design.",
@@ -503,8 +503,8 @@ CHAPTER_NOTES = {
 # Designs that are larger than one manual chapter and therefore cannot be read
 # off the chapter table. Ordered by value to a working desk.
 CROSS_CUTTING = [
-    ("Colour model", "`ColorSub_*`/CMY, HSB, colour wheels, CTO and gels. Additive RGB only is wrong for a large class of real profiles; affects palettes, cues, effects and the GUI swatch."),
     ("DMX In and merge", "The `dmx` chapter's first row is only half built: the transport is write-only, so there is no backup desk, house console or DMX-triggered snapshot."),
+    ("Colour depth: gels and a picker", "Item 19 covers CMY, HSB, named and hex colours, wheel matching and kelvin whites. A gel/swatch-book library and a colour picker UI remain unbuilt."),
     ("RDM", "Discovery and remote patching; shares the bidirectional transport work with DMX In."),
     ("MAtricks, Shuffle and Align", "Programming speed for multi-fixture edits; the whole `matricks` chapter and `Align` are unbuilt."),
     ("Recipes and Generator", "Look generation beyond a single waveform; `recipes`, `generator` and recipe presets are unbuilt."),

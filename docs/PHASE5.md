@@ -412,6 +412,24 @@ The window itself was compile-checked and the GUI feature passes clippy, but it
 has not been opened on a desktop in this environment; first-frame latency and
 visual layout remain for the first person with a display.
 
+## The colour model (19)
+
+`Color Red`, `Color "#FF8000"`, `Color Rgb 255 128 0`, `Color Cmy 0 60 100`,
+`Color Hsb 30 100 50` and `Color 3200K` write the selection's colour in the
+fixture's own system: additive RGB (with white extraction on RGBW), subtractive
+CMY, or the nearest named set on a colour wheel. `Fixture 1 Color …` and
+`Group 1 Color …` are the same command through a target, and bare `Color` lists
+each selected fixture's system, components and hex. `Sheet`'s swatch and the
+desktop window follow the same systems, so a CMY fixture is no longer shown as
+black. No show or desk field is added; the written values are ordinary
+programmer levels that cues, palettes, undo and the journal already understand.
+
+The model is one sRGB space with a fixed named table. It is not a gel library
+and not a colour-managed pipeline: a wheel set is matched by its name, and a
+set with no colour word is still addressed with `Fixture 1 ColorWheel1 <set>`.
+RGBW extraction uses `W = min(r, g, b)` without power normalisation, so white
+is one emitter at full rather than four.
+
 ## Known limitations
 
 - **No DMX hardware in the test environment.** Timing is exercised against a

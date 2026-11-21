@@ -8,6 +8,11 @@ All notable changes to OpenLight are recorded here. The format follows
 
 ### Added
 
+- A colour model: `Color` takes a name, hex, RGB, CMY, HSB or kelvin value and
+  writes the selection's own system — additive RGB (with RGBW white
+  extraction), subtractive CMY, or the nearest named set on a colour wheel.
+  Bare `Color` lists each fixture's system, components and hex, and the sheet
+  swatch now reads all three systems. No show or desk format change.
 - A native desktop window, `openlight-desktop`: five panes, the command line,
   nine executor faders and a grand master. It is built on `openlight-app`, the
   shared startup and snapshot layer the console now uses too, and is behind the

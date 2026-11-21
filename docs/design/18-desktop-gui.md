@@ -99,7 +99,8 @@ framework" is the decision most expensive to reverse.
   with the latest value winning.
 - Colour: the sheet shows a colour swatch per fixture when the mode has
   `ColorAdd_*`, computed from the current levels (not from a palette), so the
-  operator sees the rig, not the palette.
+  operator sees the rig, not the palette. Item 19 extends the same swatch to
+  CMY and colour-wheel modes; the window needed no change for it.
 - The command line is always present and always the source of truth: every
   action a widget performs is echoed there, so a mouse user learns the commands
   and a keyboard user is never blocked by a missing widget.

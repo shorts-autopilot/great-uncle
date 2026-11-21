@@ -16543,7 +16543,7 @@
    "module": "cmd",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "keyword_color",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/keyword_color.html",
