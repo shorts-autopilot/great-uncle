@@ -33,6 +33,7 @@ use crate::levels::Levels;
 use crate::listing::{
     Listings, PlaybackRow, PoolRow, RowRun, SheetCell, SheetRow, TimecodeRow, TimecodeRowKind,
 };
+use crate::matricks::{self, AlignTransition, MatricksProperty, MAX_SHUFFLE_SEED};
 use crate::mtc::{MtcMessage, MtcPosition, MtcReader};
 use crate::output::{lock, OutputStatus};
 use crate::palette::{self, Palette};
@@ -814,6 +815,22 @@ impl Engine {
                 group,
                 spec,
             } => self.set_color(fixtures, group, spec),
+            Command::SetMatricks { property, value } => self.set_matricks(property, value),
+            Command::SetMatricksMirror { mirror } => self.set_matricks_mirror(mirror),
+            Command::ResetMatricks => {
+                self.desk.matricks.reset();
+                Ok(CommandOutcome::message("MAtricks reset"))
+            }
+            Command::ListMatricks => Ok(self.matricks_listing()),
+            Command::SetAlignTransition { transition } => self.set_align_transition(transition),
+            Command::Align {
+                attribute,
+                from,
+                to,
+                transition,
+            } => self.align(attribute, from, to, transition),
+            Command::ListAlign => Ok(self.align_listing()),
+            Command::Shuffle { seed, off } => self.shuffle(seed, off),
             Command::SetExecutorMode { executor, mode } => self.set_executor_mode(executor, mode),
             Command::SetExecutorFlash { executor, on } => self.set_executor_flash(executor, on),
             Command::SetExecutorSolo { executor, on } => self.set_executor_solo(executor, on),
@@ -1057,6 +1074,198 @@ impl Engine {
         });
         // The fixtures you just addressed stay selected, so a following `Full`
         // or `Off` applies to the same set.
+        self.desk.selection = targets;
+        Ok(CommandOutcome::message(message))
+    }
+
+    fn set_matricks(
+        &mut self,
+        property: MatricksProperty,
+        value: u16,
+    ) -> Result<CommandOutcome, CommandError> {
+        self.desk.matricks.set(property, value);
+        let shown = match property {
+            MatricksProperty::Block => self.desk.matricks.block,
+            MatricksProperty::Group => self.desk.matricks.group,
+            MatricksProperty::Wings => self.desk.matricks.wings,
+            MatricksProperty::Width => self.desk.matricks.width,
+            MatricksProperty::Shuffle => usize::from(self.desk.matricks.shuffle),
+        };
+        Ok(CommandOutcome::message(format!(
+            "MAtricks {} {shown}",
+            property.label()
+        )))
+    }
+
+    fn set_matricks_mirror(&mut self, mirror: bool) -> Result<CommandOutcome, CommandError> {
+        self.desk.matricks.mirror = mirror;
+        Ok(CommandOutcome::message(format!(
+            "MAtricks Transform {}",
+            if mirror { "Mirror" } else { "Off" }
+        )))
+    }
+
+    fn matricks_listing(&self) -> CommandOutcome {
+        let matricks = self.desk.matricks;
+        let cells = matricks.cells(&self.desk.selection);
+        let mut lines = vec![format!(
+            "MAtricks  XBlock {}  XGroup {}  XWings {}  XWidth {}  Shuffle {}  Transform {}",
+            matricks.block,
+            matricks.group,
+            matricks.wings,
+            matricks.width,
+            if matricks.shuffle == 0 {
+                "off".to_string()
+            } else {
+                matricks.shuffle.to_string()
+            },
+            if matricks.mirror { "Mirror" } else { "Off" },
+        )];
+        lines.push(format!(
+            "Selection {} in {} cell{}",
+            format_fixture_list(&self.desk.selection),
+            cells.len(),
+            if cells.len() == 1 { "" } else { "s" }
+        ));
+        for (index, cell) in cells.iter().take(16).enumerate() {
+            lines.push(format!("  {:>2}  {}", index + 1, format_fixture_list(cell)));
+        }
+        if cells.len() > 16 {
+            lines.push(format!("  ... {} more cells", cells.len() - 16));
+        }
+        CommandOutcome::with_lines(lines)
+    }
+
+    fn shuffle(&mut self, seed: Option<u16>, off: bool) -> Result<CommandOutcome, CommandError> {
+        let seed = if off {
+            0
+        } else {
+            match seed {
+                Some(seed) => seed.min(MAX_SHUFFLE_SEED),
+                None => {
+                    let next = self.desk.matricks.shuffle.wrapping_add(1);
+                    if next == 0 || next > MAX_SHUFFLE_SEED {
+                        1
+                    } else {
+                        next
+                    }
+                }
+            }
+        };
+        self.desk.matricks.shuffle = seed;
+        if seed == 0 {
+            Ok(CommandOutcome::message("Shuffle off"))
+        } else {
+            Ok(CommandOutcome::message(format!("Shuffle seed {seed}")))
+        }
+    }
+
+    fn set_align_transition(
+        &mut self,
+        transition: Option<AlignTransition>,
+    ) -> Result<CommandOutcome, CommandError> {
+        match transition {
+            Some(transition) => {
+                self.desk.align_transition = transition;
+                Ok(CommandOutcome::message(format!(
+                    "AlignTransition {}",
+                    transition.label()
+                )))
+            }
+            None => Ok(CommandOutcome::message(format!(
+                "AlignTransition {}",
+                self.desk.align_transition.label()
+            ))),
+        }
+    }
+
+    fn align_listing(&self) -> CommandOutcome {
+        let cells = self.desk.matricks.cells(&self.desk.selection);
+        CommandOutcome::with_lines(vec![
+            format!(
+                "Align  transition {}  mirror {}  cells {}",
+                self.desk.align_transition.label(),
+                if self.desk.matricks.mirror {
+                    "on"
+                } else {
+                    "off"
+                },
+                cells.len()
+            ),
+            format!(
+                "Selection {} in {} cell{}",
+                format_fixture_list(&self.desk.selection),
+                cells.len(),
+                if cells.len() == 1 { "" } else { "s" }
+            ),
+        ])
+    }
+
+    /// Interpolate one attribute across the MAtricks cells of the selection.
+    ///
+    /// The programmer stores a normalised level, not a DMX byte, so a profile
+    /// with a fine channel receives the full interpolation resolution.
+    fn align(
+        &mut self,
+        attribute: Option<String>,
+        from: f64,
+        to: f64,
+        transition: Option<AlignTransition>,
+    ) -> Result<CommandOutcome, CommandError> {
+        if !(0.0..=100.0).contains(&from) || !(0.0..=100.0).contains(&to) {
+            return Err(CommandError::new("align levels are outside 0..100"));
+        }
+        let targets = self.targets(None)?;
+        let attribute = match attribute {
+            Some(name) => self.resolve_attribute(&targets, &name)?,
+            None => self.dimmer_attribute(&targets)?,
+        };
+        self.check_attribute_allowed(&targets, &attribute)?;
+
+        let mut keys: BTreeMap<u16, String> = BTreeMap::new();
+        for number in &targets {
+            let fixture = self
+                .show
+                .fixture(*number)
+                .ok_or_else(|| CommandError::new(format!("fixture {number} is not patched")))?;
+            let (_, mode) = self.show.mode_for(fixture).map_err(CommandError::new)?;
+            match mode.channel_for(&attribute) {
+                Some(channel) => {
+                    keys.insert(*number, channel.attribute.clone());
+                }
+                None => {
+                    return Err(CommandError::with_hint(
+                        format!(
+                            "fixture {number} has no `{attribute}` in mode `{}`",
+                            fixture.mode
+                        ),
+                        format!("attributes: {}", attribute_list(mode)),
+                    ))
+                }
+            }
+        }
+
+        let transition = transition.unwrap_or(self.desk.align_transition);
+        let mirror = self.desk.matricks.mirror;
+        let cells = self.desk.matricks.cells(&targets);
+        let levels =
+            matricks::aligned_levels(cells.len(), from / 100.0, to / 100.0, transition, mirror);
+        let count = cells.len();
+        let label = format_fixture_list(&targets);
+        let message = self.edit_programmer(|programmer| {
+            for (cell, level) in cells.iter().zip(levels.iter()) {
+                for number in cell {
+                    if let Some(key) = keys.get(number) {
+                        programmer.set(*number, key, *level);
+                    }
+                }
+            }
+            format!(
+                "Aligned {label} {attribute} {from}% Thru {to}% across {count} cell{}{}",
+                if count == 1 { "" } else { "s" },
+                if mirror { " mirrored" } else { "" }
+            )
+        });
         self.desk.selection = targets;
         Ok(CommandOutcome::message(message))
     }
@@ -8330,6 +8539,9 @@ pub const HELP: &[&str] = &[
     "Color Rgb 255 128 0 / Cmy 0 60 100 / Hsb 30 100 50 / 3200K",
     "Fixture 1 Color Red / Group 1 Color Red  colour one fixture or a group",
     "Color                                  list each fixture's colour system",
+    "MAtricks [XBlock 2] [XGroup 2] [XWings 2] [XWidth 3] [Transform Mirror]",
+    "MAtricks Reset / Shuffle [Seed 42] [Off]",
+    "Align [Dimmer] 0 Thru 100 [Transition Sinus] / AlignTransition Linear",
     "Fixture 1 Gobo 2 / Gobo \"Rotate CW\"     choose a channel set",
     "Fixture 1 Gobo / Group 1 Gobo          list the sets and the current one",
     "At Palette Color 3                     apply a stored palette",
@@ -8620,6 +8832,39 @@ mod tests {
         engine
     }
 
+    fn six_fixture_engine() -> Engine {
+        let mut show = demo_show();
+        for number in 2..=6 {
+            show.fixtures.push(Fixture {
+                number,
+                name: format!("Demo Wash {number}"),
+                type_key: "OpenLight Demo Wash".into(),
+                mode: "4ch".into(),
+                universe: 1,
+                address: 1 + (number - 1) * 4,
+                home: Default::default(),
+            });
+        }
+        Engine::new(show)
+    }
+
+    fn three_moving_engine() -> Engine {
+        let mut show = demo_moving_show();
+        let type_key = demo_moving_type().key();
+        for number in 2..=3 {
+            show.fixtures.push(Fixture {
+                number,
+                name: format!("Demo Moving {number}"),
+                type_key: type_key.clone(),
+                mode: "3ch".into(),
+                universe: 1,
+                address: 1 + (number - 1) * 3,
+                home: Default::default(),
+            });
+        }
+        Engine::new(show)
+    }
+
     fn mixed_colour_engine() -> Engine {
         let mut show = demo_show();
         let moving = demo_moving_type();
@@ -8708,6 +8953,162 @@ mod tests {
         assert_eq!(dimmer(&engine, 1), 0.4);
         assert_eq!(dimmer(&engine, 2), 0.4);
         assert_eq!(engine.render().slot(1, 10), Some(102));
+    }
+
+    #[test]
+    fn blocks_align_one_value_per_block() {
+        let mut engine = six_fixture_engine();
+        engine.execute("Fixture 1 Thru 6").unwrap();
+        engine.execute("MAtricks XBlock 2").unwrap();
+        let outcome = engine.execute("Align 0 Thru 100").unwrap();
+        assert!(outcome.lines[0].contains("across 3 cells"), "{outcome:?}");
+        assert_eq!(dimmer(&engine, 1), 0.0);
+        assert_eq!(dimmer(&engine, 2), 0.0);
+        assert_eq!(dimmer(&engine, 3), 0.5);
+        assert_eq!(dimmer(&engine, 4), 0.5);
+        assert_eq!(dimmer(&engine, 5), 1.0);
+        assert_eq!(dimmer(&engine, 6), 1.0);
+    }
+
+    #[test]
+    fn groups_align_interleaved_fixtures_together() {
+        let mut engine = six_fixture_engine();
+        engine.execute("Fixture 1 Thru 6").unwrap();
+        engine.execute("MAtricks XGroup 2").unwrap();
+        engine.execute("Align 0 Thru 100").unwrap();
+        assert_eq!(dimmer(&engine, 1), 0.0);
+        assert_eq!(dimmer(&engine, 3), 0.0);
+        assert_eq!(dimmer(&engine, 5), 0.0);
+        assert_eq!(dimmer(&engine, 2), 1.0);
+        assert_eq!(dimmer(&engine, 4), 1.0);
+        assert_eq!(dimmer(&engine, 6), 1.0);
+    }
+
+    #[test]
+    fn align_refuses_an_attribute_missing_from_one_fixture() {
+        let mut engine = mixed_colour_engine();
+        engine.execute("Fixture 1 Thru 2").unwrap();
+        let error = engine.execute("Align Pan 0 Thru 100").unwrap_err();
+        assert!(error.to_string().contains("fixture 1 has no `Pan`"));
+        assert!(engine.desk.programmer.is_empty(), "nothing was written");
+    }
+
+    #[test]
+    fn wings_pair_the_outside_fixtures() {
+        let mut engine = six_fixture_engine();
+        engine.execute("Fixture 1 Thru 6").unwrap();
+        engine.execute("MAtricks XWings 2").unwrap();
+        engine.execute("Align 0 Thru 100").unwrap();
+        assert_eq!(dimmer(&engine, 1), 0.0);
+        assert_eq!(dimmer(&engine, 6), 0.0);
+        assert_eq!(dimmer(&engine, 2), 0.5);
+        assert_eq!(dimmer(&engine, 5), 0.5);
+        assert_eq!(dimmer(&engine, 3), 1.0);
+        assert_eq!(dimmer(&engine, 4), 1.0);
+    }
+
+    #[test]
+    fn mirror_reflects_values_around_the_selection() {
+        let mut engine = six_fixture_engine();
+        engine.execute("Fixture 1 Thru 6").unwrap();
+        engine.execute("MAtricks Transform Mirror").unwrap();
+        engine.execute("Align 0 Thru 100").unwrap();
+        assert_eq!(dimmer(&engine, 1), 0.0);
+        assert_eq!(dimmer(&engine, 2), 0.5);
+        assert_eq!(dimmer(&engine, 3), 1.0);
+        assert_eq!(dimmer(&engine, 4), 1.0);
+        assert_eq!(dimmer(&engine, 5), 0.5);
+        assert_eq!(dimmer(&engine, 6), 0.0);
+    }
+
+    #[test]
+    fn shuffle_is_deterministic_and_can_be_switched_off() {
+        let mut engine = six_fixture_engine();
+        engine.execute("Fixture 1 Thru 6").unwrap();
+        engine.execute("Shuffle Seed 7").unwrap();
+        engine.execute("Align 0 Thru 100").unwrap();
+        let first: Vec<f64> = (1..=6).map(|number| dimmer(&engine, number)).collect();
+
+        engine.execute("Clear Values").unwrap();
+        engine.execute("Shuffle Seed 7").unwrap();
+        engine.execute("Align 0 Thru 100").unwrap();
+        let second: Vec<f64> = (1..=6).map(|number| dimmer(&engine, number)).collect();
+        assert_eq!(first, second);
+
+        engine.execute("Clear Values").unwrap();
+        engine.execute("Shuffle Off").unwrap();
+        engine.execute("Align 0 Thru 100").unwrap();
+        let ordered: Vec<f64> = (1..=6).map(|number| dimmer(&engine, number)).collect();
+        assert_eq!(ordered, vec![0.0, 0.2, 0.4, 0.6, 0.8, 1.0]);
+    }
+
+    #[test]
+    fn shuffle_without_a_seed_advances_one() {
+        let mut engine = six_fixture_engine();
+        engine.execute("Shuffle Off").unwrap();
+        engine.execute("Shuffle").unwrap();
+        assert_eq!(engine.desk.matricks.shuffle, 1);
+        engine.execute("Shuffle").unwrap();
+        assert_eq!(engine.desk.matricks.shuffle, 2);
+        assert!(engine.execute("MAtricks").unwrap().lines[0].contains("Shuffle 2"));
+
+        engine.desk.matricks.shuffle = crate::matricks::MAX_SHUFFLE_SEED;
+        engine.execute("Shuffle").unwrap();
+        assert_eq!(engine.desk.matricks.shuffle, 1, "the seed wraps");
+    }
+
+    #[test]
+    fn align_transition_sets_the_default_curve() {
+        let mut engine = six_fixture_engine();
+        engine.execute("Fixture 1 Thru 6").unwrap();
+        engine.execute("AlignTransition Slow").unwrap();
+        engine.execute("Align 0 Thru 100").unwrap();
+        assert!((dimmer(&engine, 2) - 0.04).abs() < 1e-12);
+        assert!((dimmer(&engine, 3) - 0.16).abs() < 1e-12);
+        assert_eq!(dimmer(&engine, 6), 1.0);
+        assert!(engine.execute("AlignTransition").unwrap().lines[0].contains("Slow"));
+    }
+
+    #[test]
+    fn align_uses_fine_pan_resolution() {
+        let mut engine = three_moving_engine();
+        engine.execute("Fixture 1 Thru 3").unwrap();
+        engine.execute("Align Pan 0 Thru 100").unwrap();
+        assert_eq!(engine.desk.programmer.get(1, "Pan"), Some(0.0));
+        assert_eq!(engine.desk.programmer.get(2, "Pan"), Some(0.5));
+        assert_eq!(engine.desk.programmer.get(3, "Pan"), Some(1.0));
+        let frame = engine.render();
+        assert_eq!(frame.slot(1, 1), Some(0), "fixture 1 coarse pan");
+        assert_eq!(frame.slot(1, 2), Some(0), "fixture 1 fine pan");
+        assert_eq!(frame.slot(1, 4), Some(127), "fixture 2 coarse pan");
+        assert_eq!(frame.slot(1, 5), Some(255), "fixture 2 fine pan");
+        assert_eq!(frame.slot(1, 7), Some(255), "fixture 3 coarse pan");
+        assert_eq!(frame.slot(1, 8), Some(255), "fixture 3 fine pan");
+    }
+
+    #[test]
+    fn matricks_listing_names_the_shape_and_cells() {
+        let mut engine = six_fixture_engine();
+        engine.execute("Fixture 1 Thru 6").unwrap();
+        engine.execute("MAtricks XGroup 2").unwrap();
+        engine.execute("MAtricks Transform Mirror").unwrap();
+        let outcome = engine.execute("MAtricks").unwrap();
+        assert!(outcome.lines[0].contains("XGroup 2"), "{outcome:?}");
+        assert!(outcome.lines[0].contains("Transform Mirror"), "{outcome:?}");
+        assert!(outcome.lines[1].contains("2 cells"), "{outcome:?}");
+        assert!(outcome.lines.iter().any(|line| line.contains("1 + 3 + 5")));
+        assert!(outcome.lines.iter().any(|line| line.contains("2 + 4 + 6")));
+    }
+
+    #[test]
+    fn matricks_reset_restores_every_setting() {
+        let mut engine = six_fixture_engine();
+        engine.execute("MAtricks XBlock 2").unwrap();
+        engine.execute("MAtricks XWings 2").unwrap();
+        engine.execute("MAtricks Transform Mirror").unwrap();
+        engine.execute("Shuffle Seed 3").unwrap();
+        engine.execute("MAtricks Reset").unwrap();
+        assert!(engine.desk.matricks.is_default());
     }
 
     #[test]

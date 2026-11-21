@@ -288,8 +288,8 @@ Scope reasons and chapter dispositions: [`docs/COMPLETENESS.md`](../docs/COMPLET
 | `CX-COMMAND_SYNTAX_KEYWORDS-0018` | Action | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0019` | Agenda | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0020` | ActivationGroup | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0021` | Align | 4 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0022` | AlignTransition | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0021` | Align | 4 | 2 | in-progress |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0022` | AlignTransition | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0023` | Appearance | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0024` | Assign | 5 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0025` | At | 5 | 2 | in-progress |
@@ -468,7 +468,7 @@ Scope reasons and chapter dispositions: [`docs/COMPLETENESS.md`](../docs/COMPLET
 | `CX-COMMAND_SYNTAX_KEYWORDS-0198` | Macro | 4 | 2 | implemented |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0199` | MArker | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0200` | Master | 4 | 2 | in-progress |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0201` | MAtricks | 5 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0201` | MAtricks | 5 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0202` | Measure | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0203` | Media | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0204` | MemoryInfo | 5 | 2 | not-started |
@@ -565,7 +565,7 @@ Scope reasons and chapter dispositions: [`docs/COMPLETENESS.md`](../docs/COMPLET
 | `CX-COMMAND_SYNTAX_KEYWORDS-0295` | Set | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0296` | SetGlobalVariable | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0297` | SetUserVariable | 5 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0298` | Shuffle | 4 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0298` | Shuffle | 4 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0299` | ShutDown | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0300` | SnapDelay | 4 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0301` | SoftwareImport | 4 | 2 | not-started |
@@ -653,7 +653,7 @@ Scope reasons and chapter dispositions: [`docs/COMPLETENESS.md`](../docs/COMPLET
 | `CX-COMMAND_SYNTAX_KEYWORDS-0383` | /Limit | 3 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0384` | /LocalSettings | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0385` | /Look | 5 | 2 | not-started |
-| `CX-COMMAND_SYNTAX_KEYWORDS-0386` | /MAtricks | 5 | 2 | not-started |
+| `CX-COMMAND_SYNTAX_KEYWORDS-0386` | /MAtricks | 5 | 2 | in-progress |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0387` | /Merge | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0388` | /MergeHighPriority | 5 | 2 | not-started |
 | `CX-COMMAND_SYNTAX_KEYWORDS-0389` | /MergeLowPriority | 5 | 2 | not-started |
@@ -967,13 +967,13 @@ Scope reasons and chapter dispositions: [`docs/COMPLETENESS.md`](../docs/COMPLET
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-MATRICKS-0001` | MAtricks and Shuffle | 10 | 3 | not-started |
-| `CX-MATRICKS-0002` | Blocks | 1 | 3 | not-started |
-| `CX-MATRICKS-0003` | Groups | 1 | 3 | not-started |
-| `CX-MATRICKS-0004` | Wings | 1 | 3 | not-started |
-| `CX-MATRICKS-0005` | Widths | 1 | 3 | not-started |
-| `CX-MATRICKS-0006` | Shuffle | 1 | 3 | not-started |
-| `CX-MATRICKS-0007` | Transform | 4 | 3 | not-started |
+| `CX-MATRICKS-0001` | MAtricks and Shuffle | 10 | 3 | in-progress |
+| `CX-MATRICKS-0002` | Blocks | 1 | 3 | implemented |
+| `CX-MATRICKS-0003` | Groups | 1 | 3 | implemented |
+| `CX-MATRICKS-0004` | Wings | 1 | 3 | implemented |
+| `CX-MATRICKS-0005` | Widths | 1 | 3 | implemented |
+| `CX-MATRICKS-0006` | Shuffle | 1 | 3 | implemented |
+| `CX-MATRICKS-0007` | Transform | 4 | 3 | implemented |
 
 ## Cues and Sequences
 

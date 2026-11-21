@@ -70,7 +70,7 @@ a preference: item 3 must land before anything that reads a desk file.
 
 A follow-up review ranked the work outside these eighteen. The hardware and
 display proof it put first remains the release gate: no row is `verified`
-until it has run on real DMX hardware and a real display. The first three
+until it has run on real DMX hardware and a real display. The first four
 buildable items from that review are designed and built:
 
 | Item | State |
@@ -78,6 +78,7 @@ buildable items from that review are designed and built:
 | [19 the colour model](design/19-colour-model.md) | **built** — `Color` by name, hex, RGB, CMY, HSB or kelvin; additive, CMY and wheel assignment; RGBW extraction; sheet swatches for every system; no format change |
 | [20 executor pages](design/20-executor-pages.md) | **built** — named pages, page-qualified executor numbers and runs, `Page`/`Store Page`/`Delete Page`, per-page handles, show v13 with the v12 upgrade, active-page GUI and remote views |
 | [21 DMX in and merge](design/21-dmx-in-and-merge.md) | **built, hardware-gated** — virtual and ENTTEC Pro readers, per-universe HTP/LTP merge, local/input priority, hold/zero/fade loss, `Dmx` status and meter, rising-edge `Go Sequence` trigger, programmer snapshot, show v14; physical input remains unproven until the hardware pass |
+| [22 MAtricks, Shuffle and Align](design/22-matricks-shuffle-align.md) | **built** — block/group/wing/width selection cells, deterministic seeded shuffle, mirror transform, `Align` across selection order with linear/sinus/slow/fast curves, fine-channel resolution; no show format change |
 
 ## Why this order
 
@@ -120,7 +121,7 @@ Every design in this set is careful about which of these it writes:
 - **Desk** is where the handles are and what you are doing now: selection,
   programmer values, active world and filter, master and fader positions,
   running playback positions, effect runs, timecode playhead, blackout, lock,
-  macros, tempo.
+  macros, tempo, MAtricks shape and the Align transition.
 - **Session** is what describes the machine: output status, undo history,
   scroll positions, the journal handle.
 
@@ -173,7 +174,8 @@ version bump (executors in 01, blackout/lock in 06, highlights in 09, tempo in
 14, macros in 16, pages and per-page handles in 20). Its version only moves
 when a field is removed or renamed,
 because a desk file is disposable and a reader that ignores an unknown field is
-safer than a migration for every addition.
+safer than a migration for every addition. Item 22's `matricks` and
+`align_transition` fields are the latest additions.
 
 A version bump is a **reader** change: the old fields stay legible, the loader
 upgrades in memory, and saving writes the new version. `Show::load` grows a

@@ -301,6 +301,19 @@ PHASE16 = {
     "CX-MACROS-0007": "out-of-scope",
 }
 
+# Phase 5 item 22 — MAtricks cells, deterministic Shuffle and Align. The
+# one-dimensional X-axis model is built; Y/Z, the real grid, stored MAtricks
+# objects and per-axis shuffle modes remain.
+PHASE22 = {
+    **expand(
+        "MATRICKS",
+        [
+            ("in-progress", "1"),
+            ("implemented", "2 3 4 5 6 7"),
+        ],
+    ),
+}
+
 STATUS = {
     **PHASE1,
     **PHASE2,
@@ -309,6 +322,7 @@ STATUS = {
     **PHASE12,
     **PHASE13,
     **PHASE16,
+    **PHASE22,
     **EXTRA,
 }
 
@@ -327,6 +341,7 @@ COMMAND_KEYWORDS = {
     "sequences", "sheet", "show", "size", "solo", "spread", "stagger", "start",
     "status", "stop", "store", "thru", "time", "timecode", "timecodes", "timing",
     "to", "trigger", "type", "undo", "unlock", "unpatch", "values", "waveform",
+    "align", "aligntransition", "matricks", "shuffle",
     "world", "worlds",
 }
 
@@ -468,12 +483,12 @@ CHAPTER_NOTES = {
     "wvm": "Windows/views/menus are item 18.",
     "dmx": "Serial output, input and per-universe merge are built; Ethernet DMX and device-configuration import/export remain out of scope.",
     "patch": "Item 11 adds patch tools; item 13 adds MVR; 3D rows are out of scope.",
-    "operate_fixtures": "Selection/programmer exist; the sheet is partial; a colour picker, a gel library and Align need designs.",
+    "operate_fixtures": "Selection/programmer exist; Align and MAtricks cells are built. The sheet is partial; a colour picker and a gel library still need designs.",
     "wvm_pool_label": "Pool labels are partial; editing labels needs a command/UI.",
     "group": "Add/remove member editing needs a command.",
     "presets": "Recipe presets need a design.",
     "worldfilter": "At Filter window is a GUI feature.",
-    "matricks": "Needs a design (blocks, groups, wings, widths, shuffle, transform).",
+    "matricks": "Item 22 builds X-axis blocks, groups, wings, widths, shuffle and transform; the Y/Z grid, stored MAtricks pool and per-axis shuffle modes remain.",
     "cue_sequence": "Item 10 covers blocking/shield/replace/move; content sheet, settings and cue recipes need designs.",
     "executor": "Executor pages and their assignments are built; special executors need a design.",
     "masters": "Selected, time and timing masters need designs.",
@@ -507,7 +522,7 @@ CROSS_CUTTING = [
     ("DMX In and merge", "Item 21 builds the virtual and ENTTEC Pro read paths, per-universe HTP/LTP merge, priority, loss policy, status/metering, snapshot and DMX trigger. Physical adapter proof remains the hardware release gate."),
     ("Colour depth: gels and a picker", "Item 19 covers CMY, HSB, named and hex colours, wheel matching and kelvin whites. A gel/swatch-book library and a colour picker UI remain unbuilt."),
     ("RDM", "Discovery and remote patching; the read path from item 21 exists, but the request/response transaction layer does not."),
-    ("MAtricks, Shuffle and Align", "Programming speed for multi-fixture edits; the whole `matricks` chapter and `Align` are unbuilt."),
+    ("MAtricks, Shuffle and Align", "Item 22 builds one-dimensional blocks, groups, wings, widths, deterministic shuffle, transform mirror and Align across selection order. Y/Z grid axes, a stored MAtricks pool and encoder align modes remain."),
     ("Recipes and Generator", "Look generation beyond a single waveform; `recipes`, `generator` and recipe presets are unbuilt."),
     ("Special executors", "Item 20 builds executor pages and page-qualified runs; macros, chases and multi-cue stacks still need a design."),
     ("Timecode depth", "Tracks, markers, MTC and an OSC feed hook landed with item 15; OSC ingestion and track groups remain."),

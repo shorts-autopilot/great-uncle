@@ -8,6 +8,14 @@ All notable changes to OpenLight are recorded here. The format follows
 
 ### Added
 
+- MAtricks, Shuffle and Align: `MAtricks XBlock|XGroup|XWings|XWidth`
+  divide a selection into value cells, `MAtricks Transform Mirror` reflects
+  them, and `MAtricks Reset` clears the shape. `Shuffle [Seed n|Off]` gives a
+  deterministic permutation, and `Align [<attribute>] <from> Thru <to>
+  [Transition Linear|Sinus|Slow|Fast]` interpolates across the cells into the
+  programmer, including fine-channel resolution. The shape and default
+  transition are additive desk fields; show format is unchanged and the
+  hardware/display proof remains the release gate.
 - DMX input and merge: `--input 1=virtual` or `--input
   1=enttec:/dev/ttyUSB0` reads a universe on its own thread, and
   `Dmx 1 Merge Htp|Ltp|Off`, `Dmx 1 Priority Local|Input`, `Dmx 1 Loss

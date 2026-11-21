@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::effect::{DEFAULT_BPM, MAX_BPM, MIN_BPM};
 use crate::levels::Levels;
+use crate::matricks::{AlignTransition, Matricks};
 use crate::playback::format_cue_number;
 use crate::show::{Show, MAX_RATE_MASTER};
 
@@ -230,6 +231,10 @@ pub struct Desk {
     pub world: Option<u16>,
     /// Active filter: limits the features commands may touch.
     pub filter: Option<u16>,
+    /// MAtricks shape of the current selection. Desk state, not show data.
+    pub matricks: Matricks,
+    /// Curve a bare `Align` uses.
+    pub align_transition: AlignTransition,
     pub masters: Masters,
     /// The page whose handles the surface is showing. Saved with the desk so a
     /// recovered desk comes back on the bank it was left on.
@@ -265,6 +270,8 @@ impl Default for Desk {
             preview: None,
             world: None,
             filter: None,
+            matricks: Matricks::default(),
+            align_transition: AlignTransition::default(),
             masters: Masters::default(),
             page: 1,
             executors: BTreeMap::new(),
@@ -517,6 +524,7 @@ impl Desk {
             }
         }
 
+        warnings.extend(self.matricks.sanitise());
         self.masters.sanitise(show, &mut warnings);
         if !self.tempo.is_finite() || !(MIN_BPM..=MAX_BPM).contains(&self.tempo) {
             warnings.push(format!(
@@ -643,6 +651,8 @@ impl Desk {
             preview: None,
             world: file.world,
             filter: file.filter,
+            matricks: file.matricks,
+            align_transition: file.align_transition,
             masters,
             page: file.page,
             executors,
@@ -681,6 +691,8 @@ impl Desk {
             highlight: self.highlight,
             world: self.world,
             filter: self.filter,
+            matricks: self.matricks,
+            align_transition: self.align_transition,
             masters: self.masters.clone(),
             page: self.page,
             executors: BTreeMap::new(),
@@ -776,6 +788,10 @@ pub struct DeskFile {
     #[serde(default)]
     filter: Option<u16>,
     #[serde(default)]
+    matricks: Matricks,
+    #[serde(default)]
+    align_transition: AlignTransition,
+    #[serde(default)]
     masters: Masters,
     /// The active page. Old desk files have no page and mean page one.
     #[serde(default = "page_one")]
@@ -858,6 +874,13 @@ mod tests {
         desk.programmer.set(1, "Dimmer", 0.5);
         desk.masters.grand = 0.75;
         desk.tempo = 132.0;
+        desk.matricks.block = 2;
+        desk.matricks.group = 3;
+        desk.matricks.wings = 2;
+        desk.matricks.width = 4;
+        desk.matricks.shuffle = 9;
+        desk.matricks.mirror = true;
+        desk.align_transition = AlignTransition::Sinus;
         desk
     }
 
@@ -901,6 +924,48 @@ mod tests {
         let (loaded, warnings) = Desk::load(&path, &show).unwrap().unwrap();
         assert_eq!(loaded, desk);
         assert!(warnings.is_empty(), "{warnings:?}");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn matricks_defaults_when_a_desk_file_has_none() {
+        let show = demo_show();
+        let desk = desk_with_values();
+        let path = temp_path("old-matricks");
+        desk.save(&path, &show).unwrap();
+        let mut value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("matricks");
+        object.remove("align_transition");
+        fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+        let (loaded, warnings) = Desk::load(&path, &show).unwrap().unwrap();
+        assert_eq!(loaded.matricks, Matricks::default());
+        assert_eq!(loaded.align_transition, AlignTransition::Linear);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn bad_matricks_settings_are_repaired_on_load() {
+        let show = demo_show();
+        let desk = desk_with_values();
+        let path = temp_path("bad-matricks");
+        desk.save(&path, &show).unwrap();
+        let mut value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        value["matricks"]["block"] = serde_json::json!(0);
+        value["matricks"]["group"] = serde_json::json!(5000);
+        value["matricks"]["shuffle"] = serde_json::json!(40000);
+        fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+        let (loaded, warnings) = Desk::load(&path, &show).unwrap().unwrap();
+        assert_eq!(loaded.matricks.block, 1);
+        assert_eq!(
+            loaded.matricks.group,
+            usize::from(crate::matricks::MAX_MATRICKS)
+        );
+        assert_eq!(loaded.matricks.shuffle, crate::matricks::MAX_SHUFFLE_SEED);
+        assert!(warnings.iter().any(|warning| warning.contains("MAtricks")));
         let _ = fs::remove_file(&path);
     }
 

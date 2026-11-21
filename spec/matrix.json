@@ -13966,7 +13966,7 @@
    "module": "cmd",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "keyword_align",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/keyword_align.html",
@@ -14046,7 +14046,7 @@
    "module": "cmd",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "keyword_aligntransition",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/keyword_aligntransition.html",
@@ -27345,7 +27345,7 @@
    "module": "cmd",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "keyword_matricks",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/keyword_matricks.html",
@@ -34771,7 +34771,7 @@
    "module": "cmd",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "keyword_shuffle",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/keyword_shuffle.html",
@@ -41730,7 +41730,7 @@
    "module": "cmd",
    "phase": 2,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "ok_matricks",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/ok_matricks.html",
@@ -55029,7 +55029,7 @@
    "module": "matrix",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "matricks",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/matricks.html",
@@ -55180,7 +55180,7 @@
    "module": "matrix",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "matricks_block",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/matricks_block.html",
@@ -55218,7 +55218,7 @@
    "module": "matrix",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "matricks_group",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/matricks_group.html",
@@ -55252,7 +55252,7 @@
    "module": "matrix",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "matricks_wings",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/matricks_wings.html",
@@ -55290,7 +55290,7 @@
    "module": "matrix",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "matricks_width",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/matricks_width.html",
@@ -55325,7 +55325,7 @@
    "module": "matrix",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "matricks_shuffle",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/matricks_shuffle.html",
@@ -55368,7 +55368,7 @@
    "module": "matrix",
    "phase": 3,
    "scope": "product",
-   "status": "not-started",
+   "status": "implemented",
    "source": {
     "ext_id": "matricks_transform",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/matricks_transform.html",

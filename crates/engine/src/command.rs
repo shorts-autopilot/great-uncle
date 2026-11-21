@@ -67,6 +67,10 @@
 //! Effect 1 Attributes Pan Tilt | Effect 1 Attribute Pan Size 30 Phase 90
 //! Effect 1 Rate 1/4 | Effect 1 Tempo Off | Tempo 128 | Tap Tempo
 //! Delete Effect 1 | Effect
+//! MAtricks [XBlock|XGroup|XWings|XWidth <n> | Transform Mirror|Off | Reset]
+//! Shuffle [Seed 42 | Off]
+//! Align [Dimmer] 0 Thru 100 [Transition Sinus]
+//! AlignTransition Linear | Sinus | Slow | Fast
 //! Undo | Redo
 //! Store Timecode 1 ["name"] [Fps 25] [Source Internal | Mtc "port" | Osc]
 //! Delete Timecode 1 | Timecode [1]
@@ -91,6 +95,7 @@
 use std::fmt;
 
 use crate::color::{self, ColorSpec};
+use crate::matricks::{AlignTransition, MatricksProperty, MAX_MATRICKS, MAX_SHUFFLE_SEED};
 use crate::playback::{Curve, ExecutorMode, Trigger};
 use crate::show::{InputPriority, InputTrigger, LossPolicy, MergeMode};
 use crate::timecode::TimecodeSource;
@@ -449,6 +454,33 @@ pub enum Command {
         group: Option<u16>,
         spec: Option<ColorSpec>,
     },
+    /// `MAtricks XBlock 2` and the other selection-grid settings.
+    SetMatricks {
+        property: MatricksProperty,
+        value: u16,
+    },
+    SetMatricksMirror {
+        mirror: bool,
+    },
+    ResetMatricks,
+    ListMatricks,
+    /// `AlignTransition [name]`; no name lists the current curve.
+    SetAlignTransition {
+        transition: Option<AlignTransition>,
+    },
+    /// `Align [attribute] <from> Thru <to> [Transition <name>]`.
+    Align {
+        attribute: Option<String>,
+        from: f64,
+        to: f64,
+        transition: Option<AlignTransition>,
+    },
+    ListAlign,
+    /// `Shuffle [Seed n | Off]`; no seed advances to the next permutation.
+    Shuffle {
+        seed: Option<u16>,
+        off: bool,
+    },
     SetExecutorMode {
         executor: u16,
         mode: ExecutorMode,
@@ -721,6 +753,9 @@ impl Command {
             | Command::ListPages
             | Command::SetPage { .. }
             | Command::StepPage { .. }
+            | Command::ListMatricks
+            | Command::ListAlign
+            | Command::SetAlignTransition { transition: None }
             | Command::ListGroups
             | Command::ListWorlds
             | Command::ListFilters
@@ -1150,6 +1185,15 @@ const RESERVED: &[&str] = &[
     "timeout",
     "threshold",
     "snapshot",
+    "matricks",
+    "shuffle",
+    "align",
+    "aligntransition",
+    "transition",
+    "transform",
+    "mirror",
+    "wings",
+    "width",
 ];
 
 struct Parser<'a> {
@@ -1256,6 +1300,18 @@ impl Parser<'_> {
         }
         if word.eq_ignore_ascii_case("color") {
             return self.color_action(None, None);
+        }
+        if word.eq_ignore_ascii_case("matricks") {
+            return self.matricks_command();
+        }
+        if word.eq_ignore_ascii_case("shuffle") {
+            return self.shuffle_command();
+        }
+        if word.eq_ignore_ascii_case("align") {
+            return self.align_command();
+        }
+        if word.eq_ignore_ascii_case("aligntransition") {
+            return self.align_transition_command();
         }
         if word.eq_ignore_ascii_case("clear") {
             let mut all = false;
@@ -1818,6 +1874,178 @@ impl Parser<'_> {
             level: Some(level),
             off: false,
         })
+    }
+
+    fn matricks_command(&mut self) -> Result<Command, CommandError> {
+        if self.at_end() {
+            return Ok(Command::ListMatricks);
+        }
+        if self.eat_word("reset") {
+            self.expect_end()?;
+            return Ok(Command::ResetMatricks);
+        }
+        if self.eat_word("transform") {
+            if self.eat_word("mirror") {
+                self.expect_end()?;
+                return Ok(Command::SetMatricksMirror { mirror: true });
+            }
+            if self.eat_word("off") || self.eat_word("none") {
+                self.expect_end()?;
+                return Ok(Command::SetMatricksMirror { mirror: false });
+            }
+            return Err(CommandError::with_hint(
+                "expected a transform mode",
+                "use `MAtricks Transform Mirror` or `MAtricks Transform Off`",
+            ));
+        }
+        let Some(Token::Word(name)) = self.bump() else {
+            return Err(CommandError::with_hint(
+                "expected a MAtricks property",
+                "use `XBlock`, `XGroup`, `XWings`, `XWidth` or `Transform Mirror`",
+            ));
+        };
+        let Some(property) = MatricksProperty::parse(&name) else {
+            return Err(CommandError::with_hint(
+                format!("unknown MAtricks property `{name}`"),
+                "use `XBlock`, `XGroup`, `XWings`, `XWidth` or `Transform Mirror`",
+            ));
+        };
+        let value = self.number_value("MAtricks value")?;
+        let max = if property == MatricksProperty::Shuffle {
+            MAX_SHUFFLE_SEED
+        } else {
+            MAX_MATRICKS
+        };
+        if value.fract() != 0.0 || value < 0.0 || value > f64::from(max) {
+            return Err(CommandError::new(format!(
+                "MAtricks value must be a whole number from 0 to {max}"
+            )));
+        }
+        self.expect_end()?;
+        Ok(Command::SetMatricks {
+            property,
+            value: value as u16,
+        })
+    }
+
+    fn shuffle_command(&mut self) -> Result<Command, CommandError> {
+        if self.eat_word("off") {
+            self.expect_end()?;
+            return Ok(Command::Shuffle {
+                seed: None,
+                off: true,
+            });
+        }
+        let mut explicit = self.eat_word("seed");
+        if matches!(self.peek(), Some(Token::Number(_))) {
+            explicit = true;
+        }
+        if !explicit {
+            self.expect_end()?;
+            return Ok(Command::Shuffle {
+                seed: None,
+                off: false,
+            });
+        }
+        let value = self.number_value("shuffle seed")?;
+        if value.fract() != 0.0 || value < 0.0 || value > f64::from(MAX_SHUFFLE_SEED) {
+            return Err(CommandError::new(format!(
+                "shuffle seed must be a whole number from 0 to {MAX_SHUFFLE_SEED}"
+            )));
+        }
+        self.expect_end()?;
+        Ok(Command::Shuffle {
+            seed: Some(value as u16),
+            off: false,
+        })
+    }
+
+    fn align_command(&mut self) -> Result<Command, CommandError> {
+        if self.at_end() {
+            return Ok(Command::ListAlign);
+        }
+        let attribute = match self.peek().cloned() {
+            Some(Token::Number(_)) => None,
+            Some(Token::Word(name)) => {
+                self.position += 1;
+                Some(name)
+            }
+            Some(other) => {
+                return Err(CommandError::with_hint(
+                    format!("expected an attribute or a level, got {other}"),
+                    "use `Align Dimmer 0 Thru 100` or `Align 0 Thru 100`",
+                ))
+            }
+            None => return Ok(Command::ListAlign),
+        };
+        let from = self.percent_value("align start")?;
+        if !matches!(self.bump(), Some(Token::Thru)) {
+            return Err(CommandError::with_hint(
+                "expected `Thru` after the start level",
+                "use `Align Dimmer 0 Thru 100`",
+            ));
+        }
+        let to = self.percent_value("align end")?;
+        let transition = if self.eat_word("transition") || self.eat_word("curve") {
+            let name = self.transition_token()?;
+            Some(AlignTransition::parse(&name).ok_or_else(|| {
+                CommandError::with_hint(
+                    format!("unknown align transition `{name}`"),
+                    format!("transitions: {}", AlignTransition::names()),
+                )
+            })?)
+        } else {
+            None
+        };
+        self.expect_end()?;
+        Ok(Command::Align {
+            attribute,
+            from,
+            to,
+            transition,
+        })
+    }
+
+    fn align_transition_command(&mut self) -> Result<Command, CommandError> {
+        if self.at_end() {
+            return Ok(Command::SetAlignTransition { transition: None });
+        }
+        let name = self.transition_token()?;
+        let Some(transition) = AlignTransition::parse(&name) else {
+            return Err(CommandError::with_hint(
+                format!("unknown align transition `{name}`"),
+                format!("transitions: {}", AlignTransition::names()),
+            ));
+        };
+        self.expect_end()?;
+        Ok(Command::SetAlignTransition {
+            transition: Some(transition),
+        })
+    }
+
+    fn transition_token(&mut self) -> Result<String, CommandError> {
+        match self.bump() {
+            Some(Token::Quoted(name)) | Some(Token::Word(name)) | Some(Token::Number(name)) => {
+                Ok(name)
+            }
+            Some(other) => Err(CommandError::new(format!(
+                "expected an align transition, got {other}"
+            ))),
+            None => Err(CommandError::new("expected an align transition")),
+        }
+    }
+
+    fn percent_value(&mut self, what: &str) -> Result<f64, CommandError> {
+        let value = self.number_value(what)?;
+        if !(0.0..=100.0).contains(&value) {
+            return Err(CommandError::new(format!(
+                "{what} {value} is outside 0..100"
+            )));
+        }
+        if matches!(self.peek(), Some(Token::Word(word)) if word == "%") {
+            self.position += 1;
+        }
+        Ok(value)
     }
 
     fn optional_fixture_list(&mut self) -> Result<Option<Vec<u16>>, CommandError> {
@@ -5215,5 +5443,145 @@ mod tests {
             error("Color Red 5").to_string().contains("unexpected"),
             "trailing tokens are not part of a name"
         );
+    }
+
+    #[test]
+    fn matricks_and_align_commands_parse() {
+        assert_eq!(command("MAtricks"), Command::ListMatricks);
+        assert_eq!(
+            command("MAtricks XBlock 2"),
+            Command::SetMatricks {
+                property: MatricksProperty::Block,
+                value: 2
+            }
+        );
+        assert_eq!(
+            command("MAtricks XGroup 2"),
+            Command::SetMatricks {
+                property: MatricksProperty::Group,
+                value: 2
+            }
+        );
+        assert_eq!(
+            command("MAtricks XWings 2"),
+            Command::SetMatricks {
+                property: MatricksProperty::Wings,
+                value: 2
+            }
+        );
+        assert_eq!(
+            command("MAtricks XWidth 3"),
+            Command::SetMatricks {
+                property: MatricksProperty::Width,
+                value: 3
+            }
+        );
+        assert_eq!(
+            command("MAtricks XShuffle 42"),
+            Command::SetMatricks {
+                property: MatricksProperty::Shuffle,
+                value: 42
+            }
+        );
+        assert_eq!(
+            command("MAtricks Transform Mirror"),
+            Command::SetMatricksMirror { mirror: true }
+        );
+        assert_eq!(command("MAtricks Reset"), Command::ResetMatricks);
+        assert_eq!(
+            command("Shuffle"),
+            Command::Shuffle {
+                seed: None,
+                off: false
+            }
+        );
+        assert_eq!(
+            command("Shuffle Seed 9"),
+            Command::Shuffle {
+                seed: Some(9),
+                off: false
+            }
+        );
+        assert_eq!(
+            command("Shuffle Off"),
+            Command::Shuffle {
+                seed: None,
+                off: true
+            }
+        );
+        assert_eq!(
+            command("Align Dimmer 0 Thru 100"),
+            Command::Align {
+                attribute: Some("Dimmer".into()),
+                from: 0.0,
+                to: 100.0,
+                transition: None
+            }
+        );
+        assert_eq!(
+            command("Align 25 Thru 75 Transition Sinus"),
+            Command::Align {
+                attribute: None,
+                from: 25.0,
+                to: 75.0,
+                transition: Some(AlignTransition::Sinus)
+            }
+        );
+        assert_eq!(
+            command("AlignTransition"),
+            Command::SetAlignTransition { transition: None }
+        );
+        assert_eq!(
+            command("AlignTransition Slow"),
+            Command::SetAlignTransition {
+                transition: Some(AlignTransition::Slow)
+            }
+        );
+        assert_eq!(
+            command("AlignTransition 1"),
+            Command::SetAlignTransition {
+                transition: Some(AlignTransition::Sinus)
+            }
+        );
+        assert_eq!(
+            command("Align 0 Thru 100 Transition 2"),
+            Command::Align {
+                attribute: None,
+                from: 0.0,
+                to: 100.0,
+                transition: Some(AlignTransition::Slow)
+            }
+        );
+        assert_eq!(command("Align"), Command::ListAlign);
+
+        assert!(!command("MAtricks").mutates());
+        assert!(!command("Align").mutates());
+        assert!(!command("AlignTransition").mutates());
+        assert!(command("MAtricks XBlock 2").mutates());
+        assert!(command("Shuffle Off").mutates());
+        assert!(command("Align 0 Thru 100").mutates());
+    }
+
+    #[test]
+    fn rejects_bad_matricks_and_align_commands() {
+        for (line, needle) in [
+            ("MAtricks XBlock 5000", "0 to 4096"),
+            ("MAtricks XGroup nope", "MAtricks value"),
+            ("MAtricks Transform Fade", "transform mode"),
+            ("MAtricks Nonsense 2", "unknown MAtricks"),
+            ("Shuffle Seed 40000", "0 to 32767"),
+            ("Align 0 Thru 101", "outside 0..100"),
+            ("Align Dimmer 0 100", "Thru"),
+            (
+                "Align Dimmer 0 Thru 100 Transition Nope",
+                "unknown align transition",
+            ),
+        ] {
+            let error = error(line);
+            assert!(
+                error.to_string().contains(needle),
+                "`{line}` should name `{needle}`: {error}"
+            );
+        }
     }
 }

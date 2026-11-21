@@ -239,6 +239,16 @@ parsing, naming the limit that was exceeded.
 
 `Begin [label]` and `End` group edits into one undo step. `Macro 1 "cue" Blackout; Wait 2; Blackout Off` stores statement text; `Macro 1 Run` expands it through the same command path, with cycle and depth guards. `Wait` is accepted while editing a macro but refused when it runs, because the engine must not block its output tick. Bulk imports open a group internally.
 
+## Multi-fixture editing
+
+`MAtricks` divides the current selection into cells: `XBlock` merges
+consecutive fixtures, `XGroup` deals them into interleaved lanes, `XWings`
+folds the ends, and `XWidth` transposes wrapped rows. `Shuffle Seed 42` chooses
+a repeatable order, and `Align Dimmer 0 Thru 100` writes one interpolated value
+per cell into the programmer. `AlignTransition Sinus|Slow|Fast` shapes the gaps;
+`MAtricks Transform Mirror` reflects the result. The shape is desk state and the
+show format is unchanged.
+
 ## MVR and the fixture builder
 
 Import a rig before the first script line with `--mvr`, or from the command

@@ -10,9 +10,9 @@ This ledger records scope and implementation evidence; it does not claim that a 
 
 | Status | Rows | Meaning |
 |---|---|---|
-| implemented | 56 | Works and is covered by tests. |
-| in-progress | 88 | Part of the feature exists; the rest is deferred. |
-| not-started | 687 | Not built, or not designed yet. |
+| implemented | 62 | Works and is covered by tests. |
+| in-progress | 94 | Part of the feature exists; the rest is deferred. |
+| not-started | 675 | Not built, or not designed yet. |
 | out-of-scope | 392 | Not a feature of this product; reason recorded below. |
 | verified | 0 | Implemented and proven on hardware. |
 
@@ -31,13 +31,13 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 1 | grandMA3 onPC | platform | 8 | 1 in-progress, 7 out-of-scope | The headless `openlight` binary is the onPC equivalent; vendor installer/OS rows are out of scope. |
 | 1 | Show File Handling | showfile | 6 | 2 not-started, 4 implemented | Backup/template shows and file organisation need a small design. |
 | 1 | Workspace | ui/shell | 30 | 19 not-started, 5 in-progress, 2 implemented, 4 out-of-scope | Terminal shell exists; windows, panels and themes are item 18. |
-| 2 | Command Syntax and Keywords | cmd | 427 | 373 not-started, 51 in-progress, 3 implemented | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
+| 2 | Command Syntax and Keywords | cmd | 427 | 368 not-started, 56 in-progress, 3 implemented | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
 | 1 | Windows, Views, and Menus | ui/windows | 16 | 14 not-started, 2 in-progress | Windows/views/menus are item 18. |
 | 5 | Networking | session | 16 | 16 out-of-scope | Networked sessions and multi-user collaboration are outside the single-operator design. |
 | 1 | DMX In and Out | output | 6 | 1 in-progress, 1 implemented, 4 out-of-scope | Serial output, input and per-universe merge are built; Ethernet DMX and device-configuration import/export remain out of scope. |
 | 5 | Single User and Multi User Systems | users | 5 | 5 out-of-scope | User accounts, ownership and screen configuration are outside the single-operator design. |
 | 1 | Patch and Fixture Setup | patch | 21 | 5 not-started, 4 in-progress, 6 implemented, 6 out-of-scope | Item 11 adds patch tools; item 13 adds MVR; 3D rows are out of scope. |
-| 2 | Operate Fixtures | programmer | 24 | 20 not-started, 2 in-progress, 2 implemented | Selection/programmer exist; the sheet is partial; a colour picker, a gel library and Align need designs. |
+| 2 | Operate Fixtures | programmer | 24 | 20 not-started, 2 in-progress, 2 implemented | Selection/programmer exist; Align and MAtricks cells are built. The sheet is partial; a colour picker and a gel library still need designs. |
 | 4 | Scribbles | ui/assets | 5 | 5 out-of-scope | Bitmap scribble editor is outside the design set; text labels are supported. |
 | 7 | Images | media | 1 | 1 out-of-scope | Image assets are outside a serial-DMX desk. |
 | 5 | Screenshots | system | 1 | 1 out-of-scope | OS screenshot capture is not a desk feature. |
@@ -52,7 +52,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 2 | Groups | pools | 5 | 1 in-progress, 4 implemented | Add/remove member editing needs a command. |
 | 2 | Presets | pools | 6 | 1 not-started, 1 in-progress, 4 implemented | Recipe presets need a design. |
 | 2 | Worlds and Filters | filter | 4 | 1 not-started, 3 implemented | At Filter window is a GUI feature. |
-| 3 | MAtricks and Shuffle | matrix | 7 | 7 not-started | Needs a design (blocks, groups, wings, widths, shuffle, transform). |
+| 3 | MAtricks and Shuffle | matrix | 7 | 1 in-progress, 6 implemented | Item 22 builds X-axis blocks, groups, wings, widths, shuffle and transform; the Y/Z grid, stored MAtricks pool and per-axis shuffle modes remain. |
 | 2 | Cues and Sequences | playback | 19 | 10 not-started, 1 in-progress, 8 implemented | Item 10 covers blocking/shield/replace/move; content sheet, settings and cue recipes need designs. |
 | 2 | Executors | playback/exec | 5 | 1 not-started, 2 in-progress, 2 implemented | Executor pages and their assignments are built; special executors need a design. |
 | 2 | Masters | playback/masters | 7 | 3 not-started, 1 in-progress, 3 implemented | Selected, time and timing masters need designs. |
@@ -152,18 +152,18 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 1 | grandMA3 onPC | 0 | 1 | The headless `openlight` binary is the onPC equivalent; vendor installer/OS rows are out of scope. |
 | 1 | Show File Handling | 2 | 0 | Backup/template shows and file organisation need a small design. |
 | 1 | Workspace | 19 | 5 | Terminal shell exists; windows, panels and themes are item 18. |
-| 2 | Command Syntax and Keywords | 373 | 51 | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
+| 2 | Command Syntax and Keywords | 368 | 56 | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
 | 1 | Windows, Views, and Menus | 14 | 2 | Windows/views/menus are item 18. |
 | 1 | DMX In and Out | 0 | 1 | Serial output, input and per-universe merge are built; Ethernet DMX and device-configuration import/export remain out of scope. |
 | 1 | Patch and Fixture Setup | 5 | 4 | Item 11 adds patch tools; item 13 adds MVR; 3D rows are out of scope. |
-| 2 | Operate Fixtures | 20 | 2 | Selection/programmer exist; the sheet is partial; a colour picker, a gel library and Align need designs. |
+| 2 | Operate Fixtures | 20 | 2 | Selection/programmer exist; Align and MAtricks cells are built. The sheet is partial; a colour picker and a gel library still need designs. |
 | 4 | Appearances | 4 | 0 | Pool appearance metadata needs a small design. |
 | 4 | Notes | 3 | 0 | Notes on objects and cues need a small design. |
 | 1 | Label Objects | 0 | 1 | Pool labels are partial; editing labels needs a command/UI. |
 | 2 | Groups | 0 | 1 | Add/remove member editing needs a command. |
 | 2 | Presets | 1 | 1 | Recipe presets need a design. |
 | 2 | Worlds and Filters | 1 | 0 | At Filter window is a GUI feature. |
-| 3 | MAtricks and Shuffle | 7 | 0 | Needs a design (blocks, groups, wings, widths, shuffle, transform). |
+| 3 | MAtricks and Shuffle | 0 | 1 | Item 22 builds X-axis blocks, groups, wings, widths, shuffle and transform; the Y/Z grid, stored MAtricks pool and per-axis shuffle modes remain. |
 | 2 | Cues and Sequences | 10 | 1 | Item 10 covers blocking/shield/replace/move; content sheet, settings and cue recipes need designs. |
 | 2 | Executors | 1 | 2 | Executor pages and their assignments are built; special executors need a design. |
 | 2 | Masters | 3 | 1 | Selected, time and timing masters need designs. |
@@ -195,7 +195,7 @@ These are the gaps that a chapter-by-chapter audit would otherwise hide. Ranked 
 1. **DMX In and merge** — Item 21 builds the virtual and ENTTEC Pro read paths, per-universe HTP/LTP merge, priority, loss policy, status/metering, snapshot and DMX trigger. Physical adapter proof remains the hardware release gate.
 2. **Colour depth: gels and a picker** — Item 19 covers CMY, HSB, named and hex colours, wheel matching and kelvin whites. A gel/swatch-book library and a colour picker UI remain unbuilt.
 3. **RDM** — Discovery and remote patching; the read path from item 21 exists, but the request/response transaction layer does not.
-4. **MAtricks, Shuffle and Align** — Programming speed for multi-fixture edits; the whole `matricks` chapter and `Align` are unbuilt.
+4. **MAtricks, Shuffle and Align** — Item 22 builds one-dimensional blocks, groups, wings, widths, deterministic shuffle, transform mirror and Align across selection order. Y/Z grid axes, a stored MAtricks pool and encoder align modes remain.
 5. **Recipes and Generator** — Look generation beyond a single waveform; `recipes`, `generator` and recipe presets are unbuilt.
 6. **Special executors** — Item 20 builds executor pages and page-qualified runs; macros, chases and multi-cue stacks still need a design.
 7. **Timecode depth** — Tracks, markers, MTC and an OSC feed hook landed with item 15; OSC ingestion and track groups remain.

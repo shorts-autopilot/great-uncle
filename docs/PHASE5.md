@@ -485,6 +485,31 @@ ENTTEC reader is tested against a fake serial link, not a widget, and a bare
 `generic:` input is deliberately refused until break detection is proven on
 real adapters. The hardware matrix remains the release gate.
 
+## MAtricks, Shuffle and Align (22)
+
+Selections now have a working shape. `MAtricks XBlock 2`, `XGroup 2`,
+`XWings 2` and `XWidth 3` divide the selection into cells; blocks merge
+consecutive fixtures, groups deal them into interleaved lanes, wings fold the
+ends, and width transposes wrapped rows into columns. `MAtricks Transform
+Mirror` reflects aligned values, and `MAtricks Reset` restores the defaults.
+The shape is desk state: it is saved beside the show, does not change the show
+format, and is repaired with warnings if a hand-edited desk file contains
+impossible values.
+
+`Shuffle [Seed n|Off]` permutes the selection deterministically: the same seed
+and selection always produce the same order, and a bare `Shuffle` advances the
+seed. `Align [<attribute>] <from> Thru <to> [Transition Linear|Sinus|Slow|Fast]`
+interpolates one attribute across the resulting cells and writes the values to
+the programmer. `AlignTransition` sets the default curve. The programmer keeps
+normalised `f64` values, so profiles with fine channels receive the full
+interpolation resolution; the three-fixture Pan test checks the coarse/fine
+bytes rather than only an eight-bit level.
+
+This is a one-dimensional selection tool. It does not implement the Y/Z axes,
+a real Selection Grid window, a MAtricks pool, per-axis shuffle modes or the
+encoder `<`/`>`/`><`/`<>` align modes; those need the grid and encoder surfaces.
+The hardware and display proof remains the release gate.
+
 ## Known limitations
 
 - **No DMX hardware in the test environment.** Timing is exercised against a

@@ -43,6 +43,7 @@ pub mod journal;
 pub mod levels;
 pub mod limits;
 pub mod listing;
+pub mod matricks;
 pub mod mtc;
 pub mod mvr;
 pub mod output;
