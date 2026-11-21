@@ -538,6 +538,28 @@ actual achieved Hz, jitter, hot-unplug recovery and ENTTEC traffic on COM
 remain part of the hardware release gate. The backend also deliberately leaves
 `generic:` input unsupported until break detection is proven on hardware.
 
+## File management, backups and templates (24)
+
+A save over an existing show now takes a timestamped show-only backup in a
+`backups/` folder beside it. The newest ten are kept; the atomic writer still
+keeps the immediate `.bak` generation. `Backup ["path"]` takes one explicitly,
+and `Files ["folder"]` lists the `.olshow` files with size and UTC modification
+time without parsing every document.
+
+`Save As` is the explicit-name save under its familiar spelling. `Copy Show`
+and `Rename Show` treat the show and its `.oldesk` companion as one unit and
+refuse to overwrite an existing destination; `Delete Show` removes the working
+pair but leaves `.bak` and `backups/` for recovery. `Save Template` writes the
+show without its desk, and `Load Template` reads it without a companion desk.
+A template is an ordinary show file, so `Files` can list a template folder and
+the same copy/rename commands work on it.
+
+The engine still has no active-show field: `Save As`, backup and template
+writes do not rebind the App's show path, journal or autosave file. The copy,
+rename and delete commands operate on the files on disk, so the in-memory show
+must be saved first when those files are meant to be current. Show and desk
+formats are unchanged. The hardware and display proof remains the release gate.
+
 ## Known limitations
 
 - **No DMX hardware in the test environment.** Timing is exercised against a

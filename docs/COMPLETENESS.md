@@ -11,8 +11,8 @@ This ledger records scope and implementation evidence; it does not claim that a 
 | Status | Rows | Meaning |
 |---|---|---|
 | implemented | 62 | Works and is covered by tests. |
-| in-progress | 94 | Part of the feature exists; the rest is deferred. |
-| not-started | 675 | Not built, or not designed yet. |
+| in-progress | 97 | Part of the feature exists; the rest is deferred. |
+| not-started | 672 | Not built, or not designed yet. |
 | out-of-scope | 392 | Not a feature of this product; reason recorded below. |
 | verified | 0 | Implemented and proven on hardware. |
 
@@ -29,7 +29,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 1 | System Overview | engine/parameters | 7 | 2 implemented, 5 out-of-scope | The standalone desk is built; networked parameter distribution is out of scope. |
 | 0 | First Steps | hardware | 20 | 20 out-of-scope | Vendor onboarding for consoles; the project's quick start is in README.md. |
 | 1 | grandMA3 onPC | platform | 8 | 1 in-progress, 7 out-of-scope | The headless `openlight` binary is the onPC equivalent; vendor installer/OS rows are out of scope. |
-| 1 | Show File Handling | showfile | 6 | 2 not-started, 4 implemented | Backup/template shows and file organisation need a small design. |
+| 1 | Show File Handling | showfile | 6 | 2 in-progress, 4 implemented | Item 24 adds backups, templates, save-as and show-file operations; demo shows, history, description, automatic numbering, media export and the converter remain deferred. |
 | 1 | Workspace | ui/shell | 30 | 19 not-started, 5 in-progress, 2 implemented, 4 out-of-scope | Terminal shell exists; windows, panels and themes are item 18. |
 | 2 | Command Syntax and Keywords | cmd | 427 | 368 not-started, 56 in-progress, 3 implemented | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
 | 1 | Windows, Views, and Menus | ui/windows | 16 | 14 not-started, 2 in-progress | Windows/views/menus are item 18. |
@@ -77,7 +77,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 5 | Local Settings | system | 1 | 1 not-started | Needs a small settings design. |
 | 5 | Update the Software | platform | 8 | 8 out-of-scope | Vendor console/node update; the project has no auto-update. |
 | 1 | Fixture Types | fixturetypes | 12 | 2 in-progress, 6 implemented, 4 out-of-scope | Item 13 adds a profile builder and .olft export; geometry, models and environmental types are out of scope. |
-| 5 | File Management | showfile | 3 | 1 not-started, 2 out-of-scope | A file browser needs a design; SFTP/folder layout are out of scope. |
+| 5 | File Management | showfile | 3 | 1 in-progress, 2 out-of-scope | Item 24 builds show-file listing, backups, save-as and copy/rename/delete; filename character validation, SFTP and its folder layout remain. |
 | 6 | Show Creator | showtools | 7 | 7 not-started | Needs a design. |
 | 5 | Control other MA Devices | session/remotedesk | 4 | 4 out-of-scope | Controlling vendor devices and RemoteHID is outside the independent software scope. |
 | 8 | Troubleshooting | diagnostics | 5 | 5 out-of-scope | Vendor troubleshooting and panic macro; the project has `Status` and docs. |
@@ -150,7 +150,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | Phase | Chapter | Not started | In progress | Next step |
 |---|---|---|---|---|
 | 1 | grandMA3 onPC | 0 | 1 | The headless `openlight` binary is the onPC equivalent; vendor installer/OS rows are out of scope. |
-| 1 | Show File Handling | 2 | 0 | Backup/template shows and file organisation need a small design. |
+| 1 | Show File Handling | 0 | 2 | Item 24 adds backups, templates, save-as and show-file operations; demo shows, history, description, automatic numbering, media export and the converter remain deferred. |
 | 1 | Workspace | 19 | 5 | Terminal shell exists; windows, panels and themes are item 18. |
 | 2 | Command Syntax and Keywords | 368 | 56 | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
 | 1 | Windows, Views, and Menus | 14 | 2 | Windows/views/menus are item 18. |
@@ -185,7 +185,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 5 | RDM (Remote Device Management) | 1 | 0 | The bidirectional read path exists; RDM discovery and remote patching still need a transaction design. |
 | 5 | Local Settings | 1 | 0 | Needs a small settings design. |
 | 1 | Fixture Types | 0 | 2 | Item 13 adds a profile builder and .olft export; geometry, models and environmental types are out of scope. |
-| 5 | File Management | 1 | 0 | A file browser needs a design; SFTP/folder layout are out of scope. |
+| 5 | File Management | 0 | 1 | Item 24 builds show-file listing, backups, save-as and copy/rename/delete; filename character validation, SFTP and its folder layout remain. |
 | 6 | Show Creator | 7 | 0 | Needs a design. |
 
 ## Cross-cutting designs not owned by one chapter
@@ -204,7 +204,7 @@ These are the gaps that a chapter-by-chapter audit would otherwise hide. Ranked 
 10. **Agenda and timers** — Scheduled events, stopwatch and countdown are unbuilt.
 11. **Plugins/Lua** — 164 rows, the largest undecided chapter. Decide between an embedded Lua host and a native plugin API before claiming completeness.
 12. **Show Creator** — Import/export and preset/group creation from fixture types; no design yet.
-13. **File management and backup** — Backup/template shows, a file browser and show organisation need a design.
+13. **File management and backup** — Item 24 adds timestamped backups, template save/load, save-as, listing and companion-aware copy/rename/delete. Demo shows, filename validation, show history, description, automatic numbering, media export and the vendor converter remain.
 14. **Remote inputs** — Inbound OSC and the browser remote landed with item 12; MIDI, DMX and DC remotes still need designs. Item 15 covers MTC.
 15. **Small metadata features** — Appearances, notes, tags, data pools and XYZ are small designs that still need to exist for a full manual replica.
 

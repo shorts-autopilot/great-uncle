@@ -41,7 +41,15 @@ Every edit is journaled beside the show as it happens and a snapshot is written
 on a timer, so a power cut costs the last few seconds rather than the session:
 the next start replays the journal — starting after the last successful save,
 and never on top of a snapshot taken while the journal was off — and offers to
-save. A cue list can also run itself: a cue stores a `Go`, `Follow` or `Time`
+save. Shows are manageable beside the rig: `Save As` writes under a new name,
+`Files` lists the shows in a folder, `Copy Show` and `Rename Show` move the
+show/desk pair together, and `Delete Show` removes the working pair while
+leaving its recovery files. Every save over an existing show keeps up to ten
+timestamped backups in a `backups/` folder, and `Save Template` / `Load
+Template` use an ordinary show as a starting point without its desk. The
+hardware and display proof remains the release gate.
+
+A cue list can also run itself: a cue stores a `Go`, `Follow` or `Time`
 trigger, and an executor's button and fader are `Go`, `Fader`, `Flash` or
 `Solo`, with their positions kept in the desk file. A cue's fade can be split
 per attribute — colour in half a second, position in four, a snap on the

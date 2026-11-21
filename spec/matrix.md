@@ -222,8 +222,8 @@ Scope reasons and chapter dispositions: [`docs/COMPLETENESS.md`](../docs/COMPLET
 | `CX-SHOW_FILE_MANAGEMENT-0002` | Load a Show File | 3 | 1 | implemented |
 | `CX-SHOW_FILE_MANAGEMENT-0003` | Save a Show File | 6 | 1 | implemented |
 | `CX-SHOW_FILE_MANAGEMENT-0004` | New Show File | 2 | 1 | implemented |
-| `CX-SHOW_FILE_MANAGEMENT-0005` | Backup, Demo and Template Show Files | 3 | 1 | not-started |
-| `CX-SHOW_FILE_MANAGEMENT-0006` | Organize Show Files | 7 | 1 | not-started |
+| `CX-SHOW_FILE_MANAGEMENT-0005` | Backup, Demo and Template Show Files | 3 | 1 | in-progress |
+| `CX-SHOW_FILE_MANAGEMENT-0006` | Organize Show Files | 7 | 1 | in-progress |
 
 ## Workspace
 
@@ -1444,7 +1444,7 @@ Scope reasons and chapter dispositions: [`docs/COMPLETENESS.md`](../docs/COMPLET
 
 | ID | Feature | Sections | Phase | Status |
 |---|---|---|---|---|
-| `CX-FILE_MANAGEMENT-0001` | File Management | 1 | 5 | not-started |
+| `CX-FILE_MANAGEMENT-0001` | File Management | 1 | 5 | in-progress |
 | `CX-FILE_MANAGEMENT-0002` | SFTP Connection to a Console | 1 | 5 | out-of-scope |
 | `CX-FILE_MANAGEMENT-0003` | Folder Structure | 12 | 5 | out-of-scope |
 

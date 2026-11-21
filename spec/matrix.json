@@ -9858,7 +9858,7 @@
    "module": "showfile",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "sfh_backup",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/sfh_backup.html",
@@ -9923,7 +9923,7 @@
    "module": "showfile",
    "phase": 1,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "shf_organize",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/shf_organize.html",
@@ -77877,7 +77877,7 @@
    "module": "showfile",
    "phase": 5,
    "scope": "product",
-   "status": "not-started",
+   "status": "in-progress",
    "source": {
     "ext_id": "file_management",
     "url": "https://help.malighting.com/grandMA3/2.2/HTML/file_management.html",

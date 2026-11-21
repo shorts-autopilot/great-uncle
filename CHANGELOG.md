@@ -8,6 +8,14 @@ All notable changes to OpenLight are recorded here. The format follows
 
 ### Added
 
+- File management, backups and templates: saving over an existing show now
+  leaves a timestamped show-only backup in a `backups/` folder (ten retained),
+  and `Backup ["path"]` takes one explicitly. `Files ["folder"]` lists shows
+  with size and UTC modification time; `Save As` writes under a new name;
+  `Copy Show`/`Rename Show` move the show and its companion desk as a unit;
+  `Delete Show` removes the working pair but keeps recovery files. `Save
+  Template`/`Load Template` write and read a show without its desk. No show or
+  desk format change; the hardware/display proof remains the release gate.
 - Windows serial output: `generic:COM3` and `enttec:COM3` now open a native COM
   handle, configure 250000 8N2 or 57600 8N1, and preserve host-generated
   break/MAB for generic DMX. `--probe` discovers active COM ports from the

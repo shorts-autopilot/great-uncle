@@ -70,7 +70,7 @@ a preference: item 3 must land before anything that reads a desk file.
 
 A follow-up review ranked the work outside these eighteen. The hardware and
 display proof it put first remains the release gate: no row is `verified`
-until it has run on real DMX hardware and a real display. The first five
+until it has run on real DMX hardware and a real display. The first six
 buildable items from that review are designed and built:
 
 | Item | State |
@@ -80,6 +80,7 @@ buildable items from that review are designed and built:
 | [21 DMX in and merge](design/21-dmx-in-and-merge.md) | **built, hardware-gated** — virtual and ENTTEC Pro readers, per-universe HTP/LTP merge, local/input priority, hold/zero/fade loss, `Dmx` status and meter, rising-edge `Go Sequence` trigger, programmer snapshot, show v14; physical input remains unproven until the hardware pass |
 | [22 MAtricks, Shuffle and Align](design/22-matricks-shuffle-align.md) | **built** — block/group/wing/width selection cells, deterministic seeded shuffle, mirror transform, `Align` across selection order with linear/sinus/slow/fast curves, fine-channel resolution; no show format change |
 | [23 Windows serial backend](design/23-windows-serial.md) | **built, hardware-gated** — native COM link with 250000 8N2/57600 8N1 and break/MAB, ENTTEC over COM, registry COM discovery in `--probe`, Windows CI tests and a portable install script; no adapter timing measured |
+| [24 File management, backups and templates](design/24-file-management-backups-templates.md) | **built** — automatic ten-deep timestamped backups, `Files`, `Save As`, explicit `Backup`, companion-aware `Copy`/`Rename`/`Delete Show`, and show-only `Save`/`Load Template`; no format change, no active-path rebinding |
 
 ## Why this order
 

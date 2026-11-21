@@ -87,7 +87,11 @@
 //! Highlight | Highlight Off              selected fixtures at full intensity
 //! Lock [code] | Unlock [code]
 //! Sheet | Status | Probe | Help
-//! Save [Show|Desk] "file" | Load [Show] "file"
+//! Save [Show|Desk] "file" | Save As "file" | Save Template "file"
+//! Load [Show|Template] "file"
+//! Backup ["file"] | Files ["folder"]
+//! Copy Show "source" [To] "destination" | Rename Show "source" "destination"
+//! Delete Show "file"
 //! ```
 //!
 //! `universe.address` uses a dot: `1.001` is universe 1, address 1.
@@ -721,6 +725,40 @@ pub enum Command {
     Save {
         path: String,
     },
+    /// `Save As "path"`: the explicit-path save under its familiar name.
+    SaveAs {
+        path: String,
+    },
+    /// `Save Template "path"`: write the show without its desk.
+    SaveTemplate {
+        path: String,
+    },
+    /// `Load Template "path"`: read the show without its desk.
+    LoadTemplate {
+        path: String,
+    },
+    /// `Backup ["path"]`: take a show-only backup now.
+    Backup {
+        path: Option<String>,
+    },
+    /// `Files ["directory"]`: list show files in a folder.
+    ListFiles {
+        directory: Option<String>,
+    },
+    /// `Copy Show "source" [To] "destination"`.
+    CopyShow {
+        source: String,
+        destination: String,
+    },
+    /// `Rename Show "source" [To] "destination"`.
+    RenameShow {
+        source: String,
+        destination: String,
+    },
+    /// `Delete Show "path"`.
+    DeleteShow {
+        path: String,
+    },
     SaveShow {
         path: String,
     },
@@ -767,6 +805,7 @@ impl Command {
             | Command::ListDmx { .. }
             | Command::Probe
             | Command::ExportType { .. }
+            | Command::ListFiles { .. }
             | Command::MacroList { .. }
             | Command::Begin { .. }
             | Command::End
@@ -1364,12 +1403,51 @@ impl Parser<'_> {
             return Ok(Command::ExportType { type_key, path });
         }
         if word.eq_ignore_ascii_case("copy") {
+            if self.eat_word("show") {
+                let source = self.path_token()?;
+                self.eat_word("to");
+                let destination = self.path_token()?;
+                self.expect_end()?;
+                return Ok(Command::CopyShow {
+                    source,
+                    destination,
+                });
+            }
             self.eat_word("type");
             let type_key = self.name_token("fixture type")?;
             self.eat_word("as");
             let new_key = self.name_token("new fixture type")?;
             self.expect_end()?;
             return Ok(Command::CopyType { type_key, new_key });
+        }
+        if word.eq_ignore_ascii_case("rename") {
+            self.eat_word("show");
+            let source = self.path_token()?;
+            self.eat_word("to");
+            let destination = self.path_token()?;
+            self.expect_end()?;
+            return Ok(Command::RenameShow {
+                source,
+                destination,
+            });
+        }
+        if word.eq_ignore_ascii_case("backup") {
+            let path = if self.at_end() {
+                None
+            } else {
+                Some(self.path_token()?)
+            };
+            self.expect_end()?;
+            return Ok(Command::Backup { path });
+        }
+        if word.eq_ignore_ascii_case("files") {
+            let directory = if self.at_end() {
+                None
+            } else {
+                Some(self.path_token()?)
+            };
+            self.expect_end()?;
+            return Ok(Command::ListFiles { directory });
         }
         if word.eq_ignore_ascii_case("type") {
             return self.type_command();
@@ -1553,6 +1631,16 @@ impl Parser<'_> {
             return Ok(Command::Status);
         }
         if word.eq_ignore_ascii_case("save") {
+            if self.eat_word("as") {
+                let path = self.path_token()?;
+                self.expect_end()?;
+                return Ok(Command::SaveAs { path });
+            }
+            if self.eat_word("template") {
+                let path = self.path_token()?;
+                self.expect_end()?;
+                return Ok(Command::SaveTemplate { path });
+            }
             if self.eat_word("show") {
                 let path = self.path_token()?;
                 self.expect_end()?;
@@ -1568,6 +1656,11 @@ impl Parser<'_> {
             return Ok(Command::Save { path });
         }
         if word.eq_ignore_ascii_case("load") {
+            if self.eat_word("template") {
+                let path = self.path_token()?;
+                self.expect_end()?;
+                return Ok(Command::LoadTemplate { path });
+            }
             let show_only = self.eat_word("show");
             let path = self.path_token()?;
             self.expect_end()?;
@@ -3066,6 +3159,11 @@ impl Parser<'_> {
     }
 
     fn delete(&mut self) -> Result<Command, CommandError> {
+        if self.eat_word("show") {
+            let path = self.path_token()?;
+            self.expect_end()?;
+            return Ok(Command::DeleteShow { path });
+        }
         if self.eat_word("page") {
             let number = self.whole_number("page number")?;
             self.expect_end()?;
@@ -4499,6 +4597,75 @@ mod tests {
                 show_only: false
             }
         );
+    }
+
+    #[test]
+    fn parses_file_management_commands() {
+        assert_eq!(
+            command(r#"Save As "copy.olshow""#),
+            Command::SaveAs {
+                path: "copy.olshow".into()
+            }
+        );
+        assert_eq!(
+            command(r#"Save Template "template.olshow""#),
+            Command::SaveTemplate {
+                path: "template.olshow".into()
+            }
+        );
+        assert_eq!(
+            command(r#"Load Template "template.olshow""#),
+            Command::LoadTemplate {
+                path: "template.olshow".into()
+            }
+        );
+        assert_eq!(command("Backup"), Command::Backup { path: None });
+        assert_eq!(
+            command(r#"Backup "copy.olshow""#),
+            Command::Backup {
+                path: Some("copy.olshow".into())
+            }
+        );
+        assert_eq!(command("Files"), Command::ListFiles { directory: None });
+        assert_eq!(
+            command(r#"Files "shows""#),
+            Command::ListFiles {
+                directory: Some("shows".into())
+            }
+        );
+        assert_eq!(
+            command(r#"Copy Show "a.olshow" "b.olshow""#),
+            Command::CopyShow {
+                source: "a.olshow".into(),
+                destination: "b.olshow".into()
+            }
+        );
+        assert_eq!(
+            command(r#"Copy Show "a.olshow" To "b.olshow""#),
+            Command::CopyShow {
+                source: "a.olshow".into(),
+                destination: "b.olshow".into()
+            }
+        );
+        assert_eq!(
+            command(r#"Rename Show "a.olshow" "b.olshow""#),
+            Command::RenameShow {
+                source: "a.olshow".into(),
+                destination: "b.olshow".into()
+            }
+        );
+        assert_eq!(
+            command(r#"Delete Show "a.olshow""#),
+            Command::DeleteShow {
+                path: "a.olshow".into()
+            }
+        );
+        assert!(!Command::ListFiles { directory: None }.mutates());
+        assert!(Command::CopyShow {
+            source: "a.olshow".into(),
+            destination: "b.olshow".into()
+        }
+        .mutates());
     }
 
     #[test]

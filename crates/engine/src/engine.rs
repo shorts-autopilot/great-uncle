@@ -24,6 +24,7 @@ use crate::effect::{
     BeatDivision, Effect, EffectTarget, Effects, Tempo, Waveform, MAX_BPM, MAX_RATE_HZ,
     MAX_SPREAD_DEGREES, MIN_BPM,
 };
+use crate::files;
 use crate::fixture_type::{split_key, Channel, FixtureType, SetSelector, DIMMER};
 use crate::gdtf;
 use crate::history::{History, Snapshot};
@@ -723,6 +724,20 @@ impl Engine {
             }
             Command::SaveShow { path } => self.save(&path, false, true),
             Command::SaveDesk { path } => self.save(&path, true, false),
+            Command::SaveAs { path } => self.save(&path, true, true),
+            Command::SaveTemplate { path } => self.save_template(&path),
+            Command::LoadTemplate { path } => self.load(&path, true),
+            Command::Backup { path } => self.backup_show(path.as_deref()),
+            Command::ListFiles { directory } => self.list_files(directory.as_deref()),
+            Command::CopyShow {
+                source,
+                destination,
+            } => self.copy_show(&source, &destination),
+            Command::RenameShow {
+                source,
+                destination,
+            } => self.rename_show(&source, &destination),
+            Command::DeleteShow { path } => self.delete_show(&path),
             Command::StorePalette {
                 feature,
                 number,
@@ -2361,6 +2376,96 @@ impl Engine {
         Ok(CommandOutcome::with_lines(lines))
     }
 
+    /// Write the show as a template. A template is a show without its desk;
+    /// it is not a new format and does not change the active document.
+    fn save_template(&mut self, path: &str) -> Result<CommandOutcome, CommandError> {
+        self.show
+            .save(Path::new(path))
+            .map_err(|error| CommandError::new(error.to_string()))?;
+        Ok(CommandOutcome::message(format!("Saved template to {path}")))
+    }
+
+    /// Take an explicit show-only backup now.
+    fn backup_show(&mut self, path: Option<&str>) -> Result<CommandOutcome, CommandError> {
+        let destination = match path {
+            Some(path) => PathBuf::from(path),
+            None => files::default_backup_path(&self.show.name, SystemTime::now()),
+        };
+        self.show
+            .save(&destination)
+            .map_err(|error| CommandError::new(error.to_string()))?;
+        Ok(CommandOutcome::message(format!(
+            "Backed up `{}` to {}",
+            self.show.name,
+            destination.display()
+        )))
+    }
+
+    /// List the show files in a folder. This is a read-only operation.
+    fn list_files(&self, directory: Option<&str>) -> Result<CommandOutcome, CommandError> {
+        let directory = Path::new(directory.unwrap_or("."));
+        let files = files::list_show_files(directory)
+            .map_err(|error| CommandError::new(error.to_string()))?;
+        if files.is_empty() {
+            return Ok(CommandOutcome::message(format!(
+                "No show files in {}",
+                directory.display()
+            )));
+        }
+        let mut lines = vec![format!(
+            "Show files in {} ({}):",
+            directory.display(),
+            files.len()
+        )];
+        for file in files {
+            let modified = file
+                .modified
+                .map(files::format_utc)
+                .unwrap_or_else(|| "unknown".into());
+            lines.push(format!(
+                "{:<28} {:>10}  {}",
+                file.path.display().to_string(),
+                human_bytes(file.bytes),
+                modified
+            ));
+        }
+        Ok(CommandOutcome::with_lines(lines))
+    }
+
+    fn copy_show(
+        &mut self,
+        source: &str,
+        destination: &str,
+    ) -> Result<CommandOutcome, CommandError> {
+        files::copy_show(Path::new(source), Path::new(destination))
+            .map_err(|error| CommandError::new(error.to_string()))?;
+        Ok(CommandOutcome::message(format!(
+            "Copied {source} to {destination}"
+        )))
+    }
+
+    fn rename_show(
+        &mut self,
+        source: &str,
+        destination: &str,
+    ) -> Result<CommandOutcome, CommandError> {
+        files::rename_show(Path::new(source), Path::new(destination))
+            .map_err(|error| CommandError::new(error.to_string()))?;
+        Ok(CommandOutcome::message(format!(
+            "Renamed {source} to {destination}"
+        )))
+    }
+
+    fn delete_show(&mut self, path: &str) -> Result<CommandOutcome, CommandError> {
+        let removed = files::delete_show(Path::new(path))
+            .map_err(|error| CommandError::new(error.to_string()))?;
+        let mut lines = vec![format!("Deleted {path}")];
+        if removed.len() > 1 {
+            lines.push(format!("Deleted companion desk {}", removed[1].display()));
+        }
+        Ok(CommandOutcome::with_lines(lines))
+    }
+
     /// Write the desk and/or the show. The desk goes first: if it fails the
     /// show is untouched, so a document can never claim a newer state than its
     /// desk.
@@ -2379,6 +2484,21 @@ impl Engine {
             lines.push(format!("Saved desk to {}", desk_path.display()));
         }
         if show {
+            // Take a timestamped backup before replacing an existing document.
+            // A backup failure is a warning: the save still has to work on a
+            // full or read-only backup folder.
+            let mut backup_warning = None;
+            let backup = if show_path.is_file() {
+                match files::backup(show_path, SystemTime::now()) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        backup_warning = Some(format!("Warning: backup failed: {error}"));
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             self.show
                 .save(show_path)
                 .map_err(|error| CommandError::new(error.to_string()))?;
@@ -2388,6 +2508,12 @@ impl Engine {
                 journal.checkpoint(show_path, self.revision);
             }
             lines.push(format!("Saved show to {path}"));
+            if let Some(backup) = backup {
+                lines.push(format!("Backup {}", backup.display()));
+            }
+            if let Some(warning) = backup_warning {
+                lines.push(warning);
+            }
         }
         if let Err(error) = self.autosave_now() {
             lines.push(format!("Warning: autosave failed: {error}"));
@@ -8617,9 +8743,17 @@ pub const HELP: &[&str] = &[
     "Status                                 output, show and playback state",
     "Probe                                  measure DMX framing on serial ports",
     "Save \"show.json\"                     write the show and its desk beside it",
+    "Save As \"show.json\"                  write under a new name",
     "Save Show \"show.json\" / Save Desk \"desk.oldesk\"   write one of the two",
+    "Save Template \"template.olshow\"      write the show without its desk",
     "Load \"show.json\"                     read the show and its desk",
     "Load Show \"show.json\"                read the show only, keep this desk",
+    "Load Template \"template.olshow\"      read a template without its desk",
+    "Files [\"folder\"]                     list show files, size and modified time",
+    "Backup [\"show.olshow\"]               take a timestamped show-only backup",
+    "Copy Show \"a.olshow\" [To] \"b.olshow\"  copy a show and its desk",
+    "Rename Show \"a.olshow\" \"b.olshow\"     move a show and its desk",
+    "Delete Show \"show.olshow\"             delete a show and its desk",
     "Help                                   this list",
     "Separate several commands with `;`.",
 ];
@@ -8798,6 +8932,18 @@ fn channel_set_error(
     }
 }
 
+fn human_bytes(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = 1024 * 1024;
+    if bytes < KIB {
+        format!("{bytes} B")
+    } else if bytes < MIB {
+        format!("{:.1} KiB", bytes as f64 / KIB as f64)
+    } else {
+        format!("{:.1} MiB", bytes as f64 / MIB as f64)
+    }
+}
+
 fn truncate(text: &str, width: usize) -> String {
     if text.chars().count() <= width {
         return text.to_string();
@@ -8822,6 +8968,16 @@ mod tests {
 
     fn temp_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("openlight-engine-{}-{name}", std::process::id()))
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let directory = std::env::temp_dir().join(format!(
+            "openlight-engine-files-{}-{name}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        directory
     }
 
     fn two_fixture_engine() -> Engine {
@@ -9269,6 +9425,125 @@ mod tests {
         assert_eq!(other.show, engine.show);
         assert_eq!(other.render().slot(1, 1), Some(84));
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn file_management_commands_work_together() {
+        let directory = temp_dir("management");
+        let show = directory.join("look.olshow");
+        let copy = directory.join("copy.olshow");
+        let renamed = directory.join("renamed.olshow");
+        let template = directory.join("template.olshow");
+        let explicit_backup = directory.join("manual-backup.olshow");
+        let mut engine = engine();
+        engine.execute("Fixture 1 At 33").unwrap();
+
+        let saved = engine
+            .execute(&format!(r#"Save As "{}""#, show.display()))
+            .unwrap();
+        assert!(saved.lines.iter().any(|line| line.contains("Saved show")));
+        assert!(show.is_file());
+        assert!(Desk::path_for(&show).is_file());
+
+        // A second save over the same document leaves a timestamped backup.
+        engine
+            .execute(&format!(r#"Save As "{}""#, show.display()))
+            .unwrap();
+        let backups = std::fs::read_dir(directory.join("backups"))
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            backups
+                .iter()
+                .any(|name| name.starts_with("look-") && name.ends_with(".olshow")),
+            "{backups:?}"
+        );
+
+        let listing = engine
+            .execute(&format!(r#"Files "{}""#, directory.display()))
+            .unwrap();
+        assert!(listing
+            .lines
+            .iter()
+            .any(|line| line.contains("look.olshow")));
+
+        engine
+            .execute(&format!(
+                r#"Copy Show "{}" "{}""#,
+                show.display(),
+                copy.display()
+            ))
+            .unwrap();
+        assert!(copy.is_file());
+        assert!(Desk::path_for(&copy).is_file());
+        assert!(engine
+            .execute(&format!(
+                r#"Copy Show "{}" "{}""#,
+                show.display(),
+                copy.display()
+            ))
+            .is_err());
+
+        engine
+            .execute(&format!(
+                r#"Rename Show "{}" "{}""#,
+                copy.display(),
+                renamed.display()
+            ))
+            .unwrap();
+        assert!(!copy.exists());
+        assert!(renamed.is_file());
+        assert!(Desk::path_for(&renamed).is_file());
+
+        engine
+            .execute(&format!(r#"Save Template "{}""#, template.display()))
+            .unwrap();
+        assert!(template.is_file());
+        assert!(!Desk::path_for(&template).exists());
+        let mut other = Engine::empty();
+        other
+            .execute(&format!(r#"Load Template "{}""#, template.display()))
+            .unwrap();
+        assert_eq!(other.show.fixtures.len(), engine.show.fixtures.len());
+
+        engine
+            .execute(&format!(r#"Backup "{}""#, explicit_backup.display()))
+            .unwrap();
+        assert!(explicit_backup.is_file());
+
+        let deleted = engine
+            .execute(&format!(r#"Delete Show "{}""#, show.display()))
+            .unwrap();
+        assert!(deleted.lines[0].contains("Deleted"));
+        assert!(!show.exists());
+        assert!(!Desk::path_for(&show).exists());
+        assert!(backups
+            .iter()
+            .any(|name| directory.join("backups").join(name).is_file()));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_failed_backup_warns_but_still_saves() {
+        let directory = temp_dir("backup-warning");
+        let show = directory.join("look.olshow");
+        std::fs::write(&show, b"old show").unwrap();
+        std::fs::write(directory.join("backups"), b"not a directory").unwrap();
+        let mut engine = engine();
+        let outcome = engine
+            .execute(&format!(r#"Save "{}""#, show.display()))
+            .unwrap();
+        assert!(
+            outcome
+                .lines
+                .iter()
+                .any(|line| line.contains("Warning: backup failed")),
+            "{outcome:?}"
+        );
+        assert!(show.is_file());
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     #[test]

@@ -11,6 +11,7 @@
 //! * [`desk`] — the handles: selection, programmer, masters and playback
 //!   positions, saved beside the show rather than inside it.
 //! * [`store`] — atomic, crash-safe writes shared by every document.
+//! * [`files`] — backups, listings and companion-aware file operations.
 //! * [`csv`] — the patch spreadsheet, for `Patch Import` and `Report Patch`.
 //! * [`fixture_type`] — GDTF-derived fixture types, modes and channel functions.
 //! * [`gdtf`] — `.gdtf` archive import.
@@ -35,6 +36,7 @@ pub mod csv;
 pub mod desk;
 pub mod effect;
 pub mod engine;
+pub mod files;
 pub mod fixture_type;
 pub mod gdtf;
 pub mod history;
@@ -65,6 +67,7 @@ pub use command::CommandError;
 pub use desk::{Desk, Masters};
 pub use effect::{Effect, Waveform};
 pub use engine::{CommandOutcome, Engine, RecoveryReport};
+pub use files::{format_utc, FileError, ShowFileInfo, BACKUP_LIMIT};
 pub use fixture_type::{split_key, Channel, ChannelFunction, FixtureType, Mode, DIMMER};
 pub use input::InputMixer;
 pub use levels::Levels;

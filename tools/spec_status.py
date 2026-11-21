@@ -79,13 +79,23 @@ PHASE1 = {
             ("out-of-scope", "2 3 4 5 6 7 8"),
         ],
     ),
-    # Save, load and new are real; backups, demo shows and file organisation
-    # are still to come.
+    # Save, load and new are real; item 24 adds timestamped backups, template
+    # save/load and the show-file operations. Demo shows, history, descriptions,
+    # automatic numbering, media export and the converter remain deferred.
     **expand(
         "SHOW_FILE_MANAGEMENT",
         [
             ("implemented", "1 2 3 4"),
-            ("not-started", "5 6"),
+            ("in-progress", "5 6"),
+        ],
+    ),
+    # The explicit file operations are built; filename character validation and
+    # SFTP/folder layout remain outside this item.
+    **expand(
+        "FILE_MANAGEMENT",
+        [
+            ("in-progress", "1"),
+            ("out-of-scope", "2 3"),
         ],
     ),
     # The console has a command line; every other row in this chapter is a
@@ -252,9 +262,6 @@ EXTRA = {
     # Networked position tracking and MVR exchange are outside the design set.
     "CX-REMOTE_INPUTS-0013": "out-of-scope",
     "CX-REMOTE_INPUTS-0014": "out-of-scope",
-    # SFTP to a vendor console and its folder layout are vendor features.
-    "CX-FILE_MANAGEMENT-0002": "out-of-scope",
-    "CX-FILE_MANAGEMENT-0003": "out-of-scope",
     # The syntax itself exists; these topic rows are not individual features.
     "CX-COMMAND_SYNTAX_KEYWORDS-0001": "in-progress",
     "CX-COMMAND_SYNTAX_KEYWORDS-0002": "implemented",
@@ -477,7 +484,7 @@ CHAPTER_REASONS = {
 CHAPTER_NOTES = {
     "system": "The standalone desk is built; networked parameter distribution is out of scope.",
     "onpc": "The headless `openlight` binary is the onPC equivalent; vendor installer/OS rows are out of scope.",
-    "show_file_management": "Backup/template shows and file organisation need a small design.",
+    "show_file_management": "Item 24 adds backups, templates, save-as and show-file operations; demo shows, history, description, automatic numbering, media export and the converter remain deferred.",
     "workspace": "Terminal shell exists; windows, panels and themes are item 18.",
     "command_syntax_keywords": "Parser-recognized keywords are in-progress; the rest need a row-by-row audit.",
     "wvm": "Windows/views/menus are item 18.",
@@ -510,7 +517,7 @@ CHAPTER_NOTES = {
     "rdm": "The bidirectional read path exists; RDM discovery and remote patching still need a transaction design.",
     "local_settings": "Needs a small settings design.",
     "fixture_types": "Item 13 adds a profile builder and .olft export; geometry, models and environmental types are out of scope.",
-    "file_management": "A file browser needs a design; SFTP/folder layout are out of scope.",
+    "file_management": "Item 24 builds show-file listing, backups, save-as and copy/rename/delete; filename character validation, SFTP and its folder layout remain.",
     "show-creator": "Needs a design.",
     "appear": "Pool appearance metadata needs a small design.",
     "notes": "Notes on objects and cues need a small design.",
@@ -531,7 +538,7 @@ CROSS_CUTTING = [
     ("Agenda and timers", "Scheduled events, stopwatch and countdown are unbuilt."),
     ("Plugins/Lua", "164 rows, the largest undecided chapter. Decide between an embedded Lua host and a native plugin API before claiming completeness."),
     ("Show Creator", "Import/export and preset/group creation from fixture types; no design yet."),
-    ("File management and backup", "Backup/template shows, a file browser and show organisation need a design."),
+    ("File management and backup", "Item 24 adds timestamped backups, template save/load, save-as, listing and companion-aware copy/rename/delete. Demo shows, filename validation, show history, description, automatic numbering, media export and the vendor converter remain."),
     ("Remote inputs", "Inbound OSC and the browser remote landed with item 12; MIDI, DMX and DC remotes still need designs. Item 15 covers MTC."),
     ("Small metadata features", "Appearances, notes, tags, data pools and XYZ are small designs that still need to exist for a full manual replica."),
 ]
