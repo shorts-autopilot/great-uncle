@@ -97,9 +97,16 @@ cargo run -p openlight-desktop -- --headless-smoke  # load, snapshot, exit (no d
 ## Try a portable build from GitHub
 
 You do not need Rust installed to try the desktop window. The
-[Portable builds workflow](.github/workflows/portable.yml) runs on every push to
-`main` and can also be started from **Actions → Portable builds → Run workflow**.
-When it finishes, open the latest run and download one of these artifacts:
+[Publish portable release workflow](.github/workflows/portable-release.yml) is
+manual: open **Actions → Publish portable release → Run workflow**. It builds
+and smoke-tests both archives, verifies their checksums, and publishes them as
+GitHub Release assets. Leave the tag blank for a unique `portable-<run>-<attempt>`
+tag; the release is marked as a pre-release by default. Download the `.tar.gz`
+or `.zip` from the release's **Assets** section.
+
+The [Portable builds workflow](.github/workflows/portable.yml) also runs on every
+push to `main`; its Actions artifacts are convenient for CI inspection but the
+Releases are the direct-download path:
 
 - **`openlight-linux-x86_64`** — `openlight-<version>-x86_64-unknown-linux-gnu.tar.gz`
 - **`openlight-windows-x86_64`** — `openlight-<version>-x86_64-pc-windows-msvc.zip`

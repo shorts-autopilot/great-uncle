@@ -1,0 +1,103 @@
+name: Publish portable release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (blank = portable-<run>-<attempt>)"
+        required: false
+        default: ""
+        type: string
+      prerelease:
+        description: "Mark the release as a pre-release"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build portable archives
+    uses: ./.github/workflows/portable.yml
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: openlight-*
+          merge-multiple: true
+
+      - name: Verify packaged checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          archives=(dist/*.tar.gz dist/*.zip)
+          checksums=(dist/SHA256SUMS-*.txt)
+          if [ "${#archives[@]}" -ne 2 ] || [ "${#checksums[@]}" -ne 2 ]; then
+            echo "expected two archives and two checksum files" >&2
+            find dist -maxdepth 1 -type f -printf '%f\n' >&2
+            exit 1
+          fi
+          python3 - <<'PY'
+          from hashlib import sha256
+          from pathlib import Path
+
+          for checksum_file in sorted(Path("dist").glob("SHA256SUMS-*.txt")):
+              for line in checksum_file.read_text().splitlines():
+                  line = line.strip()
+                  if not line:
+                      continue
+                  expected, name = line.split(None, 1)
+                  name = name.strip()
+                  actual = sha256((Path("dist") / name).read_bytes()).hexdigest()
+                  if actual.lower() != expected.lower():
+                      raise SystemExit(f"checksum mismatch for {name}: {actual} != {expected}")
+                  print(f"{name}: OK")
+          PY
+
+      - name: Create release with portable assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG:-portable-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}}"
+          if ! git check-ref-format "refs/tags/$tag"; then
+            echo "invalid release tag: $tag" >&2
+            exit 1
+          fi
+
+          shopt -s nullglob
+          assets=(dist/*.tar.gz dist/*.zip dist/SHA256SUMS-*.txt)
+          prerelease=()
+          if [ "$PRERELEASE" = "true" ]; then
+            prerelease+=(--prerelease)
+          fi
+
+          gh release create "$tag" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Portable build $tag" \
+            --notes "Portable Linux and Windows archives built from ${GITHUB_SHA} by workflow run ${GITHUB_RUN_ID}." \
+            "${prerelease[@]}"
+
+          url="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url)"
+          {
+            echo "### Portable release published"
+            echo
+            echo "[$tag]($url)"
+            echo
+            echo "Download the archives from the **Assets** section of the release."
+          } >> "$GITHUB_STEP_SUMMARY"
