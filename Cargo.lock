@@ -2051,6 +2051,7 @@ dependencies = [
  "libc",
  "rusb",
  "thiserror 2.0.21",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -76,7 +76,7 @@ the window build is feature-gated so tests and the MSRV job need no display.
 ## Quick start
 
 ```bash
-cargo test --workspace            # 495 tests, no hardware needed
+cargo test --workspace            # 612 tests on Linux, no hardware needed
 cargo run -p openlight-console    # interactive console
 cargo run -p openlight-console -- --ui   # full-screen terminal shell
 cargo run -p openlight-desktop --features gui   # native window
@@ -102,26 +102,43 @@ openlight --probe                   # what each attached port actually does
 The udev file covers FTDI, CH340, Prolific, Arduino ACM and Anyma uDMX devices.
 Adjust the group if your distribution does not use `dialout`.
 
+On Windows, `packaging/windows/make-zip.ps1` writes a portable ZIP with both
+executables and a per-user install script. Extract it and run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+& "$env:LOCALAPPDATA\Programs\OpenLight\openlight.exe" --probe
+```
+
+The script installs under `%LOCALAPPDATA%\Programs\OpenLight` and creates Start
+Menu shortcuts; it does not need administrator rights or change the machine
+PATH. `uninstall.ps1` removes only those files and shortcuts. The package is
+unsigned, so SmartScreen may warn about it.
+
 ## Platforms and output
 
 | Platform | Output | Status |
 |---|---|---|
 | Linux | `generic:` serial, `enttec:`, `udmx`, `virtual` | supported, primary |
 | macOS | `generic:` serial, `enttec:`, `virtual` | supported; the serial backend is compile-checked, not yet run on hardware |
-| Windows | `virtual` | experimental; there is no serial backend yet, so `generic:` and `enttec:` both report `unsupported` |
+| Windows | `generic:` serial, `enttec:`, `virtual` | built; the COM backend is compiled and unit-tested, not yet run on hardware |
 | any | `virtual` | supported everywhere and used by every test |
 
-The serial layer is `termios2` on Linux and `termios` + `IOSSIOSPEED` on macOS.
-On a platform without a serial backend the workspace still builds and every
-serial transport reports `unsupported`; only *device* support varies. ENTTEC is
-the path to add first on a new platform because the widget owns the frame
-timing, but today it uses the same serial layer as `generic:`.
+The serial layer is `termios2` on Linux, `termios` + `IOSSIOSPEED` on macOS and
+native COM (`windows-sys`) on Windows. On a platform without a serial backend
+the workspace still builds and every serial transport reports `unsupported`;
+only *device* support varies. Windows accepts `COM3` or `\\.\COM10`, and both
+`generic:` and `enttec:` use the same link; ENTTEC only needs ordinary 57600
+8N1 traffic because the widget owns the DMX timing.
 
 DMX can also be read on platforms with a serial backend. `--input 1=virtual`
 or `--input 1=enttec:/dev/ttyUSB0` binds a reader to a universe; `Dmx`, `Dmx 1` and `Status` report its signal,
 peak, frame and error counters. The virtual reader is the tested path; the
 ENTTEC Pro receive path is implemented against its published protocol but has
 not yet met a widget, so physical input is part of the hardware release gate.
+
+On Windows the probe discovers active COM ports from the `SERIALCOMM` device
+map, so a port that Device Manager shows is offered without spelling it out.
 
 `openlight --probe` sends three frames to every detected serial port (and every
 `--output`) and reports the achieved rate, break/MAB and jitter without starting

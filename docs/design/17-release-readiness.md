@@ -37,16 +37,15 @@ $ echo $?
 | Platform | Output | Status |
 |---|---|---|
 | Linux | generic serial, ENTTEC, uDMX | supported, primary |
-| macOS | generic serial, ENTTEC | supported once `serial.rs` grows a `termios` backend |
-| Windows | ENTTEC only initially | experimental; raw DMX via COM needs `windows-sys` and is its own item |
+| macOS | generic serial, ENTTEC | supported; compile-checked, hardware-gated |
+| Windows | generic serial, ENTTEC | built in item 23; COM is unit-tested on Windows CI and hardware-gated |
 | any | `virtual` | supported everywhere, used by every test |
 
-The `serial.rs` platform module is currently `#[cfg(target_os = "linux")]` with
-no fallback, which means the crate does not build for a target without it. Step
-one is a fallback `platform` module returning `DmxError::Unsupported("raw DMX
-framing is not implemented on this platform")`, so the workspace builds
-everywhere and only *device* support varies. ENTTEC is the cross-platform path
-because the widget owns the framing and the link is ordinary 57 600 8N1.
+The `serial.rs` platform modules cover Linux, macOS and, since item 23,
+Windows; every other target has a fallback returning `DmxError::Unsupported`,
+so the workspace builds everywhere and only *device* support varies. ENTTEC is
+the cross-platform path because the widget owns the framing and the link is
+ordinary 57 600 8N1.
 
 ### CI
 
@@ -145,9 +144,9 @@ lane evaluation.
 
 ## Boundaries
 
-- No auto-update, no installer, no code signing, no notarisation.
+- No auto-update, no signed MSI, no code signing, no notarisation. Item 23 adds a portable Windows install script.
 - No telemetry, no crash reporting service.
-- No Windows raw-DMX backend in this item (declared experimental, ENTTEC only).
+- No Windows raw-DMX backend in this item; item 23 adds the COM backend, still hardware-gated.
 - No security audit of the remote beyond item 12's design.
 
 ## Risks

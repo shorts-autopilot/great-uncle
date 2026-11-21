@@ -354,9 +354,9 @@ covers the real open/configure/write path, a blocking fake covers the timeout,
 and ports the runtime already owns are skipped. No real adapter was available,
 so the report has not yet been validated on hardware.
 
-**Platforms and MSRV.** Serial framing is `termios2` on Linux and `termios` +
-`IOSSIOSPEED` on macOS; any other target builds with a fallback that refuses
-`generic:` at open time. CI runs the tests on Linux, macOS and Windows against
+**Platforms and MSRV.** Serial framing is `termios2` on Linux, `termios` +
+`IOSSIOSPEED` on macOS, and native COM through `windows-sys` on Windows; any
+other target builds with a fallback that refuses `generic:` at open time. CI runs the tests on Linux, macOS and Windows against
 stable and the declared MSRV. The MSRV was raised from 1.82 to **1.89** in this
 item because the locked dependency set (`time 0.3.55`, `zip 9.8` and
 `proptest` for the tests) already required it; the old declaration was not true
@@ -375,6 +375,9 @@ demo, so a one-byte rendering regression fails a build.
 `examples/` and `packaging/udev/60-openlight.rules` (group `dialout`, mode
 0660). `--version` includes the short git hash when built in a checkout; a
 release tarball without a `.git` directory prints the package and format only.
+On Windows, `packaging/windows/make-zip.ps1` writes a portable ZIP and
+`install.ps1` copies the executables into `%LOCALAPPDATA%` with Start Menu
+shortcuts; it is per-user, unsigned and does not edit PATH.
 
 **Benchmarks.** `crates/engine/benches/render.rs` measures one render call on a
 release build. These numbers were taken on the development host (Rust 1.100.0,
@@ -510,6 +513,31 @@ a real Selection Grid window, a MAtricks pool, per-axis shuffle modes or the
 encoder `<`/`>`/`><`/`<>` align modes; those need the grid and encoder surfaces.
 The hardware and display proof remains the release gate.
 
+## Windows serial backend (23)
+
+Windows now has a real COM backend behind the same `SerialLink` contract as
+Linux and macOS. `generic:COM3` opens the port with `CreateFileW`, configures
+250000 8N2 with no flow control through `SetCommState`, and frames each
+universe with `SetCommBreak`, the 176 µs hold, `ClearCommBreak`, the 12 µs
+mark-after-break, one start-code-plus-512-slot write and `FlushFileBuffers`.
+`enttec:COM3` uses 57600 8N1 and lets the widget own the DMX timing. COM10 and
+above accept the `\\.\` device prefix, and `reopen` reopens the original name
+after an unplug.
+
+`--probe` discovers active ports from
+`HKEY_LOCAL_MACHINE\HARDWARE\DEVICEMAP\SERIALCOMM`, so the probe covers the
+same port list Device Manager shows. The path, DCB and registry-decoding tests
+run on the Windows CI job; the module has also been cross-compiled for
+`x86_64-pc-windows-gnu` here. A portable ZIP builder and per-user PowerShell
+install/uninstall scripts live under `packaging/windows/`; they do not need
+administrator rights and do not modify the machine PATH.
+
+No Windows adapter, driver or logic analyser was available. The Windows
+support claim is therefore **built, not hardware-verified**: break timing,
+actual achieved Hz, jitter, hot-unplug recovery and ENTTEC traffic on COM
+remain part of the hardware release gate. The backend also deliberately leaves
+`generic:` input unsupported until break detection is proven on hardware.
+
 ## Known limitations
 
 - **No DMX hardware in the test environment.** Timing is exercised against a
@@ -529,18 +557,19 @@ The hardware and display proof remains the release gate.
   display, so the glow renderer has not rendered a frame. See
   [`DESKTOP.md`](DESKTOP.md).
 - **The hardware probe has not met a real adapter.** Its timing, timeout and
-  report logic are tested against a pty and a blocking fake, and the macOS
-  backend is compile-checked, but electrical timing on actual USB-serial
-  hardware remains unmeasured. `--probe` is the tool for the first person who
-  can run it; report the numbers rather than assuming them.
+  report logic are tested against a pty and a blocking fake, and the macOS and
+  Windows backends are compile-checked, but electrical timing on actual
+  USB-serial hardware remains unmeasured. `--probe` is the tool for the first
+  person who can run it; report the numbers rather than assuming them.
 - **The ENTTEC input reader has not met a widget.** Its label-8 receive-mode
   request, label-5 framing, short-payload padding and resynchronisation are
   covered through a fake serial link, but receive mode, the 57600 baud
   handshake and hot-unplug recovery are still part of the hardware gate.
-- **Windows has no serial backend in this build.** `virtual` works, while
-  `generic:` and `enttec:` both report `unsupported`: ENTTEC shares the serial
-  layer rather than owning a separate COM path. The workspace still builds and
-  runs its tests on Windows.
+- **The Windows COM backend has not met an adapter.** It compiles, its DCB and
+  path mapping are unit-tested on Windows CI, and the probe enumerates active
+  COM ports, but `SetCommBreak` timing, achieved frame rate, jitter and
+  hot-unplug recovery on real drivers remain unmeasured. Treat Windows output
+  as built and hardware-gated, not verified. `generic:` input is still refused.
 - **Fuzzing is a nightly job, not a pull-request gate.** The property tests run
   on every test invocation; the fuzz corpus only grows when the nightly job
   finds a regression.

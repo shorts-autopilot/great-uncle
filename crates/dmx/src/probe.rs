@@ -115,9 +115,115 @@ pub fn candidates() -> Vec<String> {
     {
         collect("/dev", Some("cu."), &mut specs);
     }
+    #[cfg(target_os = "windows")]
+    {
+        specs.extend(
+            windows_ports()
+                .into_iter()
+                .map(|port| format!("generic:{port}")),
+        );
+    }
     specs.sort();
     specs.dedup();
     specs
+}
+
+/// Active COM ports, read from Windows' `SERIALCOMM` device map.
+///
+/// The registry is the same source Device Manager uses for the port list, and
+/// it includes ports above COM9. Values are `REG_SZ`; a machine with no serial
+/// devices simply has no values. Failure to read the key is not an error for
+/// the probe: the operator can still name a port explicitly.
+#[cfg(target_os = "windows")]
+fn windows_ports() -> Vec<String> {
+    use windows_sys::Win32::Foundation::{ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegEnumValueW, RegOpenKeyExW, RegQueryInfoKeyW, HKEY, HKEY_LOCAL_MACHINE,
+        KEY_READ, REG_SZ,
+    };
+
+    fn wide(value: &str) -> Vec<u16> {
+        value.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    let mut key: HKEY = std::ptr::null_mut();
+    let subkey = wide("HARDWARE\\DEVICEMAP\\SERIALCOMM");
+    let open = unsafe { RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey.as_ptr(), 0, KEY_READ, &mut key) };
+    if open != ERROR_SUCCESS {
+        return Vec::new();
+    }
+
+    let mut values = 0u32;
+    let mut max_name = 0u32;
+    let mut max_data = 0u32;
+    let queried = unsafe {
+        RegQueryInfoKeyW(
+            key,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut values,
+            &mut max_name,
+            &mut max_data,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if queried != ERROR_SUCCESS {
+        unsafe { RegCloseKey(key) };
+        return Vec::new();
+    }
+
+    let mut ports = Vec::new();
+    for index in 0..values {
+        let mut name = vec![0u16; max_name as usize + 1];
+        let mut name_len = name.len() as u32;
+        let mut data = vec![0u8; max_data as usize + 2];
+        let mut data_len = data.len() as u32;
+        let mut kind = 0u32;
+        let status = unsafe {
+            RegEnumValueW(
+                key,
+                index,
+                name.as_mut_ptr(),
+                &mut name_len,
+                std::ptr::null(),
+                &mut kind,
+                data.as_mut_ptr(),
+                &mut data_len,
+            )
+        };
+        if status == ERROR_NO_MORE_ITEMS {
+            break;
+        }
+        if status != ERROR_SUCCESS || kind != REG_SZ || !data_len.is_multiple_of(2) {
+            continue;
+        }
+        let port = decode_registry_string(&data[..data_len as usize]);
+        if !port.is_empty() {
+            ports.push(port);
+        }
+    }
+    unsafe { RegCloseKey(key) };
+    ports
+}
+
+/// Registry strings are UTF-16LE bytes with a trailing NUL.
+#[cfg(target_os = "windows")]
+fn decode_registry_string(bytes: &[u8]) -> String {
+    let words: Vec<u16> = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
+        .collect();
+    String::from_utf16_lossy(&words)
+        .trim_end_matches('\0')
+        .trim()
+        .to_owned()
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -399,6 +505,17 @@ mod tests {
             "{report:?}"
         );
         assert_eq!(report.port, path);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn registry_com_names_are_decoded_as_utf16() {
+        let bytes: Vec<u8> = "COM10"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert_eq!(super::decode_registry_string(&bytes), "COM10");
     }
 
     #[test]

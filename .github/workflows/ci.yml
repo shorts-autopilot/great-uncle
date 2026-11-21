@@ -44,10 +44,15 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v2
-      # The virtual transport and the fallback serial module are the portable
+      # The virtual transport and the target serial module are the portable
       # build. USB (libusb) is exercised by the dedicated job below; raw serial
-      # is Linux and macOS only, and is declared in README.md.
+      # is native on Linux and macOS, and on Windows this job compiles and tests
+      # the COM backend. No adapter is present, so the tests cover the path,
+      # DCB and registry mapping rather than line timing.
       - run: cargo test --workspace --locked --no-default-features
+      - name: Windows COM lint
+        if: runner.os == 'Windows'
+        run: cargo clippy --workspace --all-targets --locked --no-default-features -- -D warnings
       # The phase demos do not need a device; run their trace diff on every
       # Unix platform. Windows has no bash by default in this job.
       - name: Demo traces

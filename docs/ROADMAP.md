@@ -70,7 +70,7 @@ a preference: item 3 must land before anything that reads a desk file.
 
 A follow-up review ranked the work outside these eighteen. The hardware and
 display proof it put first remains the release gate: no row is `verified`
-until it has run on real DMX hardware and a real display. The first four
+until it has run on real DMX hardware and a real display. The first five
 buildable items from that review are designed and built:
 
 | Item | State |
@@ -79,6 +79,7 @@ buildable items from that review are designed and built:
 | [20 executor pages](design/20-executor-pages.md) | **built** — named pages, page-qualified executor numbers and runs, `Page`/`Store Page`/`Delete Page`, per-page handles, show v13 with the v12 upgrade, active-page GUI and remote views |
 | [21 DMX in and merge](design/21-dmx-in-and-merge.md) | **built, hardware-gated** — virtual and ENTTEC Pro readers, per-universe HTP/LTP merge, local/input priority, hold/zero/fade loss, `Dmx` status and meter, rising-edge `Go Sequence` trigger, programmer snapshot, show v14; physical input remains unproven until the hardware pass |
 | [22 MAtricks, Shuffle and Align](design/22-matricks-shuffle-align.md) | **built** — block/group/wing/width selection cells, deterministic seeded shuffle, mirror transform, `Align` across selection order with linear/sinus/slow/fast curves, fine-channel resolution; no show format change |
+| [23 Windows serial backend](design/23-windows-serial.md) | **built, hardware-gated** — native COM link with 250000 8N2/57600 8N1 and break/MAB, ENTTEC over COM, registry COM discovery in `--probe`, Windows CI tests and a portable install script; no adapter timing measured |
 
 ## Why this order
 

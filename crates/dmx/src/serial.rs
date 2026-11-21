@@ -609,7 +609,324 @@ mod platform {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+/// Windows: a native COM handle through `CreateFileW` and `DCB`.
+///
+/// A COM port is opened synchronously, configured for raw binary transfer and
+/// driven with `SetCommBreak`/`ClearCommBreak` around the host-generated DMX
+/// timing. The widget transports use the same link: ENTTEC only needs ordinary
+/// 57600 8N1 traffic because the Pro generates DMX timing itself.
+///
+/// Windows cannot express an arbitrary baud rate through a terminal API, but
+/// `DCB::BaudRate` is a plain integer and accepts 250000 directly. Read
+/// timeouts are configured so an idle port returns immediately instead of
+/// blocking the input thread.
+#[cfg(target_os = "windows")]
+mod platform {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
+    use std::time::Duration;
+
+    use windows_sys::Win32::Devices::Communication::{
+        ClearCommBreak, GetCommState, PurgeComm, SetCommBreak, SetCommState, SetCommTimeouts,
+        SetupComm, COMMTIMEOUTS, DCB, EVENPARITY, NOPARITY, ODDPARITY, ONESTOPBIT, PURGE_RXCLEAR,
+        PURGE_TXCLEAR, TWOSTOPBITS,
+    };
+    use windows_sys::Win32::Foundation::{
+        GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FlushFileBuffers, ReadFile, WriteFile, FILE_ATTRIBUTE_NORMAL, OPEN_EXISTING,
+    };
+
+    use super::{Parity, SerialLink, SerialSettings};
+    use crate::{DmxError, DmxResult};
+
+    /// One COM handle. `OwnedHandle` closes it on drop and makes the link
+    /// `Send`, which the output thread requires.
+    pub struct WindowsSerial {
+        handle: OwnedHandle,
+        path: String,
+        warning: Option<String>,
+    }
+
+    pub fn open(path: &str) -> DmxResult<Box<dyn SerialLink>> {
+        let wide = wide_device_path(path)?;
+        let handle = unsafe {
+            CreateFileW(
+                wide.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                0,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                std::ptr::null_mut(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+            return Err(DmxError::io(path, std::io::Error::last_os_error()));
+        }
+        let handle = unsafe { OwnedHandle::from_raw_handle(handle as RawHandle) };
+        Ok(Box::new(WindowsSerial {
+            handle,
+            path: path.to_owned(),
+            warning: None,
+        }))
+    }
+
+    /// A COM port above 9 needs the `\\.\` device prefix, and accepting it
+    /// for every port keeps the command line consistent. An already-prefixed
+    /// path is passed through unchanged.
+    fn wide_device_path(path: &str) -> DmxResult<Vec<u16>> {
+        let path = path.trim();
+        if path.is_empty() {
+            return Err(DmxError::Unsupported(
+                "a COM port path cannot be empty".into(),
+            ));
+        }
+        if path.contains('\0') {
+            return Err(DmxError::Unsupported(format!(
+                "invalid serial path: {path}"
+            )));
+        }
+        let device = if path.starts_with(r"\\.\") {
+            path.to_owned()
+        } else {
+            format!(r"\\.\{path}")
+        };
+        Ok(OsStr::new(&device)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect())
+    }
+
+    fn apply_dcb(dcb: &mut DCB, settings: &SerialSettings) {
+        dcb.DCBlength = std::mem::size_of::<DCB>() as u32;
+        dcb.BaudRate = settings.baud;
+        dcb.ByteSize = 8;
+        dcb.Parity = match settings.parity {
+            Parity::None => NOPARITY,
+            Parity::Even => EVENPARITY,
+            Parity::Odd => ODDPARITY,
+        };
+        dcb.StopBits = if settings.stop_bits == 2 {
+            TWOSTOPBITS
+        } else {
+            ONESTOPBIT
+        };
+
+        // DCB bit field, least significant bit first:
+        // fBinary, fParity, fOutxCtsFlow, fOutxDsrFlow, fDtrControl[2],
+        // fDsrSensitivity, fTXContinueOnXoff, fOutX, fInX, fErrorChar, fNull,
+        // fRtsControl[2], fAbortOnError. Binary and parity are the data-mode
+        // bits; every flow-control and error bit stays off, and DTR/RTS stay
+        // asserted so adapters that use them as a transceiver enable work.
+        let mut bits = 1u32;
+        if settings.parity != Parity::None {
+            bits |= 1 << 1;
+        }
+        bits |= 1 << 4; // DTR_CONTROL_ENABLE
+        bits |= 1 << 12; // RTS_CONTROL_ENABLE
+        dcb._bitfield = bits;
+        dcb.XonLim = 0;
+        dcb.XoffLim = 0;
+        dcb.XonChar = 0;
+        dcb.XoffChar = 0;
+        dcb.ErrorChar = 0;
+        dcb.EofChar = 0;
+        dcb.EvtChar = 0;
+    }
+
+    impl WindowsSerial {
+        fn handle(&self) -> HANDLE {
+            self.handle.as_raw_handle() as HANDLE
+        }
+
+        fn err(&self) -> DmxError {
+            DmxError::io(&self.path, std::io::Error::last_os_error())
+        }
+    }
+
+    impl SerialLink for WindowsSerial {
+        fn configure(&mut self, settings: &SerialSettings) -> DmxResult<()> {
+            if !matches!(settings.stop_bits, 1 | 2) {
+                return Err(DmxError::Unsupported(format!(
+                    "{}: unsupported stop-bit count {}",
+                    self.path, settings.stop_bits
+                )));
+            }
+            let handle = self.handle();
+            let mut dcb = DCB::default();
+            if unsafe { GetCommState(handle, &mut dcb) } == 0 {
+                return Err(self.err());
+            }
+            apply_dcb(&mut dcb, settings);
+            if unsafe { SetCommState(handle, &dcb) } == 0 {
+                return Err(self.err());
+            }
+            if unsafe { SetupComm(handle, 4096, 4096) } == 0 {
+                return Err(self.err());
+            }
+            let timeouts = COMMTIMEOUTS {
+                // Return immediately when a read has no bytes, but never let a
+                // write wedge the output thread forever.
+                ReadIntervalTimeout: u32::MAX,
+                ReadTotalTimeoutMultiplier: 0,
+                ReadTotalTimeoutConstant: 0,
+                WriteTotalTimeoutMultiplier: 0,
+                WriteTotalTimeoutConstant: 2_000,
+            };
+            if unsafe { SetCommTimeouts(handle, &timeouts) } == 0 {
+                return Err(self.err());
+            }
+            if unsafe { PurgeComm(handle, PURGE_TXCLEAR | PURGE_RXCLEAR) } == 0 {
+                return Err(self.err());
+            }
+            Ok(())
+        }
+
+        fn send_break(&mut self, hold: Duration) -> DmxResult<()> {
+            let handle = self.handle();
+            if unsafe { SetCommBreak(handle) } == 0 {
+                return Err(self.err());
+            }
+            std::thread::sleep(hold);
+            if unsafe { ClearCommBreak(handle) } == 0 {
+                return Err(self.err());
+            }
+            Ok(())
+        }
+
+        fn write_all(&mut self, bytes: &[u8]) -> DmxResult<()> {
+            let handle = self.handle();
+            let mut written = 0;
+            while written < bytes.len() {
+                let chunk = (bytes.len() - written).min(u32::MAX as usize) as u32;
+                let mut count = 0u32;
+                let ok = unsafe {
+                    WriteFile(
+                        handle,
+                        bytes[written..].as_ptr(),
+                        chunk,
+                        &mut count,
+                        std::ptr::null_mut(),
+                    )
+                };
+                if ok == 0 {
+                    return Err(self.err());
+                }
+                if count == 0 {
+                    return Err(DmxError::io(
+                        &self.path,
+                        std::io::Error::new(std::io::ErrorKind::TimedOut, "COM write timed out"),
+                    ));
+                }
+                written += count as usize;
+            }
+            Ok(())
+        }
+
+        fn drain(&mut self) -> DmxResult<()> {
+            if unsafe { FlushFileBuffers(self.handle()) } == 0 {
+                return Err(self.err());
+            }
+            Ok(())
+        }
+
+        fn read(&mut self, buffer: &mut [u8]) -> DmxResult<usize> {
+            if buffer.is_empty() {
+                return Ok(0);
+            }
+            let mut count = 0u32;
+            let ok = unsafe {
+                ReadFile(
+                    self.handle(),
+                    buffer.as_mut_ptr(),
+                    buffer.len().min(u32::MAX as usize) as u32,
+                    &mut count,
+                    std::ptr::null_mut(),
+                )
+            };
+            if ok == 0 {
+                return Err(self.err());
+            }
+            Ok(count as usize)
+        }
+
+        fn take_warning(&mut self) -> Option<String> {
+            self.warning.take()
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn decoded(path: &[u16]) -> String {
+            String::from_utf16_lossy(&path[..path.len().saturating_sub(1)])
+        }
+
+        #[test]
+        fn com_paths_get_the_device_prefix() {
+            assert_eq!(decoded(&wide_device_path("COM3").unwrap()), r"\\.\COM3");
+            assert_eq!(
+                decoded(&wide_device_path(r"\\.\COM10").unwrap()),
+                r"\\.\COM10"
+            );
+            assert_eq!(decoded(&wide_device_path("COM3 ").unwrap()), r"\\.\COM3");
+        }
+
+        #[test]
+        fn an_empty_com_path_is_refused() {
+            let error = wide_device_path("  ").unwrap_err();
+            assert!(error.to_string().contains("cannot be empty"), "{error}");
+        }
+
+        #[test]
+        fn dmx_dcb_is_250000_8n2_without_flow_control() {
+            let mut dcb = DCB::default();
+            apply_dcb(&mut dcb, &SerialSettings::dmx512());
+            assert_eq!(dcb.BaudRate, 250_000);
+            assert_eq!(dcb.ByteSize, 8);
+            assert_eq!(dcb.StopBits, TWOSTOPBITS);
+            assert_eq!(dcb.Parity, NOPARITY);
+            assert_eq!(dcb._bitfield & 1, 1, "binary mode");
+            assert_eq!(dcb._bitfield & (1 << 1), 0, "parity disabled");
+            assert_eq!(dcb._bitfield & (1 << 2), 0, "CTS flow control off");
+            assert_eq!(dcb._bitfield & (1 << 3), 0, "DSR flow control off");
+            assert_eq!((dcb._bitfield >> 4) & 3, 1, "DTR enabled");
+            assert_eq!((dcb._bitfield >> 12) & 3, 1, "RTS enabled");
+        }
+
+        #[test]
+        fn enttec_dcb_is_57600_8n1() {
+            let mut dcb = DCB::default();
+            apply_dcb(&mut dcb, &SerialSettings::enttec_pro());
+            assert_eq!(dcb.BaudRate, 57_600);
+            assert_eq!(dcb.StopBits, ONESTOPBIT);
+            assert_eq!(dcb.Parity, NOPARITY);
+        }
+
+        #[test]
+        fn parity_and_stop_bits_map_to_dcb_fields() {
+            let mut dcb = DCB::default();
+            apply_dcb(
+                &mut dcb,
+                &SerialSettings {
+                    baud: 31_250,
+                    stop_bits: 1,
+                    parity: Parity::Odd,
+                    break_us: 0,
+                    mark_after_break_us: 0,
+                },
+            );
+            assert_eq!(dcb.Parity, ODDPARITY);
+            assert_eq!(dcb._bitfield & (1 << 1), 1, "parity enabled");
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod platform {
     use super::{SerialLink, SerialSettings};
     use crate::{DmxError, DmxResult};

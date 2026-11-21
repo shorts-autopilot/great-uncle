@@ -82,7 +82,7 @@ pub fn open_input(spec: &str) -> DmxResult<Box<dyn DmxInput>> {
                 .into(),
         )),
         ("generic" | "enttec", None) => Err(DmxError::Unsupported(format!(
-            "`{kind}` needs a serial port, e.g. `{kind}:/dev/ttyUSB0`"
+            "`{kind}` needs a serial port, e.g. `{kind}:/dev/ttyUSB0` or `{kind}:COM3`"
         ))),
         (other, _) => Err(DmxError::Unsupported(format!(
             "unknown input transport `{other}` (expected virtual or enttec)"
@@ -116,7 +116,7 @@ pub fn open(spec: &str) -> DmxResult<Box<dyn DmxTransport>> {
         ("enttec", Some(path)) => Ok(Box::new(enttec::EnttecProTransport::open(path)?)),
         ("udmx", None) => open_udmx(),
         ("generic" | "enttec", None) => Err(DmxError::Unsupported(format!(
-            "`{kind}` needs a serial port, e.g. `{kind}:/dev/ttyUSB0`"
+            "`{kind}` needs a serial port, e.g. `{kind}:/dev/ttyUSB0` or `{kind}:COM3`"
         ))),
         ("udmx", Some(_)) => Err(DmxError::Unsupported(format!(
             "`udmx` takes no argument: {spec}"

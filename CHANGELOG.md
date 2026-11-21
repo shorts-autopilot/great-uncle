@@ -8,6 +8,13 @@ All notable changes to OpenLight are recorded here. The format follows
 
 ### Added
 
+- Windows serial output: `generic:COM3` and `enttec:COM3` now open a native COM
+  handle, configure 250000 8N2 or 57600 8N1, and preserve host-generated
+  break/MAB for generic DMX. `--probe` discovers active COM ports from the
+  `SERIALCOMM` device map, and a portable ZIP plus per-user PowerShell install
+  scripts are included. The backend is cross-compiled and Windows-CI tested;
+  no adapter timing has been measured, so physical Windows output remains part
+  of the hardware release gate.
 - MAtricks, Shuffle and Align: `MAtricks XBlock|XGroup|XWings|XWidth`
   divide a selection into value cells, `MAtricks Transform Mirror` reflects
   them, and `MAtricks Reset` clears the shape. `Shuffle [Seed n|Off]` gives a

@@ -199,7 +199,7 @@ fn probe_exit(options: &Options) -> ExitCode {
     specs.extend(dmx::probe::candidates());
     let reports = dmx::probe::run(&specs, dmx::probe::ProbeOptions::default());
     if reports.is_empty() {
-        println!("No serial ports found; name one with `--output 1=generic:/dev/ttyUSB0`.");
+        println!("No serial ports found; name one with `--output 1=generic:COM3` or `--output 1=generic:/dev/ttyUSB0`.");
     }
     for report in &reports {
         for line in report.lines() {
