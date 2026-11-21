@@ -105,11 +105,11 @@ tag; the release is marked as a pre-release by default. Download the `.tar.gz`
 or `.zip` from the release's **Assets** section.
 
 The [Portable builds workflow](.github/workflows/portable.yml) also runs on every
-push to `main`; its Actions artifacts are convenient for CI inspection but the
-Releases are the direct-download path:
+push to `main` for CI inspection. Download from Releases instead; the release
+assets are named:
 
-- **`openlight-linux-x86_64`** — `openlight-<version>-x86_64-unknown-linux-gnu.tar.gz`
-- **`openlight-windows-x86_64`** — `openlight-<version>-x86_64-pc-windows-msvc.zip`
+- **Linux:** `openlight-<version>-x86_64-unknown-linux-gnu.tar.gz`
+- **Windows:** `openlight-<version>-x86_64-pc-windows-msvc.zip`
 
 Each archive contains both `openlight` (console) and `openlight-desktop`
 (window), plus the docs, examples and the platform's packaging files. The
