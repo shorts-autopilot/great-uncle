@@ -103,9 +103,8 @@ fn handle_connection(
     };
     let (path, query) = split_target(&request.target);
     let allow_query_token = request.method == "GET" && path == "/events";
-    if !(request.method == "GET" && path == "/")
-        && !authorized(&request.headers, query, token, allow_query_token)
-    {
+    let is_root = request.method == "GET" && path == "/";
+    if !is_root && !authorized(&request.headers, query, token, allow_query_token) {
         bump(status, |remote| remote.http_rejected += 1);
         let _ = respond(
             &mut stream,

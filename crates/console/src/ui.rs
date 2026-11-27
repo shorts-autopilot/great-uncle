@@ -17,7 +17,9 @@
 //! that, but the drawing and key helpers are unreachable there.
 #![cfg_attr(not(unix), allow(dead_code))]
 
-use std::io::{self, Write};
+use std::io;
+#[cfg(unix)]
+use std::io::Write;
 use std::sync::{Mutex, MutexGuard};
 
 use engine::{Engine, Runtime};
