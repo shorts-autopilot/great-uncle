@@ -49,7 +49,21 @@ jobs:
       # is native on Linux and macOS, and on Windows this job compiles and tests
       # the COM backend. No adapter is present, so the tests cover the path,
       # DCB and registry mapping rather than line timing.
-      - run: cargo test --workspace --locked --no-default-features
+      - name: Workspace tests
+        shell: bash
+        run: |
+          set -o pipefail
+          # --no-fail-fast runs every test binary, so one failure does not hide
+          # the rest. The annotations name the failing tests: a platform-only
+          # failure is otherwise only visible in the raw job log.
+          cargo test --workspace --locked --no-default-features --no-fail-fast 2>&1 | tee test.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -E "^---- .* stdout ----|^error(\[|:)" test.log | head -10 | while IFS= read -r line; do
+              echo "::error title=cargo test::$line"
+            done
+          fi
+          exit "$status"
       - name: Windows COM lint
         if: runner.os == 'Windows'
         run: cargo clippy --workspace --all-targets --locked --no-default-features -- -D warnings

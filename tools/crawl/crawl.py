@@ -38,7 +38,6 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from bs4 import BeautifulSoup, NavigableString, Tag
 
 BASE = "https://help.malighting.com/grandMA3/2.2/"
 TOC_URL = BASE + "_webHelpScripts/Master/toc_nav.js"
@@ -304,6 +303,15 @@ def table_rows(tag: Tag) -> dict:
 
 
 def parse_topic(html: bytes, ext_id: str, url: str) -> dict:
+    # Parsing needs BeautifulSoup (only the crawler does). Importing it here
+    # keeps `spec_status.py --check` usable on a machine without it, because
+    # the matrix renderer is the only part of this module the check calls.
+    try:
+        from bs4 import BeautifulSoup, NavigableString, Tag  # noqa: F401, PLC0415
+    except ModuleNotFoundError as error:  # pragma: no cover - setup error
+        raise SystemExit(
+            "crawling needs beautifulsoup4: python3 -m pip install beautifulsoup4"
+        ) from error
     soup = BeautifulSoup(html.decode("utf-8", "replace"), "html.parser")
     doc_title = norm(soup.title.get_text()) if soup.title else ""
     container = pick_content(soup)

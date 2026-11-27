@@ -564,31 +564,32 @@ formats are unchanged. The hardware and display proof remains the release gate.
 ## Window workspace (25)
 
 The desktop window no longer opens as a fixed five-pane viewer. It starts on a
-blank **Screen 1** with a 12 × 8 snap grid. `ADD` or F1 opens the Add Window
-picker; clicking an empty cell opens it with that cell preferred. The picker
-groups the 16 supported windows into Common, Pools, Playback, Tools and All:
-Fixture Sheet, Sequence Sheet, Playbacks, Pools, Presets, Groups, Worlds,
-Filters, Effects, Timecode Viewer, Command Line History, DMX Sheet, Masters,
-Running Playbacks, Patch and Status. A window is moved by its title bar and
-resized from its lower-right grip; moves and resizes never overlap and keep the
-last valid rectangle. `CLEAR` removes every window, while `RESET` also closes
-the picker and returns to the blank screen. The layout is session state: it is
-not written into the show or desk and starts empty on every launch.
+blank **Screen 1** with a 12 × 8 snap grid: dark screen, perimeter dot grid and
+the empty-state text. The workspace model keeps the 16 window kinds — Fixture
+Sheet, Sequence Sheet, Playbacks, Pools, Presets, Groups, Worlds, Filters,
+Effects, Timecode Viewer, Command Line History, DMX Sheet, Masters, Running
+Playbacks, Patch and Status — with their default sizes, minimum sizes and
+tab grouping, and it keeps placement, non-overlap, move, resize and close. That
+model is headless and unit-tested.
 
-The picker deliberately shows only windows the current `Snapshot` can fill.
-The official grandMA3 catalogue — 3D and layout viewers, content/phaser/recipe
-editors, MAtricks, selection grids, media and user pools, menus, saved views and
-quickeys — is recorded in [`design/25-window-workspace.md`](design/25-window-workspace.md)
-with the subsystem each one is waiting for. Adding one later is a `WindowKind`
-and a body renderer, not a new layout model.
+The window's chrome is deliberately gone. The top bar, left control rail,
+command line, every window body and the Add Window picker were removed so the
+UI can be rebuilt one piece at a time on the operator's direction; the window
+currently opens on the bare canvas and nothing can be added to it from the GUI
+until that add flow is rebuilt. Window tiles that do exist still draw, drag,
+resize and close, so the real add flow has something to place.
 
-`Model` keeps the same command-only mutation path: adding a window, selecting a
-fixture, recalling a pool or moving a fader writes command text through
-`App::execute`. A bounded 100-entry command history is available in its own
-window; clicking an entry puts it back in the command input rather than running
-it a second way. The workspace model is headless and unit-tested; the GUI
-feature compiles and passes clippy, but no frame, drag or resize has been seen
-on a real display here.
+The original catalogue is still recorded in
+[`design/25-window-workspace.md`](design/25-window-workspace.md), including the
+official grandMA3 windows this build cannot fill — 3D and layout viewers,
+content/phaser/recipe editors, MAtricks, selection grids, media and user pools,
+menus, saved views and quickeys — and the subsystem each one waits for.
+
+`Model` keeps the command-only mutation path: selecting a fixture, recalling a
+pool or moving a fader writes command text through `App::execute`, and a
+bounded 100-entry command history is still in the model. The GUI feature
+compiles and passes clippy, but no frame, drag or resize has been seen on a real
+display here.
 
 ## Known limitations
 

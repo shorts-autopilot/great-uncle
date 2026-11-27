@@ -8,17 +8,14 @@ All notable changes to OpenLight are recorded here. The format follows
 
 ### Added
 
-- A window workspace for the desktop GUI. The window now opens on a blank
-  screen and the operator adds, moves, resizes and closes 16 window types on a
-  12 × 8 snap grid: Fixture Sheet, Sequence Sheet, Playbacks, Pools, Presets,
-  Groups, Worlds, Filters, Effects, Timecode Viewer, Command Line History, DMX
-  Sheet, Masters, Running Playbacks, Patch and Status. The Add Window picker
-  groups them into Common, Pools, Playback, Tools and All, and the left control
-  rail has ADD, CLEAR and RESET. Windows cannot overlap, layouts are session
-  state rather than show/desk data, and every widget action still writes command
-  text through `App::execute`. Command history is bounded at 100 entries and
-  can be recalled into the input. No format change; the hardware/display proof
-  remains the release gate.
+- A window workspace model for the desktop GUI: a 12 × 8 snap grid, 16 window
+  kinds, placement that prefers a clicked cell, non-overlapping move and resize
+  rules, and close. Layout is session state rather than show/desk data, and
+  every widget action still writes command text through `App::execute`. Command
+  history is bounded at 100 entries. The window itself opens on the empty
+  canvas; its chrome and the Add Window picker were stripped back so the UI can
+  be rebuilt piece by piece on the operator's direction. No format change; the
+  hardware/display proof remains the release gate.
 - File management, backups and templates: saving over an existing show now
   leaves a timestamped show-only backup in a `backups/` folder (ten retained),
   and `Backup ["path"]` takes one explicitly. `Files ["folder"]` lists shows
@@ -85,12 +82,28 @@ All notable changes to OpenLight are recorded here. The format follows
 
 ### Changed
 
+- The desktop window opens on the bare canvas. The top bar, left control rail,
+  command line, every window body and the Add Window picker are removed while
+  the surrounding UI is rebuilt one piece at a time; the screen, its 12 × 8 dot
+  grid, the empty-state text, window tiles with title-bar drag, corner resize
+  and close, and the headless placement model remain.
 - Show state is read-only outside the engine crate: `Engine::show` is
   `pub(crate)` and `Engine::show()` is the accessor every front end uses.
 - The workspace MSRV is 1.89, raised from 1.82 to match the locked dependency
   set. CI tests the declared version in the platform matrix.
 - `zip` moved from 2.6 to 9.8 after `cargo deny` found RUSTSEC-2026-0545 and
   RUSTSEC-2026-0548 in the old reader; the archive limits are unchanged.
+
+### Fixed
+
+- Saving over an existing show on Windows. `store::write_atomic` now replaces
+  the target explicitly, because Windows refuses to rename onto an existing
+  file; every save over an existing document failed there before.
+- CI's matrix check no longer needs BeautifulSoup, so
+  `python3 tools/spec_status.py --check` runs on a bare runner. `cargo deny
+  --all-features` now allows the licences the GUI stack brings in (BSL-1.0,
+  OFL-1.1, Ubuntu-font-1.0) and ignores the unmaintained `ttf-parser` advisory
+  that arrives through eframe's font stack.
 
 ## [0.1.0] - 2026-11-20
 

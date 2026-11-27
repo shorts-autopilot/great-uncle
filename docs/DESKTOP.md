@@ -1,25 +1,25 @@
 # Desktop GUI
 
-**Status** built in item 18; item 25 replaces its fixed panes with a blank,
-user-defined window workspace. The terminal shell is still the default on a
-headless box; `openlight-desktop` is the same desk with a command line,
-movable windows, draggable faders and a blackout button.
+**Status** built in item 18; item 25 replaced its fixed panes with a blank,
+user-defined window workspace, whose chrome has since been stripped back while
+the UI is rebuilt one piece at a time. The terminal shell is still the default
+on a headless box; `openlight-desktop` currently opens on the bare canvas.
 
 ## What the window is
 
-A 1440×900 window that opens on an empty **Screen 1**. The operator adds windows
-from the Add Window picker or by clicking an empty grid cell, then drags a title
-bar to move one or the lower-right grip to resize it. The screen is a 12 × 8 snap
-grid and windows may not overlap. Layout is session state: it starts blank on
-every launch and is not saved into the show or desk.
+A 1440×900 window that opens on an empty **Screen 1**: a dark screen, a 12 × 8
+dot grid and the empty-state text. There is no top bar, control rail, command
+line, window body or Add Window picker. That chrome was removed deliberately so
+the UI can be rebuilt one piece at a time, and nothing can be added to the
+screen from the window until its add flow is rebuilt.
 
-The left control rail has `ADD` (or F1), `CLEAR` and `RESET`, plus the active
-page, selection count and running-playback count. The command line is always
-visible at the bottom and has focus at start. Nine executor faders for the
-active page and a grand master live in a Playbacks window; `Page 2` switches the
-bank without disturbing a running cue. Every widget action is echoed above the
-prompt as command text, so a mouse user learns the grammar and a keyboard user is
-never blocked by a missing control.
+What remains is the workspace model and the window tile. A placed window draws
+its frame, title bar, `×` close button and lower-right resize grip; it can be
+dragged by its title bar and resized on the grid, never overlapping. Layout is
+session state: it starts blank on every launch and is not saved into the show
+or desk. The 16 window kinds, their default and minimum sizes, their tab
+groups and the placement rules are all still in `workspace.rs`, headless and
+tested, so the add flow has a model to call rather than one to invent.
 
 ```bash
 cargo run -p openlight-desktop --features gui
@@ -30,29 +30,15 @@ The window is behind the non-default `gui` feature. `cargo test --workspace`
 and the MSRV job build and test the model without eframe, a display or a GL
 driver; release packaging enables the feature.
 
-The picker is grouped into **Common**, **Pools**, **Playback**, **Tools** and
-**All**. It exposes every window this build can fill from the current snapshot;
-the rest of the official grandMA3 catalogue is listed in
-[`design/25-window-workspace.md`](design/25-window-workspace.md) and stays
-unbuilt until its engine data exists.
-
-| Window | Shows | Actions |
-|---|---|---|
-| Fixture Sheet | fixture, type, mode, patch, per-attribute level and source (`P`/`Pb`/`H`), colour swatch | `Sel`, `At` the selection to the slider level, `Home`; `Def` sets an attribute/value from the fields, or lists the effective home when they are empty |
-| Sequence Sheet | cues with trigger, fade, delay, MIB and running state | `Sel` chooses a row's sequence without running it, `Go` runs it; the transport bar offers `Go` / `Back` / `Pause` / `Release` |
-| Playbacks | the active page's nine executor faders, `F` (flash) under each, grand master | drag or use the arrow keys in 5% steps; flash on/off; grand drag |
-| Pools, Presets, Groups, Worlds, Filters, Effects | the matching pool rows, active/running state | `Use` / `Off` and `Del` |
-| Timecode Viewer | shows, tracks, events and markers | `Start` / `Pause` / `Stop`, `Locate` from the time field, and `Add` with the event field |
-| Command Line History | the last commands, their result and error state | click a line to put it back in the command input |
-| DMX Sheet | rendered slot values per universe | read-only |
-| Masters | page, grand, rate, tempo, selection, blind and blackout | `Page Prev` / `Page Next` |
-| Running Playbacks | target, cue, progress and state | read-only |
-| Patch | number, name, type, mode and address | read-only |
-| Status | the same lines `Status` prints | `BLACKOUT`, `LOCK` and `UNLOCK` in the top bar |
-
-Every control above writes the command the terminal would receive. The event
-field accepts the command's own action text (`Sequence 1 Cue 1`, `Effect 1 On`),
-so the grammar stays visible and the engine validates it.
+The picker, its five tabs and the window bodies are not in the window at the
+moment; the catalogue itself is. The 16 kinds are Fixture Sheet, Sequence
+Sheet, Playbacks, Pools, Presets, Groups, Worlds, Filters, Effects, Timecode
+Viewer, Command Line History, DMX Sheet, Masters, Running Playbacks, Patch and
+Status, and the full catalogue — present and deferred — is recorded in
+[`design/25-window-workspace.md`](design/25-window-workspace.md) with the
+subsystem each deferred window waits for. A window body is the surface the
+rebuild will fill; today a placed window is an empty frame held at its grid
+size.
 
 ## Crate split
 

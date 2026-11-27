@@ -98,9 +98,9 @@ PHASE1 = {
             ("out-of-scope", "2 3"),
         ],
     ),
-    # The console has a command line and item 25 adds the user-defined window
-    # area and its control bar; the encoder, calculator and theme surfaces are
-    # still unbuilt.
+    # The console has a command line and item 25 added the user-defined window
+    # area; its control bar is out of the window while the UI is rebuilt. The
+    # encoder, calculator and theme surfaces are still unbuilt.
     **expand(
         "WORKSPACE",
         [
@@ -109,8 +109,9 @@ PHASE1 = {
             ("out-of-scope", "12 13 18 25"),
         ],
     ),
-    # Item 25 adds the Add Window picker, placement, resize and removal for the
-    # supported catalogue. Saved views/layouts, menus and object editing remain.
+    # Item 25 adds the workspace model, placement, resize and removal for the
+    # supported catalogue. Its picker is out of the window while the UI is
+    # rebuilt, and saved views/layouts, menus and object editing remain.
     **expand(
         "WVM",
         [
@@ -238,8 +239,9 @@ PHASE4 = {
 # records what the full-manual audit found.
 EXTRA = {
     # The workspace's command line is implemented; desk lock landed in item 06;
-    # item 25 adds the user-defined area and control rail. The command area and
-    # master/playback bars still live only in the terminal shell.
+    # item 25 added the user-defined area, whose chrome is stripped back while
+    # the UI is rebuilt. The command area and master/playback bars still live
+    # only in the terminal shell.
     "CX-WORKSPACE-0001": "in-progress",
     "CX-WORKSPACE-0004": "implemented",
     "CX-WORKSPACE-0005": "implemented",
@@ -491,7 +493,7 @@ CHAPTER_NOTES = {
     "system": "The standalone desk is built; networked parameter distribution is out of scope.",
     "onpc": "The headless `openlight` binary is the onPC equivalent; vendor installer/OS rows are out of scope.",
     "show_file_management": "Item 24 adds backups, templates, save-as and show-file operations; demo shows, history, description, automatic numbering, media export and the converter remain deferred.",
-    "workspace": "Item 25 adds the user-defined window area and control rail; encoder, calculator and theme windows remain.",
+    "workspace": "Item 25 adds the user-defined window area; its chrome is stripped back while the UI is rebuilt. Encoder, calculator and theme windows remain.",
     "command_syntax_keywords": "Parser-recognized keywords are in-progress; the rest need a row-by-row audit.",
     "wvm": "Windows/views/menus are item 18.",
     "dmx": "Serial output, input and per-universe merge are built; Ethernet DMX and device-configuration import/export remain out of scope.",
@@ -540,7 +542,7 @@ CROSS_CUTTING = [
     ("Special executors", "Item 20 builds executor pages and page-qualified runs; macros, chases and multi-cue stacks still need a design."),
     ("Timecode depth", "Tracks, markers, MTC and an OSC feed hook landed with item 15; OSC ingestion and track groups remain."),
     ("Macros and CLI ergonomics", "Item 16 adds statement macros, transaction undo and machine-readable status; variables and a command editor remain out of scope."),
-    ("Layouts, Quickeys and windows", "Item 25 builds the blank, user-defined window workspace with Add Window, placement, resize, removal and command history. Saved views/layouts, quickeys, window settings and the deferred grandMA3 window catalogue remain."),
+    ("Layouts, Quickeys and windows", "Item 25 builds the blank, user-defined window workspace with placement, resize, removal, the 16-window catalogue and command history; its picker and chrome are out of the window while the UI is rebuilt piece by piece. Saved views/layouts, quickeys, window settings and the deferred grandMA3 window catalogue remain."),
     ("Agenda and timers", "Scheduled events, stopwatch and countdown are unbuilt."),
     ("Plugins/Lua", "164 rows, the largest undecided chapter. Decide between an embedded Lua host and a native plugin API before claiming completeness."),
     ("Show Creator", "Import/export and preset/group creation from fixture types; no design yet."),

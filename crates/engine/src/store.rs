@@ -42,6 +42,25 @@ fn write_then_rename(path: &Path, temp: &Path, bytes: &[u8]) -> std::io::Result<
         // content is ready to replace it.
         let _ = fs::copy(path, sibling(path, "bak"));
     }
+    replace_file(temp, path)
+}
+
+/// Rename `temp` over `path`, replacing an existing document.
+///
+/// POSIX `rename` replaces the target; Windows refuses to rename onto an
+/// existing file, so the old document is removed first. The `.bak` copy above
+/// already holds the previous generation, so a crash between the two steps
+/// still leaves a recoverable show.
+#[cfg(windows)]
+fn replace_file(temp: &Path, path: &Path) -> std::io::Result<()> {
+    if path.is_file() {
+        fs::remove_file(path)?;
+    }
+    fs::rename(temp, path)
+}
+
+#[cfg(not(windows))]
+fn replace_file(temp: &Path, path: &Path) -> std::io::Result<()> {
     fs::rename(temp, path)
 }
 

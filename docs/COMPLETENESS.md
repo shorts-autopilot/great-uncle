@@ -30,7 +30,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 | 0 | First Steps | hardware | 20 | 20 out-of-scope | Vendor onboarding for consoles; the project's quick start is in README.md. |
 | 1 | grandMA3 onPC | platform | 8 | 1 in-progress, 7 out-of-scope | The headless `openlight` binary is the onPC equivalent; vendor installer/OS rows are out of scope. |
 | 1 | Show File Handling | showfile | 6 | 2 in-progress, 4 implemented | Item 24 adds backups, templates, save-as and show-file operations; demo shows, history, description, automatic numbering, media export and the converter remain deferred. |
-| 1 | Workspace | ui/shell | 30 | 17 not-started, 5 in-progress, 4 implemented, 4 out-of-scope | Item 25 adds the user-defined window area and control rail; encoder, calculator and theme windows remain. |
+| 1 | Workspace | ui/shell | 30 | 17 not-started, 5 in-progress, 4 implemented, 4 out-of-scope | Item 25 adds the user-defined window area; its chrome is stripped back while the UI is rebuilt. Encoder, calculator and theme windows remain. |
 | 2 | Command Syntax and Keywords | cmd | 427 | 368 not-started, 56 in-progress, 3 implemented | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
 | 1 | Windows, Views, and Menus | ui/windows | 16 | 9 not-started, 5 in-progress, 2 implemented | Windows/views/menus are item 18. |
 | 5 | Networking | session | 16 | 16 out-of-scope | Networked sessions and multi-user collaboration are outside the single-operator design. |
@@ -151,7 +151,7 @@ Total: **1223 rows** from the Phase 0 crawl of the manual.
 |---|---|---|---|---|
 | 1 | grandMA3 onPC | 0 | 1 | The headless `openlight` binary is the onPC equivalent; vendor installer/OS rows are out of scope. |
 | 1 | Show File Handling | 0 | 2 | Item 24 adds backups, templates, save-as and show-file operations; demo shows, history, description, automatic numbering, media export and the converter remain deferred. |
-| 1 | Workspace | 17 | 5 | Item 25 adds the user-defined window area and control rail; encoder, calculator and theme windows remain. |
+| 1 | Workspace | 17 | 5 | Item 25 adds the user-defined window area; its chrome is stripped back while the UI is rebuilt. Encoder, calculator and theme windows remain. |
 | 2 | Command Syntax and Keywords | 368 | 56 | Parser-recognized keywords are in-progress; the rest need a row-by-row audit. |
 | 1 | Windows, Views, and Menus | 9 | 5 | Windows/views/menus are item 18. |
 | 1 | DMX In and Out | 0 | 1 | Serial output, input and per-universe merge are built; Ethernet DMX and device-configuration import/export remain out of scope. |
@@ -200,7 +200,7 @@ These are the gaps that a chapter-by-chapter audit would otherwise hide. Ranked 
 6. **Special executors** — Item 20 builds executor pages and page-qualified runs; macros, chases and multi-cue stacks still need a design.
 7. **Timecode depth** — Tracks, markers, MTC and an OSC feed hook landed with item 15; OSC ingestion and track groups remain.
 8. **Macros and CLI ergonomics** — Item 16 adds statement macros, transaction undo and machine-readable status; variables and a command editor remain out of scope.
-9. **Layouts, Quickeys and windows** — Item 25 builds the blank, user-defined window workspace with Add Window, placement, resize, removal and command history. Saved views/layouts, quickeys, window settings and the deferred grandMA3 window catalogue remain.
+9. **Layouts, Quickeys and windows** — Item 25 builds the blank, user-defined window workspace with placement, resize, removal, the 16-window catalogue and command history; its picker and chrome are out of the window while the UI is rebuilt piece by piece. Saved views/layouts, quickeys, window settings and the deferred grandMA3 window catalogue remain.
 10. **Agenda and timers** — Scheduled events, stopwatch and countdown are unbuilt.
 11. **Plugins/Lua** — 164 rows, the largest undecided chapter. Decide between an embedded Lua host and a native plugin API before claiming completeness.
 12. **Show Creator** — Import/export and preset/group creation from fixture types; no design yet.

@@ -7,7 +7,13 @@
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+ignore = [
+    # ttf-parser is reached through eframe's text stack (egui → epaint →
+    # ab_glyph → owned_ttf_parser) and is marked unmaintained, not unsafe. The
+    # window only parses the fonts compiled into epaint_default_fonts; there is
+    # no newer parser in eframe 0.32 to move to.
+    "RUSTSEC-2026-0192",
+]
 
 [licenses]
 version = 2
@@ -22,6 +28,9 @@ allow = [
     "ISC",
     "0BSD",
     "Zlib",
+    "BSL-1.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
     "Unlicense",
     "CC0-1.0",
     "Unicode-3.0",

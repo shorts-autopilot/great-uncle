@@ -2,67 +2,124 @@
 
 **Rank** 9 (follow-up) · **Order** 25 · **Size** L · **No format change** · **Depends on** 18 (desktop GUI), 24 (file menu)
 
+**State** built, then deliberately stripped back to the canvas. The workspace
+model, the 16-window catalogue and the command-only model are tested; the
+surrounding UI is being rebuilt one piece at a time on the operator's direction.
+Nothing in this document prescribes the next UI piece.
+
 ## Problem
 
-The desktop window is a fixed five-pane viewer. F1–F5 swap Sheet, Playback,
-Pools, Timecode and Status; a permanent right rail holds nine faders and a grand
-master. That is sufficient to inspect the engine, but it is not the way a
+The desktop window was a fixed five-pane viewer. F1–F5 swapped Sheet, Playback,
+Pools, Timecode and Status; a permanent right rail held nine faders and a grand
+master. That was sufficient to inspect the engine, but it is not the way a
 grandMA3 operator works. A grandMA3 screen starts as a user-defined area: the
 operator chooses windows from an Add Window picker, places them on a snap grid,
 resizes them, and builds the working screen from data pools, sheets, playback
 controls and status views.
 
-The fixed pane layout also makes every new data view a code change in the pane
-enum. It cannot express two sheets side by side, a pool strip below a playback
-window, or a large fixture sheet beside a small command history. This item
-replaces the pane switcher with a real workspace while preserving the existing
-rule that every UI action is command text and every draw reads an owned
-snapshot.
+The fixed pane layout also made every new data view a code change in the pane
+enum. It could not express two sheets side by side, a pool strip below a
+playback window, or a large fixture sheet beside a small command history. This
+item replaced the pane switcher with a real workspace while preserving the
+existing rule that every UI action is command text and every draw reads an
+owned snapshot.
 
-## Behaviour when this is done
+That workspace was built, and then the chrome that came with it was removed on
+purpose: the window now opens on the blank canvas, and the rest of the UI is
+rebuilt deliberately rather than carried forward all at once.
+
+## Current state
 
 The window opens on an empty **Screen 1**:
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────┐
-│ OPENLIGHT   look.olshow          BLACKOUT   LOCK       20:14:05    │
-├────┬───────────────────────────────────────────────────────────────┤
-│ +  │ ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·      │
-│ ▣  │ ·                                                             │
-│ ⌫  │ ·                    Screen 1 is empty                       │
-│    │ ·                  [ ADD WINDOW ]                            │
-│    │ ·                                                             │
-├────┴───────────────────────────────────────────────────────────────┤
-│ Admin[Fixture]>                                                     │
-│ Ready.                                                              │
+│ ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·            │
+│ ·                                                                   │
+│ ·                                                                   │
+│ ·                         SCREEN 1 IS EMPTY                         │
+│ ·                    Add windows to build a workspace               │
+│ ·                                                                   │
+│ ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·            │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-- The screen starts blank on every launch. There are no prefilled panes and no
-  permanent fader rail.
-- `ADD WINDOW` or a click on an empty area opens the Add Window picker. The
-  picker has **Common**, **Pools**, **Playback**, **Tools** and **All** tabs,
-  echoing the grandMA3 Add Window categories that this desk can populate.
-- A window snaps to a 12 × 8 grid. It can be moved by its title bar and resized
-  from its lower-right corner. Windows do not overlap; a move or resize that
-  would overlap is rejected and the last valid position is kept.
-- Every window has a title bar and an `×` close button. The left control bar
-  has `ADD`, `CLEAR` and `RESET`; `CLEAR` empties the screen without touching
-  the show, and `RESET` also closes the picker and returns to the blank screen.
-- Window layout is session state, not show or desk data. Closing the window and
-  reopening it starts blank again. Saved views and layouts are a separate
-  grandMA3 feature and are not claimed here.
-- The command line stays at the bottom, always visible. It remains the only
-  mutation path: selecting a fixture, recalling a pool, moving a fader or
-  pressing a transport button all write the same command the console accepts.
+- There is no top bar, left control rail, command bar or Add Window picker, and
+  no window body is drawn.
+- The screen, its 12 × 8 dot grid and the empty-state text remain.
+- A window that exists still draws as a tile: frame, title bar, `×` close
+  button and lower-right resize grip. It can be dragged by its title bar and
+  resized on the grid, and moves and resizes never overlap.
+- Nothing can be added to the screen from the window yet. The real add flow is
+  the next UI piece; it calls the model below rather than inventing placement.
+- The window layout is session state, not show or desk data. Closing and
+  reopening the window starts blank again. Saved views and layouts are a
+  separate grandMA3 feature and are not claimed here.
 
-## Window catalogue at this point
+## The model that remains
 
-The official grandMA3 Add Window list is much larger than the data this engine
-has. The picker exposes every window that can be filled from the current
-`Snapshot` without inventing a second data model:
+`crates/desktop/src/workspace.rs` owns layout only. It never imports the
+engine:
 
-| Window | Current source | Actions |
+```rust
+pub const COLUMNS: u16 = 12;
+pub const ROWS: u16 = 8;
+
+pub struct WindowId(u64);
+
+pub struct GridRect {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
+pub enum WindowKind {
+    FixtureSheet, SequenceSheet, Playbacks, Pools, Presets, Groups, Worlds,
+    Filters, Effects, Timecode, CommandLineHistory, DmxSheet, Masters,
+    RunningPlaybacks, Patch, Status,
+}
+
+pub struct Window {
+    pub id: WindowId,
+    pub kind: WindowKind,
+    pub rect: GridRect,
+}
+
+pub struct Workspace {
+    windows: Vec<Window>,
+    next_id: u64,
+}
+```
+
+`WindowKind` supplies its title, description, default size and minimum size;
+`WindowTab` keeps the static picker slices (Common, Pools, Playback, Tools,
+All). The workspace supplies `add`, `add_at`, `remove`, `clear`, `move_to`,
+`resize`, `window_at`, and the read-only window list.
+
+- `add_at` first tries the clicked grid cell, then the first free rectangle.
+  It returns `None` when the screen is full; the caller reports that rather than
+  silently dropping the window.
+- `move_to` and `resize` refuse rectangles outside the screen grid, below the
+  window's minimum, or overlapping another window. They return `bool`; the GUI
+  keeps the last valid layout.
+- `window_at` answers what is under a grid cell. It was used to keep a click
+  inside a window from also opening the picker; a rebuilt add flow needs the
+  same check.
+- IDs are monotonic and never reused, so egui widget IDs and scroll positions
+  remain stable while windows are rearranged.
+- `Workspace::new()` is empty. There is no factory view and no default pane.
+
+`Model` keeps `add_window_at`, `remove_window` and a bounded 100-entry command
+history. Layout changes execute no command and do not mark the snapshot dirty.
+
+## Window catalogue
+
+No body is drawn at the moment. The **Actions** column records what each body
+is meant to offer when the rebuild reaches it, so the catalogue is not a claim
+about the current window.
+
+| Window | Intended source | Intended actions |
 |---|---|---|
 | **Fixture Sheet** | `Listings.sheet` | Select, Home, Default, At |
 | **Sequence Sheet** | `Listings.playback` | Select sequence, Go |
@@ -101,7 +158,7 @@ are deliberately deferred until their data or surface exists.
 | **More** | Playbacks (the desk's fader surface), Masters, Running Playbacks and Command Line History | Bars: Align Bar, command wing Bar, Encoder Bar, Selection Bar, Step Bar. Playback: Custom Master Section, Xkeys. Info and system: Help, Info, Message Center, Oops, System Info, System Monitor, Trackpad — need bar surfaces, a custom-master editor, help/system data or the message/overlay model |
 | **All** | The 16 supported windows, sorted alphabetically like the manual | The union of every deferred name above |
 
-The picker's five tabs are a smaller adaptation of the manual's seven:
+The original picker's five tabs are a smaller adaptation of the manual's seven:
 Command Line History also appears on **Tools**, and Playbacks/Masters appear on
 **Playback**, for quicker access. Two further adaptations are explicit: the
 desk's generic **Pools** window lists its existing pool rows instead of the
@@ -114,113 +171,42 @@ it gets a `WindowKind` and a picker entry without changing the workspace model.
 
 ## Design
 
-### A headless workspace model
-
-`crates/desktop/src/workspace.rs` owns layout only. It never imports the
-engine:
-
-```rust
-pub const COLUMNS: u16 = 12;
-pub const ROWS: u16 = 8;
-
-pub struct WindowId(u64);
-
-pub struct GridRect {
-    pub x: u16,
-    pub y: u16,
-    pub width: u16,
-    pub height: u16,
-}
-
-pub enum WindowKind {
-    FixtureSheet, SequenceSheet, Playbacks, Pools, Presets, Groups, Worlds,
-    Filters, Effects, Timecode, CommandLineHistory, DmxSheet, Masters,
-    RunningPlaybacks, Patch, Status,
-}
-
-pub struct Window {
-    pub id: WindowId,
-    pub kind: WindowKind,
-    pub rect: GridRect,
-}
-
-pub struct Workspace {
-    windows: Vec<Window>,
-    next_id: u64,
-}
-```
-
-`WindowKind` supplies its title, description, default size and minimum size;
-`WindowTab` supplies the static picker slices. The workspace supplies `add`,
-`add_at`, `remove`, `clear`, `move_to`, `resize`, `window_at`, and the read-only
-window list.
-
-- `add_at` first tries the clicked grid cell, then the first free rectangle.
-  It returns `None` when the screen is full; the GUI reports that rather than
-  silently dropping the window.
-- `move_to` and `resize` refuse rectangles outside the screen grid, below the
-  window's minimum, or overlapping another window. They return `bool`; the GUI
-  keeps the last valid layout.
-- `window_at` is used to stop a click inside a window from also opening the
-  Add Window picker.
-- IDs are monotonic and never reused, so egui widget IDs and scroll positions
-  remain stable while windows are rearranged.
-- `Workspace::new()` is empty. There is no factory view and no default pane.
-
 ### Drawing and interaction
 
 `gui.rs` draws the workspace inside one `CentralPanel`:
 
 1. Fill the panel with the dark screen colour and paint the 12 × 8 dot grid.
-2. If `workspace.windows()` is empty, paint the blank-screen message and a
-   centred `ADD WINDOW` button.
+2. If `workspace.windows()` is empty, paint the blank-screen message.
 3. For each window, compute its pixel rectangle from its grid rectangle and
    draw a dark tile with a title bar, close button, clipped body and a
-   lower-right resize grip.
-4. Wrap each body in `ui.push_id(window.id, …)`, so two Fixture Sheet windows
-   do not share scroll/grid IDs.
-5. A title-bar drag records the pointer origin and the window's original grid
+   lower-right resize grip. The body is intentionally empty.
+4. A title-bar drag records the pointer origin and the window's original grid
    rectangle. Each frame maps the pointer delta to grid cells and asks
    `move_to`; a rejected cell leaves the window where it was.
-6. A resize grip does the same for `resize`, clamped to the window's minimum.
-7. An empty-area click records the clicked cell and opens the picker; the
-   chosen kind is added at that cell when possible.
+5. A resize grip does the same for `resize`, clamped to the window's minimum.
+6. Close removes the window and clears any drag or resize state for it.
 
-The existing `sheet`, `playback`, `pools`, `timecode` and `status` renderers
-become window bodies rather than full-panel pages. `Playbacks` moves the old
-right rail into a window body; `Masters`, `Running Playbacks`, `DMX Sheet`,
-`Command Line History` and `Patch` are small read-only/new renderers over the
-same snapshot. No window calls the engine directly.
+There is no add flow, no picker and no command bar in `gui.rs` at the moment.
 
-### Theme and chrome
+### Theme
 
-The fixed top bar, left control rail and bottom command bar remain, restyled
-to the dark grandMA3-like palette: near-black screen, blue-grey panels, a
-muted orange accent for active controls, red for close/lock, and monospace
-tables. The control rail has:
-
-- `ADD` — open the window picker.
-- `CLEAR` — remove every window (not the show).
-- `RESET` — clear and reopen the blank screen.
-- The active page, selection count and a compact running-playback count.
-
-The command prompt remains `openlight>` rather than pretending to be an MA
-prompt; the UI does not claim MA compatibility, only the interaction pattern.
+The canvas keeps the dark grandMA3-like palette: near-black screen, blue-grey
+window tiles, a muted orange accent and red for close. The theme also styles
+egui's own widgets, so a rebuilt control inherits the same colours instead of
+starting from the default light theme.
 
 ### Add Window picker
 
-The picker is an anchored egui window with a tab row and a button grid. Each
-button shows the window title and its default grid size. Hovering gives a
-short description. Clicking adds the window and closes the picker. Closing the
-picker or pressing Escape leaves the screen unchanged.
+The picker is the original surface for this feature: an anchored egui window
+with a tab row and a button grid, each button showing the window title and its
+default grid size, with a short description on hover. Clicking added the window
+and closed the picker; Escape closed it without a change. It is not in the
+window today, but `WindowTab` and `WindowKind::ALL` are still the source for it,
+and the workspace's `add_at` still prefers a clicked cell.
 
-The tabs and their contents are static `WindowKind` slices; there is no runtime
-registry and no plugin UI. That keeps the picker's scope visible in one place
-and makes it obvious which grandMA3 windows are waiting for engine data.
+### History
 
-### History window
-
-`Model` gains a bounded `history: Vec<CommandHistory>` in addition to the
+`Model` keeps a bounded `history: Vec<CommandHistory>` in addition to the
 existing `echo`:
 
 ```rust
@@ -231,26 +217,25 @@ pub struct CommandHistory {
 }
 ```
 
-Every non-empty `act` appends one entry after execution. The window shows the
-last commands in order; the latest error is red. A click on a history row
-places the command back in the input, matching the console's command-history
-convenience without adding a second execution path.
+Every non-empty `act` appends one entry after execution. The model records the
+latest error flag and message, and a history window can put a command back in
+the input when the rebuild reaches it; there is no second execution path.
 
-## Implementation plan
+## Implementation history
 
-1. Add `workspace.rs` with the grid, window catalog, placement rules and unit
-   tests.
-2. Add `CommandHistory` and `Workspace` to `Model`; remove the fixed `Pane`
+1. Added `workspace.rs` with the grid, window catalogue, placement rules and
+   unit tests.
+2. Added `CommandHistory` and `Workspace` to `Model`; removed the fixed `Pane`
    enum and pane-switch tests.
-3. Replace `pane_bar`, `fader_bar` and the pane match in `gui.rs` with the
-   blank workspace, window picker, tile chrome, drag/resize interaction and
-   the left control rail.
-4. Split the existing renderers into window bodies, add `Masters`, `Running
-   Playbacks`, `DMX Sheet`, `Patch` and `Command Line History`.
-5. Apply the dark theme, update the desktop guide and design index, and record
-   the supported/deferred catalogue in the spec ledger.
-6. Run the full gate, inspect the GUI model tests and the diff with fresh eyes,
-   commit and push.
+3. Replaced `pane_bar`, `fader_bar` and the pane match in `gui.rs` with the
+   workspace, window picker, tile chrome, drag/resize interaction and the left
+   control rail; window bodies were split out of the old renderers.
+4. Removed the chrome again: top bar, control rail, command bar, window bodies
+   and the Add Window picker. The canvas, its grid, the empty-state text, the
+   window tile and the drag/resize/close gestures stayed, and the model was left
+   untouched for the real add flow.
+5. Updated the desktop guide, the phase note, the roadmap row and this design;
+   regenerated the completeness ledger.
 
 ## Tests
 
@@ -273,9 +258,9 @@ convenience without adding a second execution path.
 - **Existing widget tests** — pool commands, fader commands, cue commands and
   the command-line echo still produce exactly the same text.
 - **Not tested here** — the window has no display in this environment. The
-  workspace model, picker catalogue and command mapping are headless-tested;
-  first-frame layout, drag feel and resize feel still need a real X11/Wayland
-  desktop pass as part of the hardware/display release gate.
+  workspace model, catalogue and command mapping are headless-tested; the
+  canvas, first-frame layout, drag feel and resize feel still need a real
+  X11/Wayland desktop pass as part of the hardware/display release gate.
 
 ## Boundaries
 
@@ -295,11 +280,11 @@ convenience without adding a second execution path.
   frame and accepted later; the implementation keeps the original rectangle
   until a valid target is found, so the window never jumps into an overlap.
 - **No persistence is a deliberate gap.** Operators may expect the screen to
-  survive a restart. Saved views are the next design; this item does not fake
+  survive a restart. Saved views are a separate design; this item does not fake
   them with a hidden file.
-- **Window bodies can be cramped.** Each kind has a minimum grid size, and
-  tables scroll inside their own rectangle. A window at its minimum may show
-  only headers until it is resized.
+- **The UI is incomplete on purpose.** The window cannot add a window yet, so a
+  first-time user sees an empty screen with a hint. That is the rebuild's
+  starting point, not a finished feature.
 - **The real display remains unverified.** The GUI feature compiles and the
   headless model is tested, but no frame has been rendered on X11/Wayland here.
   The hardware/display proof remains the release gate.
