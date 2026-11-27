@@ -43,6 +43,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
+          # The Windows COM lint runs clippy on this toolchain too.
+          components: clippy
       - uses: Swatinem/rust-cache@v2
       # The virtual transport and the target serial module are the portable
       # build. USB (libusb) is exercised by the dedicated job below; raw serial

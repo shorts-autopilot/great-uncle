@@ -12,6 +12,10 @@
 //! handling are covered by tests without a terminal. Only [`run`] touches the
 //! tty: it puts the terminal into raw mode, draws on the alternate screen and
 //! restores everything on exit, including a panic.
+//!
+//! Raw mode is Unix-only. Windows compiles the module so `--ui` can explain
+//! that, but the drawing and key helpers are unreachable there.
+#![cfg_attr(not(unix), allow(dead_code))]
 
 use std::io::{self, Write};
 use std::sync::{Mutex, MutexGuard};
