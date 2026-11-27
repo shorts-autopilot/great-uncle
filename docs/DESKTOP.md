@@ -31,9 +31,9 @@ The window is behind the non-default `gui` feature. `cargo test --workspace`
 and the MSRV job build and test the model without eframe, a display or a GL
 driver; release packaging enables the feature.
 
-The picker's five tabs and tiles are in the window, but a tile only displays
-its kind and default size; the window bodies are still missing, so choosing one
-cannot place it yet. The 16 kinds are Fixture Sheet, Sequence
+The picker's five tabs and tiles are in the window, but a tile shows only the
+window name; the window bodies are still missing, so choosing one cannot place
+it yet. The 16 kinds are Fixture Sheet, Sequence
 Sheet, Playbacks, Pools, Presets, Groups, Worlds, Filters, Effects, Timecode
 Viewer, Command Line History, DMX Sheet, Masters, Running Playbacks, Patch and
 Status, and the full catalogue — present and deferred — is recorded in

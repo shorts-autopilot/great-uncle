@@ -53,9 +53,10 @@ can start or end.
 - A window that exists still draws as a tile: frame, title bar, `×` close
   button and lower-right resize grip. It can be dragged by its title bar and
   resized on the grid, and moves and resizes never overlap.
-- The picker's tiles show a badge, the window title and its default grid size.
-  Choosing one does not add it yet. The add flow is the next UI piece; it calls
-  the model below rather than inventing placement.
+- The picker's tiles show an empty placeholder box inline with the window
+  name; the name is the only text in a tile. Choosing one does not add it yet.
+  The add flow is the next UI piece; it calls the model below rather than
+  inventing placement.
 - The window layout is session state, not show or desk data. Closing and
   reopening the window starts blank again. Saved views and layouts are a
   separate grandMA3 feature and are not claimed here.
@@ -207,9 +208,10 @@ starting from the default light theme.
 
 The picker is a fixed-size egui window placed at the pointer: five category
 tabs (`Common`, `Pools`, `Playback`, `Tools`, `All`) over a four-column grid of
-tiles. Each tile shows a two-letter badge, the window title and its default grid
-size; hovering outlines it. Escape or the window's `×` closes it, and the tab
-selection resets to `Common` on the next open.
+equal tiles. Each tile shows an empty placeholder box inline with the window
+name, which is the only text in the tile; hovering outlines it. Escape or the
+window's `×` closes it, and the tab selection resets to `Common` on the next
+open.
 
 The original picker also placed a window when a tile was clicked; that add step
 is not wired yet, so tiles are display-only for now. `WindowTab` and

@@ -25,8 +25,12 @@ const ACCENT: Color32 = Color32::from_rgb(225, 165, 72);
 const MUTED: Color32 = Color32::from_rgb(150, 157, 168);
 const DANGER: Color32 = Color32::from_rgb(229, 94, 94);
 
-const PICKER_WIDTH: f32 = 660.0;
-const PICKER_HEIGHT: f32 = 360.0;
+const PICKER_WIDTH: f32 = 780.0;
+const PICKER_HEIGHT: f32 = 300.0;
+const PICKER_COLUMNS: usize = 4;
+const TILE_GAP: f32 = 10.0;
+const TILE_HEIGHT: f32 = 40.0;
+const TAB_HEIGHT: f32 = 32.0;
 
 pub fn run(app: App) -> Result<(), String> {
     let native_options = eframe::NativeOptions {
@@ -177,7 +181,7 @@ impl Desktop {
             .fixed_size([PICKER_WIDTH, PICKER_HEIGHT])
             .show(ctx, |ui| {
                 self.picker_tabs(ui);
-                ui.add_space(8.0);
+                ui.add_space(10.0);
                 self.picker_grid(ui);
             });
         if !open {
@@ -187,13 +191,21 @@ impl Desktop {
 
     fn picker_tabs(&mut self, ui: &mut Ui) {
         let tabs = WindowTab::ALL;
-        let width = (ui.available_width() / tabs.len() as f32).floor();
+        let width = ui.available_width();
+        let tab_width = width / tabs.len() as f32;
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.horizontal(|ui| {
             for (index, tab) in tabs.iter().enumerate() {
+                // The last tab takes the rounding remainder so the strip ends
+                // exactly at the popup's right edge.
+                let tab_width = if index + 1 == tabs.len() {
+                    width - tab_width * index as f32
+                } else {
+                    tab_width
+                };
                 let selected = *tab == self.picker_tab;
                 let response = ui.add_sized(
-                    Vec2::new(width, 30.0),
+                    Vec2::new(tab_width, TAB_HEIGHT),
                     egui::Button::new(RichText::new(tab.title()).size(12.0).color(if selected {
                         ACCENT
                     } else {
@@ -220,8 +232,8 @@ impl Desktop {
                     let x = response.rect.left();
                     ui.painter().line_segment(
                         [
-                            Pos2::new(x, response.rect.top() + 5.0),
-                            Pos2::new(x, response.rect.bottom() - 5.0),
+                            Pos2::new(x, response.rect.top() + 6.0),
+                            Pos2::new(x, response.rect.bottom() - 6.0),
                         ],
                         Stroke::new(1.0_f32, Color32::from_rgb(52, 59, 70)),
                     );
@@ -232,21 +244,30 @@ impl Desktop {
 
     fn picker_grid(&mut self, ui: &mut Ui) {
         let kinds = self.picker_tab.kinds();
-        let columns = 4usize;
-        let gap = 6.0;
-        let tile_width =
-            ((ui.available_width() - gap * (columns - 1) as f32) / columns as f32).floor();
-        egui::Grid::new("add-window-grid")
-            .num_columns(columns)
-            .spacing([gap, gap])
-            .show(ui, |ui| {
-                for (index, kind) in kinds.iter().enumerate() {
-                    window_tile(ui, *kind, tile_width);
-                    if (index + 1) % columns == 0 {
-                        ui.end_row();
-                    }
-                }
-            });
+        let width = ui.available_width();
+        let tile_width = (width - TILE_GAP * (PICKER_COLUMNS - 1) as f32) / PICKER_COLUMNS as f32;
+        let rows = kinds.len().div_ceil(PICKER_COLUMNS);
+        let height = rows as f32 * TILE_HEIGHT + rows.saturating_sub(1) as f32 * TILE_GAP;
+        let (grid, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+
+        for (index, kind) in kinds.iter().enumerate() {
+            let row = index / PICKER_COLUMNS;
+            let column = index % PICKER_COLUMNS;
+            let rect = Rect::from_min_size(
+                grid.min
+                    + Vec2::new(
+                        column as f32 * (tile_width + TILE_GAP),
+                        row as f32 * (TILE_HEIGHT + TILE_GAP),
+                    ),
+                Vec2::new(tile_width, TILE_HEIGHT),
+            );
+            let response = ui.interact(
+                rect,
+                ui.id().with(("add-window-tile", kind.title())),
+                Sense::hover(),
+            );
+            paint_tile(ui, *kind, rect, response.hovered());
+        }
     }
 
     fn draw_window(&mut self, ui: &mut Ui, window: &Window, screen: Rect, cell: Vec2) {
@@ -432,87 +453,49 @@ fn apply_theme(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
-/// One catalogue tile: a badge, the window title and its default grid size.
-fn window_tile(ui: &mut Ui, kind: WindowKind, width: f32) {
-    let frame = egui::Frame::new()
-        .fill(WINDOW_HEADER)
-        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(52, 59, 70)))
-        .corner_radius(3)
-        .inner_margin(Margin::symmetric(7, 6))
-        .show(ui, |ui| {
-            ui.allocate_ui_with_layout(
-                Vec2::new((width - 14.0).max(0.0), 46.0),
-                Layout::left_to_right(Align::Center),
-                |ui| {
-                    egui::Frame::new()
-                        .fill(Color32::from_rgb(45, 50, 60))
-                        .corner_radius(2)
-                        .inner_margin(Margin::symmetric(4, 3))
-                        .show(ui, |ui| {
-                            ui.label(
-                                RichText::new(tile_badge(kind))
-                                    .monospace()
-                                    .size(8.5)
-                                    .color(ACCENT),
-                            );
-                        });
-                    ui.add_space(3.0);
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 1.0;
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(kind.title())
-                                    .size(11.0)
-                                    .color(Color32::from_rgb(222, 226, 233)),
-                            )
-                            .wrap(),
-                        );
-                        let (width, height) = kind.default_size();
-                        ui.label(
-                            RichText::new(format!("{width}×{height}"))
-                                .monospace()
-                                .size(9.5)
-                                .color(MUTED),
-                        );
-                    });
-                },
-            );
-        });
-    let rect = frame.response.rect;
-    let hit = ui.interact(
+/// One catalogue tile: an empty placeholder box inline with the window name.
+fn paint_tile(ui: &Ui, kind: WindowKind, rect: Rect, hovered: bool) {
+    let painter = ui.painter();
+    let fill = if hovered {
+        Color32::from_rgb(40, 46, 56)
+    } else {
+        WINDOW_HEADER
+    };
+    let border = if hovered {
+        ACCENT
+    } else {
+        Color32::from_rgb(52, 59, 70)
+    };
+    painter.rect_filled(rect, 3, fill);
+    painter.rect_stroke(
         rect,
-        ui.id().with(("add-window-tile", kind.title())),
-        Sense::click(),
+        3,
+        Stroke::new(1.0_f32, border),
+        egui::StrokeKind::Inside,
     );
-    if hit.hovered() {
-        ui.painter().rect_stroke(
-            rect,
-            3,
-            Stroke::new(1.0_f32, ACCENT),
-            egui::StrokeKind::Inside,
-        );
-    }
-}
 
-fn tile_badge(kind: WindowKind) -> &'static str {
-    match kind {
-        WindowKind::FixtureSheet => "FS",
-        WindowKind::SequenceSheet => "SQ",
-        WindowKind::Playbacks => "PB",
-        WindowKind::CommandLineHistory => "CL",
-        WindowKind::DmxSheet => "DMX",
-        WindowKind::Pools => "PL",
-        WindowKind::Presets => "PR",
-        WindowKind::Groups => "GR",
-        WindowKind::Worlds => "WD",
-        WindowKind::Filters => "FL",
-        WindowKind::Effects => "EF",
-        WindowKind::Timecode => "TC",
-        WindowKind::RunningPlaybacks => "RP",
-        WindowKind::Masters => "GM",
-        WindowKind::Patch => "PT",
-        WindowKind::Status => "ST",
-    }
+    // The placeholder is square and exactly one line high, centred with the
+    // label so it can never stretch the tile.
+    let font = FontId::monospace(11.0);
+    let row_height = ui.fonts(|fonts| fonts.row_height(&font));
+    let placeholder = Rect::from_center_size(
+        Pos2::new(rect.left() + 10.0 + row_height / 2.0, rect.center().y),
+        Vec2::splat(row_height),
+    );
+    painter.rect_filled(placeholder, 2, Color32::from_rgb(45, 50, 60));
+    painter.rect_stroke(
+        placeholder,
+        2,
+        Stroke::new(1.0_f32, Color32::from_rgb(70, 78, 90)),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        Pos2::new(placeholder.right() + 8.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        kind.title(),
+        font,
+        Color32::from_rgb(222, 226, 233),
+    );
 }
 
 /// Paint the cell edges as dots, so the lines show exactly where a window can
