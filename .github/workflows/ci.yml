@@ -73,7 +73,23 @@ jobs:
           exit "$status"
       - name: Windows COM lint
         if: runner.os == 'Windows'
-        run: cargo clippy --workspace --all-targets --locked --no-default-features -- -D warnings
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          cargo clippy --workspace --all-targets --locked --no-default-features \
+            --message-format=short -- -D warnings 2>&1 | tee clippy.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            lines="$(grep -E ": (error|warning):" clippy.log | head -10)"
+            if [ -z "$lines" ]; then
+              lines="$(tail -10 clippy.log)"
+            fi
+            printf '%s\n' "$lines" | while IFS= read -r line; do
+              echo "::error title=windows clippy::$line"
+            done
+          fi
+          exit "$status"
       # The phase demos do not need a device; run their trace diff on every
       # Unix platform. Windows has no bash by default in this job.
       - name: Demo traces
