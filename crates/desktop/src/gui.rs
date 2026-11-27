@@ -1,12 +1,15 @@
 //! The eframe window: the blank user-defined screen.
 //!
-//! The screen, its 12 × 8 cell grid and any placed window are drawn. A click
-//! on empty canvas opens the Add Window box, which is empty until its contents
-//! are specified; the rest of the chrome is rebuilt one piece at a time.
+//! The screen, its 12 × 8 dotted cell grid and any placed window are drawn. A
+//! click on empty canvas opens the Add Window picker at that point; its
+//! categories list the window catalogue, but choosing one does not place it
+//! yet. The rest of the chrome is rebuilt one piece at a time.
 
 use eframe::egui;
 use openlight_app::App;
-use openlight_desktop::workspace::{GridRect, Window, WindowId, COLUMNS, ROWS};
+use openlight_desktop::workspace::{
+    GridRect, Window, WindowId, WindowKind, WindowTab, COLUMNS, ROWS,
+};
 use openlight_desktop::Model;
 
 use eframe::egui::{
@@ -21,6 +24,9 @@ const GRID_LINE: Color32 = Color32::from_rgb(38, 43, 52);
 const ACCENT: Color32 = Color32::from_rgb(225, 165, 72);
 const MUTED: Color32 = Color32::from_rgb(150, 157, 168);
 const DANGER: Color32 = Color32::from_rgb(229, 94, 94);
+
+const PICKER_WIDTH: f32 = 660.0;
+const PICKER_HEIGHT: f32 = 360.0;
 
 pub fn run(app: App) -> Result<(), String> {
     let native_options = eframe::NativeOptions {
@@ -56,6 +62,8 @@ struct Desktop {
     app: App,
     model: Model,
     show_add_picker: bool,
+    picker_pos: Pos2,
+    picker_tab: WindowTab,
     drag: Option<DragState>,
     resize: Option<ResizeState>,
 }
@@ -67,6 +75,8 @@ impl Desktop {
             app,
             model: Model::new(),
             show_add_picker: false,
+            picker_pos: Pos2::ZERO,
+            picker_tab: WindowTab::Common,
             drag: None,
             resize: None,
         }
@@ -79,7 +89,7 @@ impl Desktop {
     }
 
     fn workspace_panel(&mut self, ctx: &egui::Context) {
-        let mut open_picker = false;
+        let mut open_picker_at = None;
         // No panel margin: the grid reaches the window edge and a click in the
         // corner is still a click on the canvas.
         egui::CentralPanel::default()
@@ -116,46 +126,127 @@ impl Desktop {
                 }
                 self.apply_layout_gestures(ctx, cell);
 
-                // A click on empty canvas opens the Add Window box. A click inside
-                // a placed window does not, and the box owns its own clicks while
-                // it is open.
+                // A click on empty canvas opens the Add Window picker. A click
+                // inside a placed window does not, and the picker owns its own
+                // clicks while it is open.
                 let clicked = ui.input(|input| input.pointer.primary_clicked());
                 if clicked && !self.show_add_picker {
                     if let Some(pointer) = ui.input(|input| input.pointer.interact_pos()) {
                         if screen.contains(pointer) {
                             if let Some((x, y)) = grid_cell(screen, cell, pointer) {
                                 if self.model.workspace.window_at(x, y).is_none() {
-                                    open_picker = true;
+                                    open_picker_at = Some(pointer);
                                 }
                             }
                         }
                     }
                 }
             });
-        if open_picker {
+        if let Some(pos) = open_picker_at {
             self.show_add_picker = true;
+            self.picker_pos = pos;
+            self.picker_tab = WindowTab::Common;
         }
         self.add_picker(ctx);
     }
 
-    /// The Add Window box: deliberately empty until its contents are specified.
+    /// The Add Window picker: category tabs over the current catalogue. It
+    /// opens at the clicked point, and choosing a window is not wired yet.
     fn add_picker(&mut self, ctx: &egui::Context) {
         if !self.show_add_picker {
             return;
         }
         let mut open = true;
+        let screen = ctx.screen_rect();
+        let pos = Pos2::new(
+            self.picker_pos.x.clamp(
+                screen.left(),
+                (screen.right() - PICKER_WIDTH).max(screen.left()),
+            ),
+            self.picker_pos.y.clamp(
+                screen.top(),
+                (screen.bottom() - PICKER_HEIGHT).max(screen.top()),
+            ),
+        );
         egui::Window::new("Add Window")
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
-            .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-            .default_width(440.0)
+            .fixed_pos(pos)
+            .constrain_to(screen)
+            .fixed_size([PICKER_WIDTH, PICKER_HEIGHT])
             .show(ctx, |ui| {
-                ui.allocate_space(Vec2::new(420.0, 240.0));
+                self.picker_tabs(ui);
+                ui.add_space(8.0);
+                self.picker_grid(ui);
             });
         if !open {
             self.show_add_picker = false;
         }
+    }
+
+    fn picker_tabs(&mut self, ui: &mut Ui) {
+        let tabs = WindowTab::ALL;
+        let width = (ui.available_width() / tabs.len() as f32).floor();
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.horizontal(|ui| {
+            for (index, tab) in tabs.iter().enumerate() {
+                let selected = *tab == self.picker_tab;
+                let response = ui.add_sized(
+                    Vec2::new(width, 30.0),
+                    egui::Button::new(RichText::new(tab.title()).size(12.0).color(if selected {
+                        ACCENT
+                    } else {
+                        Color32::from_gray(190)
+                    }))
+                    .fill(if selected { SCREEN } else { WINDOW_HEADER })
+                    .stroke(Stroke::NONE)
+                    .corner_radius(0),
+                );
+                if response.clicked() {
+                    self.picker_tab = *tab;
+                }
+                if selected {
+                    ui.painter().rect_filled(
+                        Rect::from_min_size(
+                            Pos2::new(response.rect.left(), response.rect.bottom() - 2.0),
+                            Vec2::new(response.rect.width(), 2.0),
+                        ),
+                        0.0,
+                        ACCENT,
+                    );
+                }
+                if index > 0 {
+                    let x = response.rect.left();
+                    ui.painter().line_segment(
+                        [
+                            Pos2::new(x, response.rect.top() + 5.0),
+                            Pos2::new(x, response.rect.bottom() - 5.0),
+                        ],
+                        Stroke::new(1.0_f32, Color32::from_rgb(52, 59, 70)),
+                    );
+                }
+            }
+        });
+    }
+
+    fn picker_grid(&mut self, ui: &mut Ui) {
+        let kinds = self.picker_tab.kinds();
+        let columns = 4usize;
+        let gap = 6.0;
+        let tile_width =
+            ((ui.available_width() - gap * (columns - 1) as f32) / columns as f32).floor();
+        egui::Grid::new("add-window-grid")
+            .num_columns(columns)
+            .spacing([gap, gap])
+            .show(ui, |ui| {
+                for (index, kind) in kinds.iter().enumerate() {
+                    window_tile(ui, *kind, tile_width);
+                    if (index + 1) % columns == 0 {
+                        ui.end_row();
+                    }
+                }
+            });
     }
 
     fn draw_window(&mut self, ui: &mut Ui, window: &Window, screen: Rect, cell: Vec2) {
@@ -341,22 +432,123 @@ fn apply_theme(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
-/// Paint the cell edges, so the lines show exactly where a window can sit.
+/// One catalogue tile: a badge, the window title and its default grid size.
+fn window_tile(ui: &mut Ui, kind: WindowKind, width: f32) {
+    let frame = egui::Frame::new()
+        .fill(WINDOW_HEADER)
+        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(52, 59, 70)))
+        .corner_radius(3)
+        .inner_margin(Margin::symmetric(7, 6))
+        .show(ui, |ui| {
+            ui.allocate_ui_with_layout(
+                Vec2::new((width - 14.0).max(0.0), 46.0),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    egui::Frame::new()
+                        .fill(Color32::from_rgb(45, 50, 60))
+                        .corner_radius(2)
+                        .inner_margin(Margin::symmetric(4, 3))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new(tile_badge(kind))
+                                    .monospace()
+                                    .size(8.5)
+                                    .color(ACCENT),
+                            );
+                        });
+                    ui.add_space(3.0);
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 1.0;
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(kind.title())
+                                    .size(11.0)
+                                    .color(Color32::from_rgb(222, 226, 233)),
+                            )
+                            .wrap(),
+                        );
+                        let (width, height) = kind.default_size();
+                        ui.label(
+                            RichText::new(format!("{width}×{height}"))
+                                .monospace()
+                                .size(9.5)
+                                .color(MUTED),
+                        );
+                    });
+                },
+            );
+        });
+    let rect = frame.response.rect;
+    let hit = ui.interact(
+        rect,
+        ui.id().with(("add-window-tile", kind.title())),
+        Sense::click(),
+    );
+    if hit.hovered() {
+        ui.painter().rect_stroke(
+            rect,
+            3,
+            Stroke::new(1.0_f32, ACCENT),
+            egui::StrokeKind::Inside,
+        );
+    }
+}
+
+fn tile_badge(kind: WindowKind) -> &'static str {
+    match kind {
+        WindowKind::FixtureSheet => "FS",
+        WindowKind::SequenceSheet => "SQ",
+        WindowKind::Playbacks => "PB",
+        WindowKind::CommandLineHistory => "CL",
+        WindowKind::DmxSheet => "DMX",
+        WindowKind::Pools => "PL",
+        WindowKind::Presets => "PR",
+        WindowKind::Groups => "GR",
+        WindowKind::Worlds => "WD",
+        WindowKind::Filters => "FL",
+        WindowKind::Effects => "EF",
+        WindowKind::Timecode => "TC",
+        WindowKind::RunningPlaybacks => "RP",
+        WindowKind::Masters => "GM",
+        WindowKind::Patch => "PT",
+        WindowKind::Status => "ST",
+    }
+}
+
+/// Paint the cell edges as dots, so the lines show exactly where a window can
+/// sit.
 fn paint_grid(ui: &Ui, screen: Rect, cell: Vec2) {
-    let stroke = Stroke::new(1.0_f32, GRID_LINE);
     for column in 0..=COLUMNS {
         let x = screen.left() + f32::from(column) * cell.x;
-        ui.painter().line_segment(
-            [Pos2::new(x, screen.top()), Pos2::new(x, screen.bottom())],
-            stroke,
+        dotted_line(
+            ui,
+            Pos2::new(x, screen.top()),
+            Pos2::new(x, screen.bottom()),
         );
     }
     for row in 0..=ROWS {
         let y = screen.top() + f32::from(row) * cell.y;
-        ui.painter().line_segment(
-            [Pos2::new(screen.left(), y), Pos2::new(screen.right(), y)],
-            stroke,
+        dotted_line(
+            ui,
+            Pos2::new(screen.left(), y),
+            Pos2::new(screen.right(), y),
         );
+    }
+}
+
+/// A line of dots, spaced so it reads as a guide rather than a border.
+fn dotted_line(ui: &Ui, from: Pos2, to: Pos2) {
+    let delta = to - from;
+    let length = delta.length();
+    if length <= 0.0 {
+        return;
+    }
+    let direction = delta / length;
+    let mut distance = 0.0;
+    while distance <= length {
+        ui.painter()
+            .circle_filled(from + direction * distance, 1.0, GRID_LINE);
+        distance += 8.0;
     }
 }
 

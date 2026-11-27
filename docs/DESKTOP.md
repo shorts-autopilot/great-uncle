@@ -8,11 +8,11 @@ on a headless box; `openlight-desktop` currently opens on the bare canvas.
 ## What the window is
 
 A 1440×900 window that opens on an empty **Screen 1**: a dark screen, the
-12 × 8 grid drawn as cell edges, and the empty-state text. There is no top bar,
-control rail, command line or window body, and the **Add Window** box that
-opens when empty canvas is clicked is empty on purpose. That chrome was removed
-so the UI can be rebuilt one piece at a time, and nothing can be added to the
-screen yet.
+12 × 8 grid drawn as dotted cell edges, and the empty-state text. There is no
+top bar, control rail, command line or window body. Clicking empty canvas opens
+the **Add Window** picker at that point, with category tabs and a tile for every
+window kind; choosing a tile does not place it yet. That chrome was removed so
+the UI can be rebuilt one piece at a time.
 
 What remains is the workspace model and the window tile. A placed window draws
 its frame, title bar, `×` close button and lower-right resize grip; it can be
@@ -31,8 +31,9 @@ The window is behind the non-default `gui` feature. `cargo test --workspace`
 and the MSRV job build and test the model without eframe, a display or a GL
 driver; release packaging enables the feature.
 
-The picker's contents, its five tabs and the window bodies are not in the
-window at the moment; the empty box and the catalogue itself are. The 16 kinds are Fixture Sheet, Sequence
+The picker's five tabs and tiles are in the window, but a tile only displays
+its kind and default size; the window bodies are still missing, so choosing one
+cannot place it yet. The 16 kinds are Fixture Sheet, Sequence
 Sheet, Playbacks, Pools, Presets, Groups, Worlds, Filters, Effects, Timecode
 Viewer, Command Line History, DMX Sheet, Masters, Running Playbacks, Patch and
 Status, and the full catalogue — present and deferred — is recorded in

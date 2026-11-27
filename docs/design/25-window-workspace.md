@@ -43,19 +43,19 @@ The window opens on an empty **Screen 1**:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-The 12 × 8 grid is drawn as cell edges: every line is where a window can
-start or end.
+The 12 × 8 grid is drawn as dotted cell edges: every line is where a window
+can start or end.
 
 - There is no top bar, left control rail, command bar or window body. Clicking
-  empty canvas opens an **Add Window** box that is deliberately empty until its
-  contents are specified.
-- The screen, its 12 × 8 grid drawn as cell edges, and the empty-state text
-  remain.
+  empty canvas opens the **Add Window** picker at that point, with category tabs
+  for the catalogue.
+- The screen, its 12 × 8 dotted grid, and the empty-state text remain.
 - A window that exists still draws as a tile: frame, title bar, `×` close
   button and lower-right resize grip. It can be dragged by its title bar and
   resized on the grid, and moves and resizes never overlap.
-- Nothing can be added to the screen from the window yet. The real add flow is
-  the next UI piece; it calls the model below rather than inventing placement.
+- The picker's tiles show a badge, the window title and its default grid size.
+  Choosing one does not add it yet. The add flow is the next UI piece; it calls
+  the model below rather than inventing placement.
 - The window layout is session state, not show or desk data. Closing and
   reopening the window starts blank again. Saved views and layouts are a
   separate grandMA3 feature and are not claimed here.
@@ -179,7 +179,8 @@ it gets a `WindowKind` and a picker entry without changing the workspace model.
 
 `gui.rs` draws the workspace inside one `CentralPanel`:
 
-1. Fill the panel with the dark screen colour and paint the 12 × 8 cell edges.
+1. Fill the panel with the dark screen colour and paint the 12 × 8 dotted cell
+   edges.
 2. If `workspace.windows()` is empty, paint the blank-screen message.
 3. For each window, compute its pixel rectangle from its grid rectangle and
    draw a dark tile with a title bar, close button, clipped body and a
@@ -189,11 +190,11 @@ it gets a `WindowKind` and a picker entry without changing the workspace model.
    `move_to`; a rejected cell leaves the window where it was.
 5. A resize grip does the same for `resize`, clamped to the window's minimum.
 6. Close removes the window and clears any drag or resize state for it.
-7. A click on empty canvas opens the Add Window box; a click inside a window
-   does not. Escape or the box's `×` closes it.
+7. A click on empty canvas opens the Add Window picker at the pointer; a click
+   inside a window does not. Escape or the picker's `×` closes it.
 
-There is no add flow and no command bar in `gui.rs`; the picker is only the
-empty box.
+There is no add flow and no command bar in `gui.rs`; the picker only displays
+the catalogue.
 
 ### Theme
 
@@ -204,15 +205,16 @@ starting from the default light theme.
 
 ### Add Window picker
 
-The box is an anchored egui window with a title bar and an empty body, sized so
-it can be seen and specified; Escape or its `×` closes it. It is where the
-picker is rebuilt.
+The picker is a fixed-size egui window placed at the pointer: five category
+tabs (`Common`, `Pools`, `Playback`, `Tools`, `All`) over a four-column grid of
+tiles. Each tile shows a two-letter badge, the window title and its default grid
+size; hovering outlines it. Escape or the window's `×` closes it, and the tab
+selection resets to `Common` on the next open.
 
-The original picker was a tab row and a button grid, each button showing the
-window title and its default grid size, with a short description on hover.
-Clicking added the window and closed the picker. `WindowTab` and
-`WindowKind::ALL` are still the source for those controls, and the workspace's
-`add_at` still prefers a clicked cell.
+The original picker also placed a window when a tile was clicked; that add step
+is not wired yet, so tiles are display-only for now. `WindowTab` and
+`WindowKind::ALL` remain the source, and the workspace's `add_at` still prefers
+a clicked cell.
 
 ### History
 
@@ -248,6 +250,8 @@ the input when the rebuild reaches it; there is no second execution path.
    regenerated the completeness ledger.
 6. Changed the grid from centre dots to cell-edge lines, and brought the Add
    Window box back as an empty surface reached by clicking the canvas.
+7. Made the grid dotted, anchored the picker at the clicked point, and filled
+   it with the category tabs and catalogue tiles (display only).
 
 ## Tests
 

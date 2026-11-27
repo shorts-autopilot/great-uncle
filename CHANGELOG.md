@@ -83,12 +83,12 @@ All notable changes to OpenLight are recorded here. The format follows
 ### Changed
 
 - The desktop window opens on the bare canvas. The top bar, left control rail,
-  command line, every window body and every picker control are removed while
-  the surrounding UI is rebuilt one piece at a time; the screen, its 12 × 8
-  grid drawn as cell edges, the empty-state text, window tiles with title-bar
-  drag, corner resize and close, and the headless placement model remain.
-  Clicking empty canvas reopens an empty **Add Window** box (Escape or its `×`
-  closes it) that waits for its contents to be specified.
+  command line and every window body are removed while the surrounding UI is
+  rebuilt one piece at a time; the screen, its 12 × 8 grid drawn as dotted cell
+  edges, the empty-state text, window tiles with title-bar drag, corner resize
+  and close, and the headless placement model remain. Clicking empty canvas
+  opens the **Add Window** picker at that point, with category tabs and a tile
+  for every catalogue kind; choosing a tile does not place a window yet.
 - Show state is read-only outside the engine crate: `Engine::show` is
   `pub(crate)` and `Engine::show()` is the accessor every front end uses.
 - The workspace MSRV is 1.89, raised from 1.82 to match the locked dependency

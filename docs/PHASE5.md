@@ -564,8 +564,8 @@ formats are unchanged. The hardware and display proof remains the release gate.
 ## Window workspace (25)
 
 The desktop window no longer opens as a fixed five-pane viewer. It starts on a
-blank **Screen 1** with a 12 × 8 snap grid: dark screen, cell-edge grid lines and
-the empty-state text. The workspace model keeps the 16 window kinds — Fixture
+blank **Screen 1** with a 12 × 8 snap grid: dark screen, dotted cell-edge grid
+lines and the empty-state text. The workspace model keeps the 16 window kinds — Fixture
 Sheet, Sequence Sheet, Playbacks, Pools, Presets, Groups, Worlds, Filters,
 Effects, Timecode Viewer, Command Line History, DMX Sheet, Masters, Running
 Playbacks, Patch and Status — with their default sizes, minimum sizes and
@@ -573,12 +573,11 @@ tab grouping, and it keeps placement, non-overlap, move, resize and close. That
 model is headless and unit-tested.
 
 The window's chrome is deliberately gone. The top bar, left control rail,
-command line, every window body and every picker control were removed so the UI
-can be rebuilt one piece at a time on the operator's direction. Clicking empty
-canvas opens an **Add Window** box that is empty on purpose; nothing can be
-added from it until its contents are specified. Window tiles that do exist
-still draw, drag, resize and close, so the real add flow has something to
-place.
+command line, every window body and the old picker controls were removed so the
+UI can be rebuilt one piece at a time on the operator's direction. The Add
+Window picker has returned with category tabs and a tile for every kind in the
+catalogue, opened at the clicked point; choosing a tile is not wired yet.
+Window tiles that do exist still draw, drag, resize and close.
 
 The original catalogue is still recorded in
 [`design/25-window-workspace.md`](design/25-window-workspace.md), including the
