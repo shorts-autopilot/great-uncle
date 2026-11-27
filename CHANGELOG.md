@@ -99,6 +99,11 @@ All notable changes to OpenLight are recorded here. The format follows
 - Saving over an existing show on Windows. `store::write_atomic` now replaces
   the target explicitly, because Windows refuses to rename onto an existing
   file; every save over an existing document failed there before.
+- Windows paths in quoted command arguments. The lexer treated `\` as an
+  escape, so `Save "C:\shows\look.olshow"` lost its separators; a backslash is
+  now literal inside quotes and only the quote character is escaped. `Import`,
+  `Save`, `Load`, `Patch Import` and the bundled demo scripts therefore accept
+  Windows paths.
 - CI's matrix check no longer needs BeautifulSoup, so
   `python3 tools/spec_status.py --check` runs on a bare runner. `cargo deny
   --all-features` now allows the licences the GUI stack brings in (BSL-1.0,

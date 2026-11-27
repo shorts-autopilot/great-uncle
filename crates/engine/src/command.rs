@@ -1000,15 +1000,17 @@ fn take_quoted(text: &str) -> Option<(String, &str)> {
         return None;
     }
     let mut value = String::new();
-    let mut escaped = false;
-    for (index, character) in text.char_indices().skip(1) {
-        if escaped {
-            value.push(character);
-            escaped = false;
-            continue;
-        }
+    let mut chars = text.char_indices().skip(1).peekable();
+    while let Some((index, character)) = chars.next() {
         if character == '\\' {
-            escaped = true;
+            // Only the quote character is escaped. A path keeps every other
+            // backslash, so a quoted Windows path survives unchanged.
+            if matches!(chars.peek(), Some((_, next)) if *next == quote) {
+                value.push(quote);
+                chars.next();
+            } else {
+                value.push(character);
+            }
             continue;
         }
         if character == quote {
@@ -1042,8 +1044,11 @@ pub fn lex(line: &str) -> Result<Vec<Token>, CommandError> {
                 let mut closed = false;
                 while index < chars.len() {
                     let current = chars[index];
-                    if current == '\\' && index + 1 < chars.len() {
-                        text.push(chars[index + 1]);
+                    // A backslash escapes the quote character and nothing
+                    // else, so `Create "C:\\shows\\look.olshow"` keeps its
+                    // Windows path separators.
+                    if current == '\\' && index + 1 < chars.len() && chars[index + 1] == quote {
+                        text.push(quote);
                         index += 2;
                         continue;
                     }
@@ -3832,6 +3837,22 @@ mod tests {
     #[test]
     fn lexer_reports_unterminated_quotes() {
         assert!(lex("\"unfinished").is_err());
+    }
+
+    #[test]
+    fn quoted_paths_keep_their_backslashes() {
+        let tokens = lex(r#"Save "C:\shows\look.olshow""#).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Word("Save".into()),
+                Token::Quoted(r"C:\shows\look.olshow".into()),
+            ]
+        );
+
+        // A backslash still escapes the quote character itself.
+        let tokens = lex(r#"Store Filter 1 "a\"b""#).unwrap();
+        assert_eq!(tokens[3], Token::Quoted("a\"b".into()));
     }
 
     #[test]

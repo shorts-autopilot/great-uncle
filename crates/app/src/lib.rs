@@ -531,7 +531,9 @@ fn playing_views(engine: &Engine) -> Vec<PlaybackView> {
 }
 
 fn quote(path: &str) -> String {
-    format!("\"{}\"", path.replace('\\', "\\\\").replace('"', "\\\""))
+    // Backslashes are literal in a quoted command argument; only the quote
+    // character itself is escaped.
+    format!("\"{}\"", path.replace('"', "\\\""))
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

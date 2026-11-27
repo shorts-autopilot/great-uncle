@@ -127,7 +127,9 @@ invented: what the importer cannot represent is reported, not guessed.
 ## Command language
 
 Every line is one or more `;`-separated statements. Keywords are
-case-insensitive; names and paths are quoted when they contain spaces.
+case-insensitive; names and paths are quoted when they contain spaces. Inside a
+quoted argument a backslash is literal, so a Windows path keeps its separators;
+only the quote character itself is escaped.
 
 | Command | Meaning |
 |---|---|

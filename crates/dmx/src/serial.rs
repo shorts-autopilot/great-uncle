@@ -921,7 +921,7 @@ mod platform {
                 },
             );
             assert_eq!(dcb.Parity, ODDPARITY);
-            assert_eq!(dcb._bitfield & (1 << 1), 1, "parity enabled");
+            assert_eq!(dcb._bitfield & (1 << 1), 1 << 1, "parity enabled");
         }
     }
 }
