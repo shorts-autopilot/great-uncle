@@ -576,8 +576,9 @@ The window's chrome is deliberately gone. The top bar, left control rail,
 command line, every window body and the old picker controls were removed so the
 UI can be rebuilt one piece at a time on the operator's direction. The Add
 Window picker has returned with category tabs and a tile for every kind in the
-catalogue, opened at the clicked point; choosing a tile is not wired yet.
-Window tiles that do exist still draw, drag, resize and close.
+catalogue, opened at the clicked point; choosing a tile places that window at
+the clicked cell and closes the picker. Window tiles that do exist still draw,
+drag, resize and close.
 
 The original catalogue is still recorded in
 [`design/25-window-workspace.md`](design/25-window-workspace.md), including the

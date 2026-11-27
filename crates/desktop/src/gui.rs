@@ -1,9 +1,9 @@
 //! The eframe window: the blank user-defined screen.
 //!
 //! The screen, its 12 × 8 dotted cell grid and any placed window are drawn. A
-//! click on empty canvas opens the Add Window picker at that point; its
-//! categories list the window catalogue, but choosing one does not place it
-//! yet. The rest of the chrome is rebuilt one piece at a time.
+//! click on empty canvas opens the Add Window picker at that point; choosing a
+//! catalogue tile places that window at the clicked cell and closes the
+//! picker. The rest of the chrome is rebuilt one piece at a time.
 
 use eframe::egui;
 use openlight_app::App;
@@ -67,6 +67,7 @@ struct Desktop {
     model: Model,
     show_add_picker: bool,
     picker_pos: Pos2,
+    picker_cell: Option<(u16, u16)>,
     picker_tab: WindowTab,
     drag: Option<DragState>,
     resize: Option<ResizeState>,
@@ -80,6 +81,7 @@ impl Desktop {
             model: Model::new(),
             show_add_picker: false,
             picker_pos: Pos2::ZERO,
+            picker_cell: None,
             picker_tab: WindowTab::Common,
             drag: None,
             resize: None,
@@ -139,23 +141,25 @@ impl Desktop {
                         if screen.contains(pointer) {
                             if let Some((x, y)) = grid_cell(screen, cell, pointer) {
                                 if self.model.workspace.window_at(x, y).is_none() {
-                                    open_picker_at = Some(pointer);
+                                    open_picker_at = Some((pointer, (x, y)));
                                 }
                             }
                         }
                     }
                 }
             });
-        if let Some(pos) = open_picker_at {
+        if let Some((pos, cell)) = open_picker_at {
             self.show_add_picker = true;
             self.picker_pos = pos;
+            self.picker_cell = Some(cell);
             self.picker_tab = WindowTab::Common;
         }
         self.add_picker(ctx);
     }
 
     /// The Add Window picker: category tabs over the current catalogue. It
-    /// opens at the clicked point, and choosing a window is not wired yet.
+    /// opens at the clicked point; choosing a tile places that window at the
+    /// clicked cell, keeps the picker's layout, and closes it.
     fn add_picker(&mut self, ctx: &egui::Context) {
         if !self.show_add_picker {
             return;
@@ -172,6 +176,7 @@ impl Desktop {
                 (screen.bottom() - PICKER_HEIGHT).max(screen.top()),
             ),
         );
+        let mut chosen = None;
         egui::Window::new("Add Window")
             .open(&mut open)
             .collapsible(false)
@@ -182,8 +187,17 @@ impl Desktop {
             .show(ctx, |ui| {
                 self.picker_tabs(ui);
                 ui.add_space(10.0);
-                self.picker_grid(ui);
+                chosen = self.picker_grid(ui);
             });
+        if let Some(kind) = chosen {
+            // The clicked cell is the preferred corner. The workspace clamps it
+            // inside the screen edge and falls back to the first free slot if
+            // the cell is taken, so no catalogue option can be refused while
+            // there is room for it.
+            if self.model.add_window_at(kind, self.picker_cell).is_some() {
+                self.show_add_picker = false;
+            }
+        }
         if !open {
             self.show_add_picker = false;
         }
@@ -242,13 +256,15 @@ impl Desktop {
         });
     }
 
-    fn picker_grid(&mut self, ui: &mut Ui) {
+    /// Draw the active tab's tiles and return the kind clicked this frame.
+    fn picker_grid(&mut self, ui: &mut Ui) -> Option<WindowKind> {
         let kinds = self.picker_tab.kinds();
         let width = ui.available_width();
         let tile_width = (width - TILE_GAP * (PICKER_COLUMNS - 1) as f32) / PICKER_COLUMNS as f32;
         let rows = kinds.len().div_ceil(PICKER_COLUMNS);
         let height = rows as f32 * TILE_HEIGHT + rows.saturating_sub(1) as f32 * TILE_GAP;
         let (grid, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+        let mut chosen = None;
 
         for (index, kind) in kinds.iter().enumerate() {
             let row = index / PICKER_COLUMNS;
@@ -261,13 +277,19 @@ impl Desktop {
                     ),
                 Vec2::new(tile_width, TILE_HEIGHT),
             );
-            let response = ui.interact(
-                rect,
-                ui.id().with(("add-window-tile", kind.title())),
-                Sense::hover(),
-            );
+            let response = ui
+                .interact(
+                    rect,
+                    ui.id().with(("add-window-tile", kind.title())),
+                    Sense::click(),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
             paint_tile(ui, *kind, rect, response.hovered());
+            if response.clicked() {
+                chosen = Some(*kind);
+            }
         }
+        chosen
     }
 
     fn draw_window(&mut self, ui: &mut Ui, window: &Window, screen: Rect, cell: Vec2) {

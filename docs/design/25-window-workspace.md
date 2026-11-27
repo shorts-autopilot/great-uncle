@@ -192,10 +192,11 @@ it gets a `WindowKind` and a picker entry without changing the workspace model.
 5. A resize grip does the same for `resize`, clamped to the window's minimum.
 6. Close removes the window and clears any drag or resize state for it.
 7. A click on empty canvas opens the Add Window picker at the pointer; a click
-   inside a window does not. Escape or the picker's `×` closes it.
+   inside a window does not. Choosing a tile places that window at the clicked
+   cell and closes the picker; Escape or the picker's `×` closes it without
+   adding anything.
 
-There is no add flow and no command bar in `gui.rs`; the picker only displays
-the catalogue.
+There is no command bar in `gui.rs`; the picker is the only add flow.
 
 ### Theme
 
@@ -209,14 +210,15 @@ starting from the default light theme.
 The picker is a fixed-size egui window placed at the pointer: five category
 tabs (`Common`, `Pools`, `Playback`, `Tools`, `All`) over a four-column grid of
 equal tiles. Each tile shows an empty placeholder box inline with the window
-name, which is the only text in the tile; hovering outlines it. Escape or the
-window's `×` closes it, and the tab selection resets to `Common` on the next
-open.
-
-The original picker also placed a window when a tile was clicked; that add step
-is not wired yet, so tiles are display-only for now. `WindowTab` and
-`WindowKind::ALL` remain the source, and the workspace's `add_at` still prefers
-a clicked cell.
+name, which is the only text in the tile; hovering outlines it and the pointer
+becomes a hand. Choosing a tile calls `Model::add_window_at` with the kind and
+the cell that opened the picker, so that cell is the window's upper-left
+corner. The workspace clamps the rectangle inside the screen edge and falls
+back to the first free slot when the cell is already taken, so every catalogue
+tile opens its window while the screen has room. A successful placement closes
+the picker; Escape or the window's `×` closes it without adding anything. The
+tab selection resets to `Common` on the next open. `WindowTab` and
+`WindowKind::ALL` remain the source for the tiles.
 
 ### History
 

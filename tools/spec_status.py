@@ -542,7 +542,7 @@ CROSS_CUTTING = [
     ("Special executors", "Item 20 builds executor pages and page-qualified runs; macros, chases and multi-cue stacks still need a design."),
     ("Timecode depth", "Tracks, markers, MTC and an OSC feed hook landed with item 15; OSC ingestion and track groups remain."),
     ("Macros and CLI ergonomics", "Item 16 adds statement macros, transaction undo and machine-readable status; variables and a command editor remain out of scope."),
-    ("Layouts, Quickeys and windows", "Item 25 builds the blank, user-defined window workspace with placement, resize, removal, the 16-window catalogue and command history; its chrome is out of the window while the UI is rebuilt piece by piece, and the Add Window picker lists the catalogue but does not place windows yet. Saved views/layouts, quickeys, window settings and the deferred grandMA3 window catalogue remain."),
+    ("Layouts, Quickeys and windows", "Item 25 builds the blank, user-defined window workspace with placement, resize, removal, the 16-window catalogue and command history; its chrome is out of the window while the UI is rebuilt piece by piece, and the Add Window picker places any catalogue window at the clicked cell. Saved views/layouts, quickeys, window settings and the deferred grandMA3 window catalogue remain."),
     ("Agenda and timers", "Scheduled events, stopwatch and countdown are unbuilt."),
     ("Plugins/Lua", "164 rows, the largest undecided chapter. Decide between an embedded Lua host and a native plugin API before claiming completeness."),
     ("Show Creator", "Import/export and preset/group creation from fixture types; no design yet."),

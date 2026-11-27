@@ -517,6 +517,23 @@ mod tests {
     }
 
     #[test]
+    fn every_catalogue_tile_opens_its_window_at_the_clicked_cell() {
+        for tab in WindowTab::ALL {
+            for kind in tab.kinds() {
+                let mut workspace = Workspace::new();
+                let id = workspace.add_at(*kind, Some((3, 2))).unwrap();
+                let window = workspace.get(id).unwrap();
+                assert_eq!(window.kind, *kind, "{tab:?} tile {kind:?}");
+                assert_eq!(
+                    (window.rect.x, window.rect.y),
+                    (3, 2),
+                    "{tab:?} tile {kind:?} keeps the clicked cell"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn every_window_has_a_fitting_default_and_minimum() {
         for kind in WindowKind::ALL {
             let (width, height) = kind.default_size();

@@ -81,8 +81,9 @@ currently opens on the empty 12 × 8 canvas and little else: the surrounding
 chrome, the command line and every window body were removed deliberately while
 the UI is rebuilt one piece at a time. The canvas draws its 12 × 8 grid as dotted cell
 edges, and clicking it opens the themed **Add Window** picker at that point:
-its category tabs list the 16 window kinds, though choosing one does not place
-it yet. The layout model behind it — placement,
+its category tabs list the 16 window kinds, and choosing one places that
+window at the clicked cell and closes the picker. The layout model behind
+it — placement,
 non-overlap, title-bar drag, corner resize, close and the 16-window catalogue —
 is still built and headless-tested, so the add flow can return without
 redesigning it. The terminal shell stays the default
