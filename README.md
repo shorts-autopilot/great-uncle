@@ -77,12 +77,14 @@ gaps and footprint overflow, and `Patch Import` / `Report Patch` round-trip the
 patch through a spreadsheet. `Report Cues`, `Report Palettes`, `Report Status`
 and `Report Show` write the listings as files, and `--check` runs the patch
 check for CI. A native window (`cargo run -p openlight-desktop --features gui`)
-currently opens on the empty 12 × 8 canvas and nothing else: the surrounding
-chrome, the command line, the window bodies and the Add Window picker were
-removed deliberately while the UI is rebuilt one piece at a time. The layout
-model behind it — placement, non-overlap, title-bar drag, corner resize, close
-and the 16-window catalogue — is still built and headless-tested, so the add
-flow can return without redesigning it. The terminal shell stays the default
+currently opens on the empty 12 × 8 canvas and little else: the surrounding
+chrome, the command line and every window body were removed deliberately while
+the UI is rebuilt one piece at a time. The canvas draws its 12 × 8 grid as cell
+edges, and clicking it opens an **Add Window** box that is deliberately empty
+until its contents are specified. The layout model behind it — placement,
+non-overlap, title-bar drag, corner resize, close and the 16-window catalogue —
+is still built and headless-tested, so the add flow can return without
+redesigning it. The terminal shell stays the default
 for headless boxes, and the window build is feature-gated so tests and the MSRV
 job need no display.
 

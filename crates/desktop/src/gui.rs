@@ -1,9 +1,8 @@
 //! The eframe window: the blank user-defined screen.
 //!
-//! Only the screen, its 12 × 8 snap grid and the windows placed on it are
-//! drawn. Everything else — top bar, side rail, command line, window content
-//! and the add-window picker — is gone; the surrounding UI is rebuilt one
-//! piece at a time.
+//! The screen, its 12 × 8 cell grid and any placed window are drawn. A click
+//! on empty canvas opens the Add Window box, which is empty until its contents
+//! are specified; the rest of the chrome is rebuilt one piece at a time.
 
 use eframe::egui;
 use openlight_app::App;
@@ -11,14 +10,14 @@ use openlight_desktop::workspace::{GridRect, Window, WindowId, COLUMNS, ROWS};
 use openlight_desktop::Model;
 
 use eframe::egui::{
-    Align, Align2, Color32, FontId, Layout, Margin, Pos2, Rect, RichText, Sense, Stroke, TextStyle,
-    Ui, UiBuilder, Vec2,
+    Align, Align2, Color32, FontId, Key, Layout, Margin, Pos2, Rect, RichText, Sense, Stroke,
+    TextStyle, Ui, UiBuilder, Vec2,
 };
 
 const SCREEN: Color32 = Color32::from_rgb(9, 11, 15);
 const WINDOW: Color32 = Color32::from_rgb(24, 28, 35);
 const WINDOW_HEADER: Color32 = Color32::from_rgb(32, 37, 46);
-const GRID_DOT: Color32 = Color32::from_rgb(38, 43, 52);
+const GRID_LINE: Color32 = Color32::from_rgb(38, 43, 52);
 const ACCENT: Color32 = Color32::from_rgb(225, 165, 72);
 const MUTED: Color32 = Color32::from_rgb(150, 157, 168);
 const DANGER: Color32 = Color32::from_rgb(229, 94, 94);
@@ -56,6 +55,7 @@ struct ResizeState {
 struct Desktop {
     app: App,
     model: Model,
+    show_add_picker: bool,
     drag: Option<DragState>,
     resize: Option<ResizeState>,
 }
@@ -66,44 +66,96 @@ impl Desktop {
         Self {
             app,
             model: Model::new(),
+            show_add_picker: false,
             drag: None,
             resize: None,
         }
     }
 
+    fn keys(&mut self, ctx: &egui::Context) {
+        if ctx.input(|input| input.key_pressed(Key::Escape)) {
+            self.show_add_picker = false;
+        }
+    }
+
     fn workspace_panel(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let screen = ui.max_rect();
-            let cell = Vec2::new(
-                (screen.width() / f32::from(COLUMNS)).max(1.0),
-                (screen.height() / f32::from(ROWS)).max(1.0),
-            );
-            ui.painter().rect_filled(screen, 0.0, SCREEN);
-            paint_grid(ui, screen, cell);
-
-            if self.model.workspace.is_empty() {
-                ui.painter().text(
-                    screen.center() - Vec2::new(0.0, 12.0),
-                    Align2::CENTER_CENTER,
-                    "SCREEN 1 IS EMPTY",
-                    FontId::monospace(22.0),
-                    MUTED,
+        let mut open_picker = false;
+        // No panel margin: the grid reaches the window edge and a click in the
+        // corner is still a click on the canvas.
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new())
+            .show(ctx, |ui| {
+                let screen = ui.max_rect();
+                let cell = Vec2::new(
+                    (screen.width() / f32::from(COLUMNS)).max(1.0),
+                    (screen.height() / f32::from(ROWS)).max(1.0),
                 );
-                ui.painter().text(
-                    screen.center() + Vec2::new(0.0, 18.0),
-                    Align2::CENTER_CENTER,
-                    "Add windows to build a workspace",
-                    FontId::monospace(13.0),
-                    Color32::from_gray(110),
-                );
-            }
+                ui.painter().rect_filled(screen, 0.0, SCREEN);
+                paint_grid(ui, screen, cell);
 
-            let windows = self.model.workspace.windows().to_vec();
-            for window in windows {
-                self.draw_window(ui, &window, screen, cell);
-            }
-            self.apply_layout_gestures(ctx, cell);
-        });
+                if self.model.workspace.is_empty() {
+                    ui.painter().text(
+                        screen.center() - Vec2::new(0.0, 12.0),
+                        Align2::CENTER_CENTER,
+                        "SCREEN 1 IS EMPTY",
+                        FontId::monospace(22.0),
+                        MUTED,
+                    );
+                    ui.painter().text(
+                        screen.center() + Vec2::new(0.0, 18.0),
+                        Align2::CENTER_CENTER,
+                        "Add windows to build a workspace",
+                        FontId::monospace(13.0),
+                        Color32::from_gray(110),
+                    );
+                }
+
+                let windows = self.model.workspace.windows().to_vec();
+                for window in windows {
+                    self.draw_window(ui, &window, screen, cell);
+                }
+                self.apply_layout_gestures(ctx, cell);
+
+                // A click on empty canvas opens the Add Window box. A click inside
+                // a placed window does not, and the box owns its own clicks while
+                // it is open.
+                let clicked = ui.input(|input| input.pointer.primary_clicked());
+                if clicked && !self.show_add_picker {
+                    if let Some(pointer) = ui.input(|input| input.pointer.interact_pos()) {
+                        if screen.contains(pointer) {
+                            if let Some((x, y)) = grid_cell(screen, cell, pointer) {
+                                if self.model.workspace.window_at(x, y).is_none() {
+                                    open_picker = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        if open_picker {
+            self.show_add_picker = true;
+        }
+        self.add_picker(ctx);
+    }
+
+    /// The Add Window box: deliberately empty until its contents are specified.
+    fn add_picker(&mut self, ctx: &egui::Context) {
+        if !self.show_add_picker {
+            return;
+        }
+        let mut open = true;
+        egui::Window::new("Add Window")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+            .default_width(440.0)
+            .show(ctx, |ui| {
+                ui.allocate_space(Vec2::new(420.0, 240.0));
+            });
+        if !open {
+            self.show_add_picker = false;
+        }
     }
 
     fn draw_window(&mut self, ui: &mut Ui, window: &Window, screen: Rect, cell: Vec2) {
@@ -260,6 +312,7 @@ impl Desktop {
 
 impl eframe::App for Desktop {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.keys(ctx);
         self.workspace_panel(ctx);
     }
 
@@ -288,12 +341,30 @@ fn apply_theme(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
+/// Paint the cell edges, so the lines show exactly where a window can sit.
 fn paint_grid(ui: &Ui, screen: Rect, cell: Vec2) {
-    for y in 0..ROWS {
-        for x in 0..COLUMNS {
-            let point = screen.min
-                + Vec2::new((f32::from(x) + 0.5) * cell.x, (f32::from(y) + 0.5) * cell.y);
-            ui.painter().circle_filled(point, 1.0, GRID_DOT);
-        }
+    let stroke = Stroke::new(1.0_f32, GRID_LINE);
+    for column in 0..=COLUMNS {
+        let x = screen.left() + f32::from(column) * cell.x;
+        ui.painter().line_segment(
+            [Pos2::new(x, screen.top()), Pos2::new(x, screen.bottom())],
+            stroke,
+        );
     }
+    for row in 0..=ROWS {
+        let y = screen.top() + f32::from(row) * cell.y;
+        ui.painter().line_segment(
+            [Pos2::new(screen.left(), y), Pos2::new(screen.right(), y)],
+            stroke,
+        );
+    }
+}
+
+fn grid_cell(screen: Rect, cell: Vec2, pointer: Pos2) -> Option<(u16, u16)> {
+    let x = ((pointer.x - screen.left()) / cell.x).floor();
+    let y = ((pointer.y - screen.top()) / cell.y).floor();
+    if x < 0.0 || y < 0.0 || x >= f32::from(COLUMNS) || y >= f32::from(ROWS) {
+        return None;
+    }
+    Some((x as u16, y as u16))
 }

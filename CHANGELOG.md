@@ -13,7 +13,7 @@ All notable changes to OpenLight are recorded here. The format follows
   rules, and close. Layout is session state rather than show/desk data, and
   every widget action still writes command text through `App::execute`. Command
   history is bounded at 100 entries. The window itself opens on the empty
-  canvas; its chrome and the Add Window picker were stripped back so the UI can
+  canvas; its chrome and every picker control were stripped back so the UI can
   be rebuilt piece by piece on the operator's direction. No format change; the
   hardware/display proof remains the release gate.
 - File management, backups and templates: saving over an existing show now
@@ -83,10 +83,12 @@ All notable changes to OpenLight are recorded here. The format follows
 ### Changed
 
 - The desktop window opens on the bare canvas. The top bar, left control rail,
-  command line, every window body and the Add Window picker are removed while
-  the surrounding UI is rebuilt one piece at a time; the screen, its 12 × 8 dot
-  grid, the empty-state text, window tiles with title-bar drag, corner resize
-  and close, and the headless placement model remain.
+  command line, every window body and every picker control are removed while
+  the surrounding UI is rebuilt one piece at a time; the screen, its 12 × 8
+  grid drawn as cell edges, the empty-state text, window tiles with title-bar
+  drag, corner resize and close, and the headless placement model remain.
+  Clicking empty canvas reopens an empty **Add Window** box (Escape or its `×`
+  closes it) that waits for its contents to be specified.
 - Show state is read-only outside the engine crate: `Engine::show` is
   `pub(crate)` and `Engine::show()` is the accessor every front end uses.
 - The workspace MSRV is 1.89, raised from 1.82 to match the locked dependency

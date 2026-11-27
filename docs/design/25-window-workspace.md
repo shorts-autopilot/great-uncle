@@ -34,19 +34,23 @@ The window opens on an empty **Screen 1**:
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────┐
-│ ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·            │
-│ ·                                                                   │
-│ ·                                                                   │
-│ ·                         SCREEN 1 IS EMPTY                         │
-│ ·                    Add windows to build a workspace               │
-│ ·                                                                   │
-│ ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·            │
+│                                                                     │
+│                                                                     │
+│                         SCREEN 1 IS EMPTY                           │
+│                    Add windows to build a workspace                 │
+│                                                                     │
+│                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-- There is no top bar, left control rail, command bar or Add Window picker, and
-  no window body is drawn.
-- The screen, its 12 × 8 dot grid and the empty-state text remain.
+The 12 × 8 grid is drawn as cell edges: every line is where a window can
+start or end.
+
+- There is no top bar, left control rail, command bar or window body. Clicking
+  empty canvas opens an **Add Window** box that is deliberately empty until its
+  contents are specified.
+- The screen, its 12 × 8 grid drawn as cell edges, and the empty-state text
+  remain.
 - A window that exists still draws as a tile: frame, title bar, `×` close
   button and lower-right resize grip. It can be dragged by its title bar and
   resized on the grid, and moves and resizes never overlap.
@@ -175,7 +179,7 @@ it gets a `WindowKind` and a picker entry without changing the workspace model.
 
 `gui.rs` draws the workspace inside one `CentralPanel`:
 
-1. Fill the panel with the dark screen colour and paint the 12 × 8 dot grid.
+1. Fill the panel with the dark screen colour and paint the 12 × 8 cell edges.
 2. If `workspace.windows()` is empty, paint the blank-screen message.
 3. For each window, compute its pixel rectangle from its grid rectangle and
    draw a dark tile with a title bar, close button, clipped body and a
@@ -185,8 +189,11 @@ it gets a `WindowKind` and a picker entry without changing the workspace model.
    `move_to`; a rejected cell leaves the window where it was.
 5. A resize grip does the same for `resize`, clamped to the window's minimum.
 6. Close removes the window and clears any drag or resize state for it.
+7. A click on empty canvas opens the Add Window box; a click inside a window
+   does not. Escape or the box's `×` closes it.
 
-There is no add flow, no picker and no command bar in `gui.rs` at the moment.
+There is no add flow and no command bar in `gui.rs`; the picker is only the
+empty box.
 
 ### Theme
 
@@ -197,12 +204,15 @@ starting from the default light theme.
 
 ### Add Window picker
 
-The picker is the original surface for this feature: an anchored egui window
-with a tab row and a button grid, each button showing the window title and its
-default grid size, with a short description on hover. Clicking added the window
-and closed the picker; Escape closed it without a change. It is not in the
-window today, but `WindowTab` and `WindowKind::ALL` are still the source for it,
-and the workspace's `add_at` still prefers a clicked cell.
+The box is an anchored egui window with a title bar and an empty body, sized so
+it can be seen and specified; Escape or its `×` closes it. It is where the
+picker is rebuilt.
+
+The original picker was a tab row and a button grid, each button showing the
+window title and its default grid size, with a short description on hover.
+Clicking added the window and closed the picker. `WindowTab` and
+`WindowKind::ALL` are still the source for those controls, and the workspace's
+`add_at` still prefers a clicked cell.
 
 ### History
 
@@ -231,11 +241,13 @@ the input when the rebuild reaches it; there is no second execution path.
    workspace, window picker, tile chrome, drag/resize interaction and the left
    control rail; window bodies were split out of the old renderers.
 4. Removed the chrome again: top bar, control rail, command bar, window bodies
-   and the Add Window picker. The canvas, its grid, the empty-state text, the
+   and every picker control. The canvas, its grid, the empty-state text, the
    window tile and the drag/resize/close gestures stayed, and the model was left
    untouched for the real add flow.
 5. Updated the desktop guide, the phase note, the roadmap row and this design;
    regenerated the completeness ledger.
+6. Changed the grid from centre dots to cell-edge lines, and brought the Add
+   Window box back as an empty surface reached by clicking the canvas.
 
 ## Tests
 
