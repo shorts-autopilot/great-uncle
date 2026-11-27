@@ -517,7 +517,9 @@ mod tests {
             .unwrap();
         stream.write_all(request.as_bytes()).unwrap();
         let mut response = String::new();
-        stream.read_to_string(&mut response).unwrap();
+        // The server answers before it closes; a reset after the response was
+        // written is not interesting to the test, which checks the bytes below.
+        let _ = stream.read_to_string(&mut response);
         response
     }
 
