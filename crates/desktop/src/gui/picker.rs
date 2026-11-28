@@ -32,10 +32,9 @@ impl Desktop {
                 screen.left(),
                 (screen.right() - PICKER_WIDTH).max(screen.left()),
             ),
-            self.picker_pos.y.clamp(
-                screen.top(),
-                (screen.bottom() - height).max(screen.top()),
-            ),
+            self.picker_pos
+                .y
+                .clamp(screen.top(), (screen.bottom() - height).max(screen.top())),
         );
         let mut chosen = None;
         egui::Window::new("Add Window")

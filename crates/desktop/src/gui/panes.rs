@@ -466,10 +466,7 @@ impl Desktop {
         ui.monospace(format!("Tempo     {:.1} BPM", self.snapshot.desk.tempo));
         ui.monospace(format!("Selected  {}", self.snapshot.desk.selection.len()));
         ui.monospace(format!("Blind     {}", yes_no(self.snapshot.desk.blind)));
-        ui.monospace(format!(
-            "Blackout  {}",
-            yes_no(self.snapshot.desk.blackout)
-        ));
+        ui.monospace(format!("Blackout  {}", yes_no(self.snapshot.desk.blackout)));
         if let Some(action) = action {
             self.act(&action);
         }

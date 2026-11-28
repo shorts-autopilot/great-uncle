@@ -625,8 +625,14 @@ mod tests {
         app.execute("Clear Values").unwrap();
         app.execute("Go Sequence 1").unwrap();
         let first = app.snapshot();
-        std::thread::sleep(Duration::from_millis(120));
-        let second = app.snapshot();
+        // A loaded runner can take longer than one frame interval to serve its
+        // first tick, so wait for the frame to move instead of assuming it has.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut second = app.snapshot();
+        while second.frame == first.frame && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+            second = app.snapshot();
+        }
         assert_ne!(
             first.frame, second.frame,
             "the running fade should move the dimmer"
@@ -635,7 +641,7 @@ mod tests {
         assert_eq!(first.show_name, second.show_name);
         assert!(
             second.frame.slot(1, 1).unwrap_or(0) > 0,
-            "the fade should be above zero after 120 ms: {:?}",
+            "the fade should be above zero once it starts: {:?}",
             second.frame.universes().collect::<Vec<_>>()
         );
         app.stop();
