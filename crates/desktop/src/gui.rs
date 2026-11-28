@@ -722,8 +722,7 @@ impl Desktop {
                                 ));
                             }
                             if ui.small_button("Del").clicked() {
-                                action =
-                                    Some(delete_command(&row.kind, row.number, &row.detail));
+                                action = Some(delete_command(&row.kind, row.number, &row.detail));
                             }
                             ui.monospace(&row.kind);
                             ui.monospace(row.number.to_string());
