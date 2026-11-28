@@ -565,10 +565,10 @@ formats are unchanged. The hardware and display proof remains the release gate.
 
 The desktop window no longer opens as a fixed five-pane viewer. It starts on a
 blank **Screen 1** with a 12 × 8 snap grid: dark screen, dotted cell-edge grid
-lines and the empty-state text. The workspace model keeps the 16 window kinds — Fixture
-Sheet, Sequence Sheet, Playbacks, Pools, Presets, Groups, Worlds, Filters,
-Effects, Timecode Viewer, Command Line History, DMX Sheet, Masters, Running
-Playbacks, Patch and Status — with their default sizes, minimum sizes and
+lines and the empty-state text. The workspace model keeps the 17 window kinds —
+Fixture Sheet, Sequence Sheet, Playbacks, Pools, Presets, Groups, Worlds,
+Filters, Effects, Timecode Viewer, Command Line, Command Line History, DMX
+Sheet, Masters, Running Playbacks, Patch and Status — with their default sizes, minimum sizes and
 tab grouping, and it keeps placement, non-overlap, move, resize and close. That
 model is headless and unit-tested.
 

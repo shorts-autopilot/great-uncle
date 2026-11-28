@@ -63,6 +63,7 @@ pub enum WindowKind {
     Effects,
     Timecode,
     CommandLineHistory,
+    CommandLine,
     DmxSheet,
     Masters,
     RunningPlaybacks,
@@ -72,7 +73,8 @@ pub enum WindowKind {
 
 impl WindowKind {
     /// Alphabetical, like the manual's All tab.
-    pub const ALL: [WindowKind; 16] = [
+    pub const ALL: [WindowKind; 17] = [
+        WindowKind::CommandLine,
         WindowKind::CommandLineHistory,
         WindowKind::DmxSheet,
         WindowKind::Effects,
@@ -104,6 +106,7 @@ impl WindowKind {
             WindowKind::Effects => "Effects",
             WindowKind::Timecode => "Timecode Viewer",
             WindowKind::CommandLineHistory => "Command Line History",
+            WindowKind::CommandLine => "Command Line",
             WindowKind::DmxSheet => "DMX Sheet",
             WindowKind::Masters => "Masters",
             WindowKind::RunningPlaybacks => "Running Playbacks",
@@ -125,6 +128,7 @@ impl WindowKind {
             WindowKind::Effects => "Stored effects and their run state",
             WindowKind::Timecode => "Timecode shows, tracks and markers",
             WindowKind::CommandLineHistory => "Commands and their results",
+            WindowKind::CommandLine => "A prompt and the last result",
             WindowKind::DmxSheet => "Rendered DMX slot values",
             WindowKind::Masters => "Grand, rate, tempo and page",
             WindowKind::RunningPlaybacks => "Playbacks that are on stage",
@@ -147,6 +151,7 @@ impl WindowKind {
             WindowKind::Effects => (4, 3),
             WindowKind::Timecode => (7, 4),
             WindowKind::CommandLineHistory => (6, 4),
+            WindowKind::CommandLine => (6, 2),
             WindowKind::DmxSheet => (6, 4),
             WindowKind::Masters => (4, 3),
             WindowKind::RunningPlaybacks => (5, 3),
@@ -160,9 +165,10 @@ impl WindowKind {
         match self {
             WindowKind::FixtureSheet | WindowKind::SequenceSheet => (4, 3),
             WindowKind::Pools | WindowKind::Timecode | WindowKind::DmxSheet => (3, 3),
-            WindowKind::CommandLineHistory | WindowKind::Patch | WindowKind::RunningPlaybacks => {
-                (3, 2)
-            }
+            WindowKind::CommandLine
+            | WindowKind::CommandLineHistory
+            | WindowKind::Patch
+            | WindowKind::RunningPlaybacks => (3, 2),
             WindowKind::Playbacks | WindowKind::Presets | WindowKind::Groups => (3, 2),
             WindowKind::Worlds | WindowKind::Filters | WindowKind::Effects => (3, 2),
             WindowKind::Masters | WindowKind::Status => (3, 2),
@@ -205,6 +211,7 @@ impl WindowTab {
             WindowKind::FixtureSheet,
             WindowKind::SequenceSheet,
             WindowKind::Playbacks,
+            WindowKind::CommandLine,
             WindowKind::CommandLineHistory,
             WindowKind::DmxSheet,
         ];
@@ -226,6 +233,7 @@ impl WindowTab {
         const TOOLS: &[WindowKind] = &[
             WindowKind::Patch,
             WindowKind::Status,
+            WindowKind::CommandLine,
             WindowKind::CommandLineHistory,
             WindowKind::DmxSheet,
         ];

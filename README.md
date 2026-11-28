@@ -80,13 +80,14 @@ check for CI. A native window (`cargo run -p openlight-desktop --features gui`)
 opens on the empty 12 × 8 canvas: the top bar, control rail and global command
 line stay out while the UI is rebuilt one piece at a time. The canvas draws its
 12 × 8 grid as dotted cell edges, and clicking it opens the themed **Add
-Window** picker at that point: its category tabs list the 16 window kinds, and
+Window** picker at that point: its category tabs list the 17 window kinds, and
 choosing one places that window at the clicked cell and closes the picker. Each
 placed window then draws its pane from the same snapshot the terminal lists
 from — fixture sheet, patch, sequence sheet, the pool views, timecode, playbacks
-and masters, running playbacks, DMX sheet, status and command line history.
+and masters, running playbacks, DMX sheet, status, command line and command
+line history.
 The layout model behind it — placement, non-overlap, title-bar drag, corner
-resize, close and the 16-window catalogue — is headless-tested. The terminal
+resize, close and the 17-window catalogue — is headless-tested. The terminal
 shell stays the default for headless boxes, and the window build is
 feature-gated so tests and the MSRV job need no display.
 

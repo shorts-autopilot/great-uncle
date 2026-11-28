@@ -17,9 +17,11 @@ the picker.
 
 What remains is the workspace model and the window tile. A placed window draws
 its frame, title bar, `×` close button and lower-right resize grip; it can be
-dragged by its title bar and resized on the grid, never overlapping. Layout is
-session state: it starts blank on every launch and is not saved into the show
-or desk. The 16 window kinds, their default and minimum sizes, their tab
+dragged by its title bar and resized on the grid, never overlapping. Each
+window also carries a thin outline on the grid cells it claims and a faint
+body fill, so its footprint is visible on the dark canvas. Layout is session
+state: it starts blank on every launch and is not saved into the show or desk.
+The 17 window kinds, their default and minimum sizes, their tab
 groups and the placement rules are all still in `workspace.rs`, headless and
 tested, so the add flow has a model to call rather than one to invent.
 
@@ -46,9 +48,10 @@ driver; release packaging enables the feature.
 
 The picker's five tabs and tiles are in the window, but a tile shows only the
 window name; choosing one places that window at the clicked cell. Every one of
-the 16 kinds renders its pane: Fixture Sheet, Sequence Sheet, Playbacks, Pools,
-Presets, Groups, Worlds, Filters, Effects, Timecode Viewer, Command Line
-History, DMX Sheet, Masters, Running Playbacks, Patch and Status. The full
+the 17 kinds renders its pane: Fixture Sheet, Sequence Sheet, Playbacks, Pools,
+Presets, Groups, Worlds, Filters, Effects, Timecode Viewer, Command Line,
+Command Line History, DMX Sheet, Masters, Running Playbacks, Patch and Status.
+The full
 catalogue — present and deferred — is recorded in
 [`design/25-window-workspace.md`](design/25-window-workspace.md) with the
 subsystem each deferred window waits for.

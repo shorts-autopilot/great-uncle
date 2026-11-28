@@ -200,7 +200,7 @@ These are the gaps that a chapter-by-chapter audit would otherwise hide. Ranked 
 6. **Special executors** — Item 20 builds executor pages and page-qualified runs; macros, chases and multi-cue stacks still need a design.
 7. **Timecode depth** — Tracks, markers, MTC and an OSC feed hook landed with item 15; OSC ingestion and track groups remain.
 8. **Macros and CLI ergonomics** — Item 16 adds statement macros, transaction undo and machine-readable status; variables and a command editor remain out of scope.
-9. **Layouts, Quickeys and windows** — Item 25 builds the blank, user-defined window workspace with placement, resize, removal, the 16-window catalogue and command history; its chrome is out of the window while the UI is rebuilt piece by piece, and the Add Window picker places any catalogue window at the clicked cell. Saved views/layouts, quickeys, window settings and the deferred grandMA3 window catalogue remain.
+9. **Layouts, Quickeys and windows** — Item 25 builds the blank, user-defined window workspace with placement, resize, removal, the 17-window catalogue and command history; the window chrome stays out while every pane is rebuilt from the snapshot, and the Add Window picker places any catalogue window at the clicked cell. Saved views/layouts, quickeys, window settings and the deferred grandMA3 window catalogue remain.
 10. **Agenda and timers** — Scheduled events, stopwatch and countdown are unbuilt.
 11. **Plugins/Lua** — 164 rows, the largest undecided chapter. Decide between an embedded Lua host and a native plugin API before claiming completeness.
 12. **Show Creator** — Import/export and preset/group creation from fixture types; no design yet.

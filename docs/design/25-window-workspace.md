@@ -3,7 +3,7 @@
 **Rank** 9 (follow-up) · **Order** 25 · **Size** L · **No format change** · **Depends on** 18 (desktop GUI), 24 (file menu)
 
 **State** built, then deliberately stripped back to the canvas. The workspace
-model, the 16-window catalogue and the command-only model are tested; the
+model, the 17-window catalogue and the command-only model are tested; the
 surrounding UI is being rebuilt one piece at a time on the operator's direction.
 Nothing in this document prescribes the next UI piece.
 
@@ -135,6 +135,7 @@ about the current window.
 | **Filters** | pool rows where kind is `Filter` | Use/Off, delete |
 | **Effects** | pool rows where kind is `Effect` | Use/Off, delete |
 | **Timecode Viewer** | `Listings.timecode` | Start, pause, stop, locate, add |
+| **Command Line** | `Model.input`, `Model.message` | Prompt; Enter submits through `Model::submit` |
 | **Command Line History** | `Model.history` | Click a line to recall it into the input |
 | **DMX Sheet** | `Snapshot.frame` | Read-only slot values |
 | **Masters** | `DeskView` | Page previous/next, read grand/rate/tempo |
@@ -154,13 +155,13 @@ are deliberately deferred until their data or surface exists.
 
 | Category | Present in this build | Deferred, with what is missing |
 |---|---|---|
-| **Common** | Fixture Sheet, Sequence Sheet, Playbacks, Command Line History, DMX Sheet | Content Sheet, Phaser Editor, Recipe Editor, 3D Viewer, Layout Viewer, Selection Grid, Special Dialog, MAtricks Editor, Xkeys — need cue content, phaser/recipe, 3D, layouts, a selection grid, a special dialog, MAtricks state or Xkeys |
+| **Common** | Fixture Sheet, Sequence Sheet, Playbacks, Command Line, Command Line History, DMX Sheet | Content Sheet, Phaser Editor, Recipe Editor, 3D Viewer, Layout Viewer, Selection Grid, Special Dialog, MAtricks Editor, Xkeys — need cue content, phaser/recipe, 3D, layouts, a selection grid, a special dialog, MAtricks state or Xkeys |
 | **Data Pools** | Groups, Worlds and Filters as filtered pool windows; Sequences through Sequence Sheet; Timecodes through Timecode Viewer; Effects through the existing effect pool | Bitmaps, Executor Configurations, Generators, Layouts, Macros, MAtricks, Pages, Plugins, Quickeys, Shapes, Timers — each needs its chapter's data model |
 | **Presets** | One generic Presets window over the existing palette pool | Dynamic, Phaser, All 2, All Presets, All 4, All 5, Dimmer, Position, Gobo, Color, Beam, Focus, Control, Shapers, Video — this engine has one palette pool, not the feature-group and media pools |
 | **Pools** | The five live pool kinds: palette, group, world, filter and effect | Show data: Appearances, Data Pools, Gels, Scribbles, Tags, Timecode Slots, Universes, Users. Media: Gobos, Images, Meshes, Sounds, Symbols, Videos. User profile: Cameras, Encoder Bars, Render Qualities, Views — all need resource/media stores or a user profile |
-| **Tools** | Fixture Sheet, Sequence Sheet, DMX Sheet, Timecode Viewer and Command Line History. The desk also exposes its Patch and Status listings as windows; the manual reaches those through other surfaces. | Content Sheet, At Filter, Recipe Editor, Selection Grid, sMArt, Special Dialog, 3D Viewer, Agenda Viewer, Clock Viewer, Layout Viewer, MAtricks Editor, Phaser Editor, RDM Devices Viewer, Sound Viewer — need content, programmer tools, scheduling, system clocks, 3D/layout/media or RDM state |
+| **Tools** | Fixture Sheet, Sequence Sheet, DMX Sheet, Timecode Viewer, Command Line and Command Line History. The desk also exposes its Patch and Status listings as windows; the manual reaches those through other surfaces. | Content Sheet, At Filter, Recipe Editor, Selection Grid, sMArt, Special Dialog, 3D Viewer, Agenda Viewer, Clock Viewer, Layout Viewer, MAtricks Editor, Phaser Editor, RDM Devices Viewer, Sound Viewer — need content, programmer tools, scheduling, system clocks, 3D/layout/media or RDM state |
 | **More** | Playbacks (the desk's fader surface), Masters, Running Playbacks and Command Line History | Bars: Align Bar, command wing Bar, Encoder Bar, Selection Bar, Step Bar. Playback: Custom Master Section, Xkeys. Info and system: Help, Info, Message Center, Oops, System Info, System Monitor, Trackpad — need bar surfaces, a custom-master editor, help/system data or the message/overlay model |
-| **All** | The 16 supported windows, sorted alphabetically like the manual | The union of every deferred name above |
+| **All** | The 17 supported windows, sorted alphabetically like the manual | The union of every deferred name above |
 
 The original picker's five tabs are a smaller adaptation of the manual's seven:
 Command Line History also appears on **Tools**, and Playbacks/Masters appear on
@@ -214,7 +215,8 @@ while drawing. `window_body` maps each `WindowKind` to one drawing function:
 | Playbacks | `desk.executors` as nine faders plus the grand master |
 | Pools, Presets, Groups, Worlds, Filters, Effects | `listings.pools`, filtered by kind, with `Use`/`Off` and `Del` |
 | Timecode Viewer | `listings.timecode`, with `Start`/`Pause`/`Stop`/`Locate`/`Add` |
-| Command Line History | `model.history` with a prompt that calls `Model::submit` |
+| Command Line | the shared prompt, `model.message` and the last echo |
+| Command Line History | `model.history` with the same prompt |
 | DMX Sheet | `frame`, every rendered slot by address |
 | Masters | `desk` page, grand, rate, tempo, selection, blind and blackout |
 | Running Playbacks | `playing`, with target, cue, progress and state |
@@ -229,7 +231,9 @@ cannot become a second engine.
 ### Theme
 
 The canvas keeps the dark grandMA3-like palette: near-black screen, blue-grey
-window tiles, a muted orange accent and red for close. The theme also styles
+window tiles, a muted orange accent and red for close. Each window draws a
+thin outline on its grid footprint and a faint fill behind its pane body, so
+the space it claims is readable before its content is. The theme also styles
 egui's own widgets, so a rebuilt control inherits the same colours instead of
 starting from the default light theme.
 
