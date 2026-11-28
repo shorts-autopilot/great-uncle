@@ -30,12 +30,12 @@ patch table from `listings.sheet`, the sequence sheet from `listings.playback`,
 the five pool views from `listings.pools`, the timecode viewer from
 `listings.timecode`, Status from `listings.status`, the DMX sheet from
 `frame`, and the master, playback and running views from `desk` and `playing`.
-Its controls write the same commands a typist would send: a fader writes
-`Executor n At pc`, a cue row writes `Go Sequence n`, a pool row writes
-`At Palette …`, `Group n`, `World n`, `Filter n` or `Effect n On|Off`, and the
-Command Line History pane carries its own prompt. The snapshot is rebuilt when
-the revision changes and at least every 250 ms, and drawing never holds the
-engine lock.
+Board keys append to the command line the way the desk's keys do: `Fixture 1`,
+then `At 50`, then Please (or Enter) runs `Fixture 1 At 50`; Escape clears the
+line. Faders are the one exception — a drag sends one `Executor n At pc` per
+step, because a level has to track the gesture. The Command Line and Command
+Line History panes share the prompt. The snapshot is rebuilt when the revision
+changes and at least every 250 ms, and drawing never holds the engine lock.
 
 ```bash
 cargo run -p openlight-desktop --features gui

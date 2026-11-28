@@ -137,8 +137,11 @@ impl Desktop {
         desktop
     }
 
-    fn act(&mut self, command: &str) {
-        let _ = self.model.act(&self.app, command);
+    /// Append a board key's text to the command line. Nothing runs until the
+    /// operator presses Please or Enter.
+    fn token(&mut self, token: &str) {
+        self.model.push_token(token);
+        self.focus_command = true;
     }
 
     /// Copy the engine's master and executor positions back into the widgets.
@@ -169,7 +172,11 @@ impl Desktop {
 
     fn keys(&mut self, ctx: &egui::Context) {
         if ctx.input(|input| input.key_pressed(Key::Escape)) {
-            self.show_add_picker = false;
+            if self.show_add_picker {
+                self.show_add_picker = false;
+            } else {
+                self.model.input.clear();
+            }
         }
     }
 

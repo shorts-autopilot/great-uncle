@@ -22,7 +22,9 @@ All notable changes to OpenLight are recorded here. The format follows
   running playbacks, DMX sheet, status, a Command Line prompt, and command line
   history. Each window also draws a thin outline on its grid footprint and a
   faint body fill, so the space it claims is visible. Closing a window no longer
-  opens the picker in the cell it vacated.
+  opens the picker in the cell it vacated. Board keys now append to the command
+  line instead of running at once: Please or Enter submits the line and Escape
+  clears it, while a fader drag still sends `Executor n At pc` live.
   No format change; the hardware/display proof remains the release gate.
 - File management, backups and templates: saving over an existing show now
   leaves a timestamped show-only backup in a `backups/` folder (ten retained),

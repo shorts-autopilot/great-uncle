@@ -85,7 +85,8 @@ choosing one places that window at the clicked cell and closes the picker. Each
 placed window then draws its pane from the same snapshot the terminal lists
 from — fixture sheet, patch, sequence sheet, the pool views, timecode, playbacks
 and masters, running playbacks, DMX sheet, status, command line and command
-line history.
+line history. Board keys append to the command line as on the desk, and Please
+or Enter runs the line; faders stay live.
 The layout model behind it — placement, non-overlap, title-bar drag, corner
 resize, close and the 17-window catalogue — is headless-tested. The terminal
 shell stays the default for headless boxes, and the window build is

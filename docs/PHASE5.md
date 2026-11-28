@@ -579,8 +579,9 @@ category tabs and a tile for every kind in the catalogue, opened at the clicked
 point; choosing a tile places that window at the clicked cell and closes the
 picker. Every window now draws its pane from the snapshot — sheet, patch,
 sequence sheet, pools, timecode, playbacks, masters, running playbacks, DMX
-sheet, status and command line history — and its controls write the same
-commands the terminal takes. Window tiles draw, drag, resize and close.
+sheet, status and command line history — and its board keys append to the
+command line, with Please or Enter running it. Window tiles draw, drag, resize
+and close.
 
 The original catalogue is still recorded in
 [`design/25-window-workspace.md`](design/25-window-workspace.md), including the

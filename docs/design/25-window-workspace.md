@@ -222,11 +222,24 @@ while drawing. `window_body` maps each `WindowKind` to one drawing function:
 | Running Playbacks | `playing`, with target, cue, progress and state |
 | Status | `listings.status`, the same lines the `Status` command prints |
 
-Every control is a command string: the fader throttle turns a drag into
-`Executor n At pc` at most every 33 ms, a cue row into `Go Sequence n`, and a
-pool row into the matching `At Palette`, `Group`, `World`, `Filter` or
-`Effect … On|Off` line. No pane writes to the engine directly, so the window
-cannot become a second engine.
+### The command builder
+
+A key never runs anything by itself. `Model::push_token` appends its text to
+one line with a single space, and Please (a button beside the prompt) or Enter
+calls `Model::submit`, which sends the line through `App::execute`. Escape
+clears the line. The Command Line and Command Line History panes share the
+input and the history, so a line built from any pane shows in both.
+
+`Fixture 1`, `At`, `50`, Please therefore runs `Fixture 1 At 50`, exactly as if
+it had been typed. Keys are appended, not merged: pressing `Sel` twice gives
+`Fixture 1 Fixture 1`, and the operator clears with Escape.
+
+The faders are the one exception: a drag sends `Executor n At pc` at most every
+33 ms while it moves, because a level has to track the gesture. Flash and the
+page keys are ordinary keys and build the line.
+
+No pane writes to the engine directly, so the window cannot become a second
+engine.
 
 ### Theme
 

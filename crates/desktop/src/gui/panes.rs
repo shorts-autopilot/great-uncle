@@ -10,7 +10,9 @@
 use eframe::egui;
 use eframe::egui::{Color32, Key, Label, RichText, ScrollArea, Sense, TextEdit, TextStyle, Ui};
 use openlight_app::{format_cue_number, PlaybackRow, TimecodeRowKind};
-use openlight_desktop::model::{delete_command, pool_command, step_percent};
+use openlight_desktop::model::{
+    cue_command, delete_command, playback_command, pool_command, step_percent,
+};
 use openlight_desktop::workspace::WindowKind::{
     self, CommandLine, CommandLineHistory, DmxSheet, Effects, Filters, FixtureSheet, Groups,
     Masters, Patch, Playbacks, Pools, Presets, RunningPlaybacks, SequenceSheet, Status, Timecode,
@@ -130,7 +132,7 @@ impl Desktop {
                     });
             });
         if let Some(action) = action {
-            self.act(&action);
+            self.token(&action);
         }
     }
 
@@ -148,7 +150,7 @@ impl Desktop {
                 ui.monospace(format!("Sequence {sequence}"));
                 for action in ["Go", "Back", "Pause", "Release"] {
                     if ui.button(action).clicked() {
-                        transport = Some(action);
+                        transport = Some((sequence, action));
                     }
                 }
             });
@@ -177,7 +179,7 @@ impl Desktop {
                                     select = Some(row.sequence);
                                 }
                                 if ui.small_button("Go").clicked() {
-                                    clicked = Some(row.clone());
+                                    clicked = Some(row.sequence);
                                 }
                             });
                             ui.monospace(row.sequence.to_string());
@@ -196,10 +198,11 @@ impl Desktop {
         if let Some(sequence) = select {
             self.model.select_sequence(sequence);
         }
-        if let Some(row) = clicked {
-            let _ = self.model.click_cue(&self.app, &row);
-        } else if let Some(action) = transport {
-            let _ = self.model.playback(&self.app, action);
+        if let Some(sequence) = clicked {
+            self.model.select_sequence(sequence);
+            self.token(&cue_command(sequence));
+        } else if let Some((sequence, action)) = transport {
+            self.token(&playback_command(sequence, action));
         }
     }
 
@@ -260,7 +263,7 @@ impl Desktop {
                     });
             });
         if let Some(action) = action {
-            self.act(&action);
+            self.token(&action);
         }
     }
 
@@ -342,7 +345,7 @@ impl Desktop {
                     });
             });
         if let Some(action) = action {
-            self.act(&action);
+            self.token(&action);
         }
     }
 
@@ -439,7 +442,7 @@ impl Desktop {
             self.pending_fader = pending;
         }
         if let Some(action) = flash_action {
-            self.act(&action);
+            self.token(&action);
         }
     }
 
@@ -468,7 +471,7 @@ impl Desktop {
         ui.monospace(format!("Blind     {}", yes_no(self.snapshot.desk.blind)));
         ui.monospace(format!("Blackout  {}", yes_no(self.snapshot.desk.blackout)));
         if let Some(action) = action {
-            self.act(&action);
+            self.token(&action);
         }
     }
 
@@ -587,7 +590,7 @@ impl Desktop {
         let colour = if self.model.error { DANGER } else { MUTED };
         ui.monospace(RichText::new(&self.model.message).color(colour));
         ui.label(
-            RichText::new("Enter runs · click a history line to recall it")
+            RichText::new("Please or Enter runs the line · Escape clears it")
                 .small()
                 .color(MUTED),
         );
@@ -648,15 +651,17 @@ impl Desktop {
             });
     }
 
-    /// The one prompt both command windows use: Enter submits through
-    /// `Model::submit`, so its echo and history are the same as the terminal's.
+    /// The one prompt both command windows use: Please or Enter submits
+    /// through `Model::submit`, so its echo and history match the terminal's.
     fn command_prompt(&mut self, ui: &mut Ui) {
         let mut submit = false;
         ui.horizontal(|ui| {
             ui.monospace(RichText::new("openlight>").color(ACCENT));
+            // Leave room for the key that runs the line.
+            let width = (ui.available_width() - 76.0).max(80.0);
             let response = ui.add(
                 TextEdit::singleline(&mut self.model.input)
-                    .desired_width(f32::INFINITY)
+                    .desired_width(width)
                     .font(TextStyle::Monospace)
                     .hint_text("command"),
             );
@@ -665,6 +670,9 @@ impl Desktop {
                 self.focus_command = false;
             }
             submit = response.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
+            if ui.button("Please").on_hover_text("Run the line").clicked() {
+                submit = true;
+            }
         });
         if submit {
             let _ = self.model.submit(&self.app);
