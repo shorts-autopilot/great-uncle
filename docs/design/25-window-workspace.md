@@ -46,17 +46,16 @@ The window opens on an empty **Screen 1**:
 The 12 × 8 grid is drawn as dotted cell edges: every line is where a window
 can start or end.
 
-- There is no top bar, left control rail, command bar or window body. Clicking
-  empty canvas opens the **Add Window** picker at that point, with category tabs
-  for the catalogue.
+- There is no top bar, left control rail or global command bar. Clicking empty
+  canvas opens the **Add Window** picker at that point, with category tabs for
+  the catalogue.
 - The screen, its 12 × 8 dotted grid, and the empty-state text remain.
 - A window that exists still draws as a tile: frame, title bar, `×` close
   button and lower-right resize grip. It can be dragged by its title bar and
   resized on the grid, and moves and resizes never overlap.
 - The picker's tiles show an empty placeholder box inline with the window
-  name; the name is the only text in a tile. Choosing one does not add it yet.
-  The add flow is the next UI piece; it calls the model below rather than
-  inventing placement.
+  name; the name is the only text in a tile. Choosing one adds that window at
+  the clicked cell through the model below rather than inventing placement.
 - The window layout is session state, not show or desk data. Closing and
   reopening the window starts blank again. Saved views and layouts are a
   separate grandMA3 feature and are not claimed here.
@@ -185,18 +184,47 @@ it gets a `WindowKind` and a picker entry without changing the workspace model.
 2. If `workspace.windows()` is empty, paint the blank-screen message.
 3. For each window, compute its pixel rectangle from its grid rectangle and
    draw a dark tile with a title bar, close button, clipped body and a
-   lower-right resize grip. The body is intentionally empty.
+   lower-right resize grip. The body is the pane for that `WindowKind`, filled
+   from the current `Snapshot`.
 4. A title-bar drag records the pointer origin and the window's original grid
    rectangle. Each frame maps the pointer delta to grid cells and asks
    `move_to`; a rejected cell leaves the window where it was.
 5. A resize grip does the same for `resize`, clamped to the window's minimum.
 6. Close removes the window and clears any drag or resize state for it.
 7. A click on empty canvas opens the Add Window picker at the pointer; a click
-   inside a window does not. Choosing a tile places that window at the clicked
-   cell and closes the picker; Escape or the picker's `×` closes it without
-   adding anything.
+   inside a window does not. The hit test runs before the frame draws, so the
+   window a close button removes still owns the click that removed it and the
+   picker cannot open in the cell it just vacated. Choosing a tile places that
+   window at the clicked cell and closes the picker; Escape or the picker's `×`
+   closes it without adding anything.
 
-There is no command bar in `gui.rs`; the picker is the only add flow.
+There is no global command bar in `gui.rs`; the picker is the only add flow,
+and the Command Line History pane carries its own prompt.
+
+### Window bodies
+
+`Desktop` keeps one `Snapshot` and rebuilds it when `App::revision()` moves and
+at least every 250 ms, so the panes are live without holding the engine lock
+while drawing. `window_body` maps each `WindowKind` to one drawing function:
+
+| Pane | Source |
+| --- | --- |
+| Fixture Sheet, Patch | `listings.sheet`, with `Sel`/`Home`/`Def` and an `At` level |
+| Sequence Sheet | `listings.playback`, one row per cue, plus `Go`/`Back`/`Pause`/`Release` |
+| Playbacks | `desk.executors` as nine faders plus the grand master |
+| Pools, Presets, Groups, Worlds, Filters, Effects | `listings.pools`, filtered by kind, with `Use`/`Off` and `Del` |
+| Timecode Viewer | `listings.timecode`, with `Start`/`Pause`/`Stop`/`Locate`/`Add` |
+| Command Line History | `model.history` with a prompt that calls `Model::submit` |
+| DMX Sheet | `frame`, every rendered slot by address |
+| Masters | `desk` page, grand, rate, tempo, selection, blind and blackout |
+| Running Playbacks | `playing`, with target, cue, progress and state |
+| Status | `listings.status`, the same lines the `Status` command prints |
+
+Every control is a command string: the fader throttle turns a drag into
+`Executor n At pc` at most every 33 ms, a cue row into `Go Sequence n`, and a
+pool row into the matching `At Palette`, `Group`, `World`, `Filter` or
+`Effect … On|Off` line. No pane writes to the engine directly, so the window
+cannot become a second engine.
 
 ### Theme
 

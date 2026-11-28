@@ -12,11 +12,16 @@ All notable changes to OpenLight are recorded here. The format follows
   kinds, placement that prefers a clicked cell, non-overlapping move and resize
   rules, and close. Layout is session state rather than show/desk data, and
   every widget action still writes command text through `App::execute`. Command
-  history is bounded at 100 entries. The window itself opens on the empty
-  canvas; its chrome was stripped back so the UI can be rebuilt piece by piece
-  on the operator's direction. The Add Window picker opens at the clicked cell,
-  and a tile places that window there and closes the picker. No format change; the
-  hardware/display proof remains the release gate.
+  history is bounded at 100 entries. The window opens on the empty canvas; its
+  chrome was stripped back so the UI can be rebuilt piece by piece on the
+  operator's direction. The Add Window picker opens at the clicked cell, and a
+  tile places that window there and closes the picker. Every one of the 16 kinds
+  now draws a pane from the same `Snapshot` the terminal lists from, and its
+  controls write the same commands: fixture sheet and patch, sequence sheet with
+  transport, the five pool views, timecode viewer, playbacks and masters faders,
+  running playbacks, DMX sheet, status, and command line history with its own
+  prompt. Closing a window no longer opens the picker in the cell it vacated.
+  No format change; the hardware/display proof remains the release gate.
 - File management, backups and templates: saving over an existing show now
   leaves a timestamped show-only backup in a `backups/` folder (ten retained),
   and `Backup ["path"]` takes one explicitly. `Files ["folder"]` lists shows

@@ -1,19 +1,19 @@
 # Desktop GUI
 
 **Status** built in item 18; item 25 replaced its fixed panes with a blank,
-user-defined window workspace, whose chrome has since been stripped back while
-the UI is rebuilt one piece at a time. The terminal shell is still the default
-on a headless box; `openlight-desktop` currently opens on the bare canvas.
+user-defined window workspace, and its panes are now wired back into that
+workspace. The terminal shell is still the default on a headless box;
+`openlight-desktop` opens on the bare canvas and fills only the windows the
+operator places.
 
 ## What the window is
 
 A 1440×900 window that opens on an empty **Screen 1**: a dark screen, the
 12 × 8 grid drawn as dotted cell edges, and the empty-state text. There is no
-top bar, control rail, command line or window body. Clicking empty canvas opens
-the **Add Window** picker at that point, with category tabs and a tile for every
+top bar, control rail or global command line. Clicking empty canvas opens the
+**Add Window** picker at that point, with category tabs and a tile for every
 window kind; choosing a tile places that window at the clicked cell and closes
-the picker. That chrome was removed so the UI can be rebuilt one piece at a
-time.
+the picker.
 
 What remains is the workspace model and the window tile. A placed window draws
 its frame, title bar, `×` close button and lower-right resize grip; it can be
@@ -22,6 +22,18 @@ session state: it starts blank on every launch and is not saved into the show
 or desk. The 16 window kinds, their default and minimum sizes, their tab
 groups and the placement rules are all still in `workspace.rs`, headless and
 tested, so the add flow has a model to call rather than one to invent.
+
+Each placed window draws its pane from `App::snapshot()`: the fixture sheet and
+patch table from `listings.sheet`, the sequence sheet from `listings.playback`,
+the five pool views from `listings.pools`, the timecode viewer from
+`listings.timecode`, Status from `listings.status`, the DMX sheet from
+`frame`, and the master, playback and running views from `desk` and `playing`.
+Its controls write the same commands a typist would send: a fader writes
+`Executor n At pc`, a cue row writes `Go Sequence n`, a pool row writes
+`At Palette …`, `Group n`, `World n`, `Filter n` or `Effect n On|Off`, and the
+Command Line History pane carries its own prompt. The snapshot is rebuilt when
+the revision changes and at least every 250 ms, and drawing never holds the
+engine lock.
 
 ```bash
 cargo run -p openlight-desktop --features gui
@@ -33,16 +45,13 @@ and the MSRV job build and test the model without eframe, a display or a GL
 driver; release packaging enables the feature.
 
 The picker's five tabs and tiles are in the window, but a tile shows only the
-window name; choosing one places an empty window frame at the clicked cell.
-The window bodies are still missing, so a placed frame is held at its grid
-size. The 16 kinds are Fixture Sheet, Sequence
-Sheet, Playbacks, Pools, Presets, Groups, Worlds, Filters, Effects, Timecode
-Viewer, Command Line History, DMX Sheet, Masters, Running Playbacks, Patch and
-Status, and the full catalogue — present and deferred — is recorded in
+window name; choosing one places that window at the clicked cell. Every one of
+the 16 kinds renders its pane: Fixture Sheet, Sequence Sheet, Playbacks, Pools,
+Presets, Groups, Worlds, Filters, Effects, Timecode Viewer, Command Line
+History, DMX Sheet, Masters, Running Playbacks, Patch and Status. The full
+catalogue — present and deferred — is recorded in
 [`design/25-window-workspace.md`](design/25-window-workspace.md) with the
-subsystem each deferred window waits for. A window body is the surface the
-rebuild will fill; today a placed window is an empty frame held at its grid
-size.
+subsystem each deferred window waits for.
 
 ## Crate split
 

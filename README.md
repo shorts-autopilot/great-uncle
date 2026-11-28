@@ -77,18 +77,18 @@ gaps and footprint overflow, and `Patch Import` / `Report Patch` round-trip the
 patch through a spreadsheet. `Report Cues`, `Report Palettes`, `Report Status`
 and `Report Show` write the listings as files, and `--check` runs the patch
 check for CI. A native window (`cargo run -p openlight-desktop --features gui`)
-currently opens on the empty 12 × 8 canvas and little else: the surrounding
-chrome, the command line and every window body were removed deliberately while
-the UI is rebuilt one piece at a time. The canvas draws its 12 × 8 grid as dotted cell
-edges, and clicking it opens the themed **Add Window** picker at that point:
-its category tabs list the 16 window kinds, and choosing one places that
-window at the clicked cell and closes the picker. The layout model behind
-it — placement,
-non-overlap, title-bar drag, corner resize, close and the 16-window catalogue —
-is still built and headless-tested, so the add flow can return without
-redesigning it. The terminal shell stays the default
-for headless boxes, and the window build is feature-gated so tests and the MSRV
-job need no display.
+opens on the empty 12 × 8 canvas: the top bar, control rail and global command
+line stay out while the UI is rebuilt one piece at a time. The canvas draws its
+12 × 8 grid as dotted cell edges, and clicking it opens the themed **Add
+Window** picker at that point: its category tabs list the 16 window kinds, and
+choosing one places that window at the clicked cell and closes the picker. Each
+placed window then draws its pane from the same snapshot the terminal lists
+from — fixture sheet, patch, sequence sheet, the pool views, timecode, playbacks
+and masters, running playbacks, DMX sheet, status and command line history.
+The layout model behind it — placement, non-overlap, title-bar drag, corner
+resize, close and the 16-window catalogue — is headless-tested. The terminal
+shell stays the default for headless boxes, and the window build is
+feature-gated so tests and the MSRV job need no display.
 
 ## Quick start
 

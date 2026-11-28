@@ -572,13 +572,15 @@ Playbacks, Patch and Status — with their default sizes, minimum sizes and
 tab grouping, and it keeps placement, non-overlap, move, resize and close. That
 model is headless and unit-tested.
 
-The window's chrome is deliberately gone. The top bar, left control rail,
-command line, every window body and the old picker controls were removed so the
-UI can be rebuilt one piece at a time on the operator's direction. The Add
-Window picker has returned with category tabs and a tile for every kind in the
-catalogue, opened at the clicked point; choosing a tile places that window at
-the clicked cell and closes the picker. Window tiles that do exist still draw,
-drag, resize and close.
+The window's chrome is still deliberately gone: the top bar, left control rail
+and global command line were removed so the UI can be rebuilt one piece at a
+time on the operator's direction. The Add Window picker has returned with
+category tabs and a tile for every kind in the catalogue, opened at the clicked
+point; choosing a tile places that window at the clicked cell and closes the
+picker. Every window now draws its pane from the snapshot — sheet, patch,
+sequence sheet, pools, timecode, playbacks, masters, running playbacks, DMX
+sheet, status and command line history — and its controls write the same
+commands the terminal takes. Window tiles draw, drag, resize and close.
 
 The original catalogue is still recorded in
 [`design/25-window-workspace.md`](design/25-window-workspace.md), including the
